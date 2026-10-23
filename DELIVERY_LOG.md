@@ -26,15 +26,18 @@ The ledger. Fable owns it, and every status change here needs evidence (a commit
 | 7 | 2026-10-30 | L-013, L-014 | HTML report (design tokens, AA); GitHub Action + PR comment |
 | 8 | 2026-10-31 | L-015, L-016 | Seeded-fixture benchmark (G7); system test hardening |
 | 9 | 2026-11-01 | L-017, L-018 | Black-box RC (Haiku) + fixes; real OSS demo scan |
-| 10 | 2026-11-02 | L-019 | Grounding run, docs final, Gate 3, tag v0.1.0 |
+| 10 | 2026-11-02 | L-020 | Empty ADR (0 bytes) → skip with a note instead of MISMATCH + exit 3 (Sonnet O-1) | Opus→Sonnet | L-020-empty-adr | Empty ADR listed as skipped; scan exit 0 | G1 | planned | |
+| L-021 | Normaliser false-accept: stripping `_` makes `snakecase` match `snake_case` — strip emphasis only when paired around words (Sonnet O-2) | Opus→Sonnet | L-021-normaliser | Identifier underscores preserved; emphasis still stripped; tamper tests still pass | G1 | planned | |
+| L-022 | Ledger location: default to `<scanned repo>/.driftwarden/logs/grounding` when `--out` not given; add formatter exclude for docs (Opus notes) | Opus→Sonnet | L-022-ledger-path | Ledger lands in scanned repo; `ruff format` no longer touches *.md | — | planned | |
+| L-019 | Grounding run, docs final, Gate 3, tag v0.1.0 |
 
 ## Tickets
 
 | Id | Title | Seat | Branch | Acceptance criteria | Grounding | Status | Evidence |
 |---|---|---|---|---|---|---|---|
 | L-000 | Intake & foundation | Fable | main | Brief, log, README, architecture, design tokens committed | — | merged | initial commits |
-| L-001 | Package skeleton, `driftwarden` CLI (`scan`, `version`), config file, CI (lint + tests, py3.10–3.13) | Opus→Sonnet | L-001-skeleton | `pip install -e .` works; `driftwarden --help` and `driftwarden version` run; CI green | — | planned | |
-| L-002 | ADR discovery + parser (Nygard, MADR, free-form); Decision model with provenance; `verify_source_quote()` | Opus→Sonnet | L-002-adr-parser | Finds ADRs in `docs/adr`, `doc/architecture/decisions`, `adr/`, etc.; parses title, status, date, decision text; every record has path+lines+quote+commit; the verifier passes on 100 % of fixture records and catches tampered quotes | G1 | planned | |
+| L-001 | Package skeleton, `driftwarden` CLI (`scan`, `version`), config file, CI (lint + tests, py3.10–3.13) | Opus→Sonnet | L-001-skeleton | `pip install -e .` works; `driftwarden --help` and `driftwarden version` run; CI green | — | in-test (green; awaiting Gate 1/2 to merge) | Sonnet @40ad893: 45 pass, 2 xfail (D-001, fixed by L-002); CI workflow not yet run on GitHub |
+| L-002 | ADR discovery + parser (Nygard, MADR, free-form); Decision model with provenance; `verify_source_quote()` | Opus→Sonnet | L-002-adr-parser | Finds ADRs in `docs/adr`, `doc/architecture/decisions`, `adr/`, etc.; parses title, status, date, decision text; every record has path+lines+quote+commit; the verifier passes on 100 % of fixture records and catches tampered quotes | G1 | in-test (green; awaiting Gate 1/2 to merge, stacked on L-001) | Sonnet @84b44a0: 150 pass, 0 fail; G1 13/13 VERIFIED; tamper detection 130/130 |
 | L-003 | Repo indexer: files, languages, import graph (Py, JS/TS, Java, Go) | Opus→Sonnet | L-003-indexer | Index of a 5k-file repo in < 30 s; import edges correct on fixtures | — | planned | |
 | L-004 | Manifest parsers + `verify_dependency()` (requirements/pyproject, package.json, pom/gradle, go.mod, csproj, Dockerfile, compose, Terraform, k8s) | Opus→Sonnet | L-004-manifests | Correct package lists on fixtures; verifier recomputes at any commit | G3 | planned | |
 | L-005 | LLM provider layer: Anthropic, OpenAI-compatible, `offline`; JSON-schema-constrained output; cost + token log | Opus→Sonnet | L-005-llm | Swappable via config; offline mode needs no network; retries + schema validation | — | planned | |
@@ -51,15 +54,24 @@ The ledger. Fable owns it, and every status change here needs evidence (a commit
 | L-016 | System test hardening + coverage ≥ 85 % on core | Sonnet | L-016-tests | Coverage report; all regression green on main | — | planned | |
 | L-017 | Black-box run on RC + Sev-1/2 fixes | Haiku→Fable→Opus | rc-2026-11-01-1 | REPORT.md, no open Sev-1/2 | — | planned | |
 | L-018 | Real OSS demo scan, published to `examples/` | Fable/Opus | L-018-demo | Report committed; every finding VERIFIED or *Could not verify* | G1–G5 | planned | |
+| L-020 | Empty ADR (0 bytes) → skip with a note instead of MISMATCH + exit 3 (Sonnet O-1) | Opus→Sonnet | L-020-empty-adr | Empty ADR listed as skipped; scan exit 0 | G1 | planned | |
+| L-021 | Normaliser false-accept: stripping `_` makes `snakecase` match `snake_case` — strip emphasis only when paired around words (Sonnet O-2) | Opus→Sonnet | L-021-normaliser | Identifier underscores preserved; emphasis still stripped; tamper tests still pass | G1 | planned | |
+| L-022 | Ledger location: default to `<scanned repo>/.driftwarden/logs/grounding` when `--out` not given; add formatter exclude for docs (Opus notes) | Opus→Sonnet | L-022-ledger-path | Ledger lands in scanned repo; `ruff format` no longer touches *.md | — | planned | |
 | L-019 | Final grounding run, README final, Gate 3, tag v0.1.0 | Fable | main | All S1–S9 evidenced | all | planned | |
 
 ## Grounding runs
 
 | Date | Check | Sample | Pass rate | Failures | Log |
 |---|---|---|---|---|---|
+| 2026-10-23 | G1 verify_source_quote on fixture ADRs (L-002 @84b44a0) | 13 decisions | 100 % | 0 | Sonnet report, tests/test_l002_system.py |
+| 2026-10-23 | G1 tamper detection (random-word mutation, 10× per decision) | 130 mutations | 100 % caught | 0 | same |
 
 ## Daily entries
 
 ### Day 0 — 2026-10-23 (Fable)
 - Intake: PROJECT_BRIEF.md, DELIVERY_LOG.md, README.md, ARCHITECTURE.md written; design research delegated to Fable → DESIGN_TOKENS.md.
 - Gate 1 and Gate 2 presented to Vishal together, for speed.
+
+- Day-1 work pulled forward: L-001 and L-002 built by Opus, tested in isolation by Sonnet. Both green. Not merged — Gates 1 and 2 not yet approved.
+- Defects / observations: D-001 (scan on non-git dir exits 0 on L-001 alone; fixed in L-002). New tickets L-020 (empty ADR), L-021 (normaliser false-accept), L-022 (ledger path) — scheduled for Day 2 carry-in.
+- Risk: L-001 branch was cut before design tokens landed on main; Fable will rebase both branches on main before merge.
