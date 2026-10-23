@@ -49,8 +49,15 @@ def test_config_driftwarden_toml_wins(tmp_path):
     assert cfg.mode == "llm" and cfg.provider == "openai"
 
 
-def test_scan_reports_unimplemented_stages(tmp_path):
-    res = runner.invoke(app, ["scan", str(tmp_path), "--mode", "offline", "--format", "json,md"])
+def test_scan_outside_git_repo_fails_cleanly(tmp_path):
+    res = runner.invoke(app, ["scan", str(tmp_path)])
+    assert res.exit_code == 2
+    assert "not a git repository" in res.output
+
+
+def test_scan_repo_without_adrs(make_repo, tmp_path):
+    repo = make_repo({"main.py": "print(1)\n"})
+    res = runner.invoke(app, ["scan", str(repo), "--out", str(tmp_path / "o")])
     assert res.exit_code == 0
-    assert "not yet implemented" in res.output
-    assert "mode=offline" in res.output
+    assert "No ADRs found" in res.output
+    assert "Not yet implemented" in res.output

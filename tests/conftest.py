@@ -42,3 +42,23 @@ def make_repo(tmp_path):
         return repo
 
     return _make
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "adr_repos"
+
+
+@pytest.fixture
+def fixture_repo(tmp_path):
+    """Copy tests/fixtures/adr_repos/<name> into tmp_path and make it a real git repo."""
+    import shutil
+
+    def _make(name: str = "basic") -> Path:
+        dest = tmp_path / f"fx-{name}"
+        shutil.copytree(FIXTURES / name, dest)
+        git(dest, "init", "-q", "-b", "main")
+        git(dest, "config", "commit.gpgsign", "false")
+        git(dest, "add", "-A")
+        git(dest, "commit", "-q", "-m", "fixture")
+        return dest
+
+    return _make
