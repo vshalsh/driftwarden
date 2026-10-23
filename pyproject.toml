@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "driftwarden"
+version = "0.0.1"
+description = "Keep your codebase honest to its own architecture decisions."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Vishal Sharma" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: Apache Software License",
+    "Environment :: Console",
+]
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2",
+    "rich>=13",
+    "tomli>=2; python_version < '3.11'",
+    "jinja2>=3",
+]
+
+[project.optional-dependencies]
+llm = ["anthropic", "openai"]
+dev = ["pytest>=8", "pytest-cov", "ruff"]
+
+[project.scripts]
+driftwarden = "driftwarden.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/driftwarden"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]

@@ -16,3 +16,4 @@ logs/llm/
 !logs/grounding/SUMMARY.md
 .env
 .DS_Store
+logs/grounding/*.summary.json
