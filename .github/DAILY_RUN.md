@@ -21,7 +21,7 @@ The scheduled task's prompt points here, so the process can be improved in git.
 - A comment starting with `changes:` means apply the requested changes to the brief, design or plan first, then re-ask on the same issue.
 - Silence is not approval.
 - **Before Gate 1 and Gate 2 are both approved**, build and test on ticket branches and push the branches, but **do not merge into main**. Open a PR per ticket into main; label it `awaiting-gate`.
-- **Once they are approved**, merge green tickets into main (`--no-ff`) in ticket order and push. Remove the `awaiting-gate` label.
+- **Once they are approved**, merge green tickets in ticket order **through their PRs** (`main` is protected: no direct pushes, no force-push). Rebase each branch on current main, wait for CI to pass, then merge with `gh api -X PUT repos/vshalsh/driftwarden/pulls/<n>/merge -f merge_method=merge`. Remove the `awaiting-gate` label.
 
 ## 2. Plan the day
 - Today's tickets come from the 10-day plan in `DELIVERY_LOG.md`.
@@ -59,7 +59,7 @@ The scheduled task's prompt points here, so the process can be improved in git.
 - **Days 11–13:** only check Gate 3. If it is approved, tag `v0.1.0`, push the tag, create a GitHub release with notes, then delete this scheduled task. If it is not approved, address any `changes:` feedback and stop. After v0.1.0 is tagged, or from 2026-11-06 onward, do nothing except delete this scheduled task.
 
 ## 5. Report
-- Add a "Day N" entry to `DELIVERY_LOG.md` (done, carried over, grounding numbers, risks). Commit it to main if the gates are approved, otherwise to a `ledger` branch with an open PR.
+- Add a "Day N" entry to `DELIVERY_LOG.md` (done, carried over, grounding numbers, risks). Commit it on a `ledger-day-N` branch and open a PR. Merge that PR yourself once the gates are approved (ledger-only changes need no Sonnet run); before approval, leave it open.
 - Post the same summary as a comment on the "Daily log" issue.
 - Send Vishal a short message (SendUserMessage) of at most 8 lines:
   - what shipped
@@ -67,7 +67,7 @@ The scheduled task's prompt points here, so the process can be improved in git.
   - which gate needs him, with the issue link
 
 ## Hard rules
-- Never force-push. Never rewrite or delete history on main. Never change repo settings or visibility.
+- `main` is protected. Never push to it directly, never force-push, never change repo settings, branch protection or visibility.
 - Never commit secrets. LLM-path tests use the offline provider or recorded fixtures; no API key is required for CI.
 - Generic open-source code only. No UST, client, manufacturing, PII-broker or Frontier concepts.
 - Every commit message ends with the attribution trailer the session provides.
