@@ -8,8 +8,8 @@ The ledger. Fable owns it, and every status change here needs evidence (a commit
 
 | Gate | What Vishal approves | GitHub issue | Status | Approved on |
 |---|---|---|---|---|
-| G-1 | Scope, success criteria, grounding regime (PROJECT_BRIEF.md) | _to be opened on first push_ | open | — |
-| G-2 | Design tokens (DESIGN_TOKENS.md) + architecture (ARCHITECTURE.md) | _to be opened on first push_ | open | — |
+| G-1 | Scope, success criteria, grounding regime (PROJECT_BRIEF.md) | [#1](https://github.com/vshalsh/driftwarden/issues/1) | open | — |
+| G-2 | Design tokens (DESIGN_TOKENS.md) + architecture (ARCHITECTURE.md) | [#2](https://github.com/vshalsh/driftwarden/issues/2) | open | — |
 | G-3 | Release v0.1.0 against the evidence in this log | opened on Day 10 | not yet | — |
 
 ## 10-day plan
@@ -75,3 +75,4 @@ The ledger. Fable owns it, and every status change here needs evidence (a commit
 - Day-1 work pulled forward: L-001 and L-002 built by Opus, tested in isolation by Sonnet. Both green. Not merged — Gates 1 and 2 not yet approved.
 - Defects / observations: D-001 (scan on non-git dir exits 0 on L-001 alone; fixed in L-002). New tickets L-020 (empty ADR), L-021 (normaliser false-accept), L-022 (ledger path) — scheduled for Day 2 carry-in.
 - Risk: L-001 branch was cut before design tokens landed on main; Fable will rebase both branches on main before merge.
+- Pushed to github.com/vshalsh/driftwarden. Gate issues #1, #2; Daily log #3; PRs #4 (L-001), #5 (L-002) labelled awaiting-gate.
