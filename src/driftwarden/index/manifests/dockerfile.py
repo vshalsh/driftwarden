@@ -74,6 +74,8 @@ def parse(text: str, path: str) -> list[DependencyRef]:
     seen_from = False
     for line, inst in _logical_lines(text):
         parts = inst.split()
+        if not parts:
+            continue  # a lone continuation backslash
         verb = parts[0].upper()
         words = parts[1:]
         if verb == "ARG" and not seen_from:

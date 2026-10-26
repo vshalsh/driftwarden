@@ -85,10 +85,12 @@ def parse_requirements(text: str, path: str) -> list[DependencyRef]:
             continue
         if body.startswith("-"):
             # -r/-c includes, --index-url etc. are not dependencies; -e VCS with #egg is.
-            m = _EGG.search(body) if re.match(r"^(-e|--editable)\b", body) else None
-            if m:
-                url = re.split(r"\s+", body, maxsplit=1)[1].strip()
-                refs.append(_ref(m.group("name"), "@ " + url, path, start + 1, None))
+            opt = re.match(r"^(?:-e|--editable)(?:\s*=\s*|\s+)(?P<url>\S.*)$", body)
+            m = _EGG.search(opt.group("url")) if opt else None
+            if opt and m:
+                refs.append(
+                    _ref(m.group("name"), "@ " + opt.group("url").strip(), path, start + 1, None)
+                )
             continue
         body = re.split(r"\s+--?[a-z]", body, maxsplit=1)[0]  # per-line options (--hash=...)
         parsed = parse_requirement(body)
