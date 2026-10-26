@@ -139,3 +139,72 @@ def test_ruff_format_does_not_touch_markdown(tmp_path):
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert md.read_text(encoding="utf-8") == original
+
+
+# ------------------------------------------------------------------ D-004 unwritable ledger
+
+
+def _deny(monkeypatch, *bases: Path) -> None:
+    """Make ``_writable`` fail for the given bases (root ignores chmod, so patch)."""
+    import driftwarden.cli as cli
+
+    real = cli._writable
+    denied = {b.resolve() for b in bases}
+    monkeypatch.setattr(cli, "_writable", lambda b: b.resolve() not in denied and real(b))
+
+
+def test_d004_unwritable_repo_dir_falls_back_with_warning(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, {"docs/adr/0007-redis.md": NYGARD})
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    monkeypatch.chdir(tmp_path)
+    _deny(monkeypatch, repo / ".driftwarden")
+    res = runner.invoke(app, ["scan", str(repo)])
+    assert res.exit_code == 0, res.output
+    assert "warning" in res.output and "cannot write" in res.output
+    assert list(cache.glob("driftwarden/*/logs/grounding/*.jsonl"))
+    assert not list(repo.glob(".driftwarden/logs/grounding/*.jsonl"))
+
+
+def test_d004_nothing_writable_exit_2_no_traceback(tmp_path, monkeypatch):
+    import driftwarden.cli as cli
+
+    repo = _repo(tmp_path, {"docs/adr/0007-redis.md": NYGARD})
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_writable", lambda b: False)
+    res = runner.invoke(app, ["scan", str(repo)])
+    assert res.exit_code == 2
+    assert "error: cannot write ledger" in res.output and "use --out DIR" in res.output
+    assert res.exception is None or isinstance(res.exception, SystemExit)
+
+
+def test_d004_unwritable_explicit_out_exit_2(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, {"docs/adr/0007-redis.md": NYGARD})
+    out = tmp_path / "out"
+    _deny(monkeypatch, out)
+    res = runner.invoke(app, ["scan", str(repo), "--out", str(out)])
+    assert res.exit_code == 2 and "cannot write ledger" in res.output
+
+
+def test_d004_gitignore_write_failure_is_only_a_warning(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, {"docs/adr/0007-redis.md": NYGARD})
+    monkeypatch.chdir(tmp_path)
+    real = Path.write_text
+
+    def boom(self, *a, **k):
+        if self.name == ".gitignore" and self.parent.name == ".driftwarden":
+            raise PermissionError(13, "Permission denied")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", boom)
+    res = runner.invoke(app, ["scan", str(repo)])
+    assert res.exit_code == 0, res.output
+    assert "could not write" in res.output
+    assert list(_grounding(repo).glob("*.jsonl"))
+
+
+def test_custom_exclude_still_excludes_ledger_dir():
+    from driftwarden.config import Config
+
+    assert ".driftwarden/**" in Config(exclude=["node_modules/**"]).exclude
+    assert Config(exclude=[".driftwarden/**"]).exclude == [".driftwarden/**"]

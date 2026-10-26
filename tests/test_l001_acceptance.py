@@ -240,11 +240,6 @@ def test_scan_explicit_config_flag_used(make_repo, tmp_path):
     assert "c.toml" in res.output.replace("\n", "")
 
 
-@pytest.mark.xfail(
-    reason="DEFECT D-001: L-001 scan never checks for a git repo (exit 0, no error); "
-    "fixed by L-002 cli.py",
-    strict=False,
-)
 def test_scan_on_non_git_directory_clear_error_not_traceback(tmp_path):
     """A scan of a directory that is not a git repository must fail clearly."""
     d = tmp_path / "plain"
@@ -257,11 +252,6 @@ def test_scan_on_non_git_directory_clear_error_not_traceback(tmp_path):
     assert res.exception is None or isinstance(res.exception, SystemExit)
 
 
-@pytest.mark.xfail(
-    reason="DEFECT D-001: L-001 scan never checks for a git repo (exit 0, no error); "
-    "fixed by L-002 cli.py",
-    strict=False,
-)
 def test_scan_on_non_git_directory_subprocess(tmp_path):
     exe = shutil.which("driftwarden", path=str(Path(sys.executable).parent))
     d = tmp_path / "plain"

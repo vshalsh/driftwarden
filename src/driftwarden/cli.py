@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
 from enum import Enum
 from pathlib import Path
 
@@ -50,14 +53,61 @@ def _parse_formats(value: str | None) -> list[str]:
 DEFAULT_OUT_DIR = ".driftwarden"
 
 
+class LedgerLocationError(Exception):
+    """No writable directory for the grounding ledger."""
+
+
+def _writable(base: Path) -> bool:
+    """Create ``base/logs/grounding`` and prove a file can be written there."""
+    try:
+        target = base / "logs" / "grounding"
+        target.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=target, prefix=".probe-"):
+            pass
+        return True
+    except OSError:
+        return False
+
+
+def _fallback_dirs(root: Path) -> list[Path]:
+    """Per-repo ledger dirs outside the repo: user cache dir, then the temp dir."""
+    tag = f"{root.name or 'repo'}-{hashlib.sha256(str(root).encode()).hexdigest()[:10]}"
+    cache = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    user = os.environ.get("USER") or str(os.getuid() if hasattr(os, "getuid") else "user")
+    return [
+        Path(cache) / "driftwarden" / tag,
+        Path(tempfile.gettempdir()) / f"driftwarden-{user}" / tag,
+    ]
+
+
 def _default_out(root: Path) -> Path:
-    """``<repo>/.driftwarden``, self-ignored so a scan never dirties the scanned repo."""
+    """``<repo>/.driftwarden``, self-ignored so a scan never dirties the scanned repo.
+
+    D-004: when that directory cannot be written, fall back to a per-repo dir in the
+    user cache or temp dir (with a warning). A failed ``.gitignore`` write alone is
+    only a warning. Raises LedgerLocationError when nothing is writable.
+    """
     base = root / DEFAULT_OUT_DIR
-    base.mkdir(parents=True, exist_ok=True)
-    ignore = base / ".gitignore"
-    if not ignore.exists():
-        ignore.write_text("# Written by driftwarden scan; run output, not source.\n*\n")
-    return base
+    if _writable(base):
+        ignore = base / ".gitignore"
+        if not ignore.exists():
+            try:
+                ignore.write_text("# Written by driftwarden scan; run output, not source.\n*\n")
+            except OSError as exc:
+                err.print(
+                    f"[yellow]warning:[/yellow] could not write {escape(str(ignore))}: "
+                    f"{escape(exc.strerror or str(exc))}; the ledger may show in git status"
+                )
+        return base
+    for alt in _fallback_dirs(root):
+        if _writable(alt):
+            err.print(
+                f"[yellow]warning:[/yellow] cannot write {escape(str(base))}; "
+                f"writing the grounding ledger to {escape(str(alt))} instead (use --out DIR)",
+                highlight=False,
+            )
+            return alt
+    raise LedgerLocationError(str(base))
 
 
 @app.command()
@@ -118,7 +168,18 @@ def scan(
     for rel, msg in result.errors:
         err.print(f"[yellow]warning:[/yellow] could not read {rel}: {msg}")
 
-    ledger = Ledger(out if out is not None else _default_out(root))
+    if out is not None:
+        if not _writable(out):
+            err.print(f"[red]error:[/red] cannot write ledger to {escape(str(out))}; use --out DIR")
+            raise typer.Exit(2)
+        ledger_base = out
+    else:
+        try:
+            ledger_base = _default_out(root)
+        except LedgerLocationError as exc:
+            err.print(f"[red]error:[/red] cannot write ledger to {escape(str(exc))}; use --out DIR")
+            raise typer.Exit(2) from exc
+    ledger = Ledger(ledger_base)
     rows = []
     for dec in result.decisions:
         gr = verify_source_quote(root, dec.source, check_id="G1", subject=dec.id)
