@@ -1,7 +1,9 @@
 """Dockerfile / Containerfile base images.
 
-Reports every ``FROM`` image (and ``COPY --from=<image>`` / ``RUN
---mount=from=<image>`` that names an image rather than a build stage) as an
+Reports every ``FROM`` image (scope ``base``), plus ``COPY --from=<image>``
+(scope ``copy-from``) and ``RUN --mount=...,from=<image>`` (scope
+``mount-from``) when they name an image rather than a build stage. Only the
+instruction's leading ``--`` options are read, never shell arguments. Each is an
 ecosystem ``docker`` dependency: package = image name (registry and path
 included), version_spec = tag and/or digest. ``ARG`` defaults declared before
 the first ``FROM`` are substituted; references to earlier stages and
@@ -91,12 +93,29 @@ def parse(text: str, path: str) -> list[DependencyRef]:
             _add(refs, _subst(words[0], args), path, line, "base", stages)
             if len(words) >= 3 and words[1].upper() == "AS":
                 stages.add(words[2].lower())
-        elif verb in ("COPY", "ADD", "RUN"):
+        elif verb in ("COPY", "RUN"):
+            # Only the instruction's own leading --options; anything after the first
+            # non-option word is a path or shell text (``RUN echo --from=x``).
             for w in words:
-                m = re.match(r"^--(?:from|mount=.*\bfrom)=([^,\s]+)", w)
-                if m:
-                    _add(refs, _subst(m.group(1), args), path, line, "copy-from", stages)
+                if not w.startswith("--"):
+                    break
+                key, _, value = w[2:].partition("=")
+                if verb == "COPY" and key == "from" and value:
+                    _add(refs, _subst(value, args), path, line, "copy-from", stages)
+                elif verb == "RUN" and key == "mount":
+                    src = _mount_from(value)
+                    if src:
+                        _add(refs, _subst(src, args), path, line, "mount-from", stages)
     return refs
+
+
+def _mount_from(spec: str) -> str | None:
+    """``from=`` of a ``RUN --mount=type=...,from=...,target=...`` spec."""
+    for part in spec.split(","):
+        k, _, v = part.partition("=")
+        if k.strip().lower() == "from" and v.strip():
+            return v.strip()
+    return None
 
 
 def _add(

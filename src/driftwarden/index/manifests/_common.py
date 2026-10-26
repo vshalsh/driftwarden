@@ -67,6 +67,60 @@ class LineFinder:
         return None
 
 
+def strip_toml_comments(text: str) -> str:
+    """``text`` with TOML ``#`` comments removed, line structure unchanged.
+
+    String-aware (basic, literal and multi-line strings), so ``#`` inside a
+    value such as ``"pkg @ https://x/p.whl#sha256=..."`` is kept. Used so that
+    line lookups never land on a commented-out copy of a declaration.
+    """
+    out: list[str] = []
+    mode = ""  # "", '"', "'", '"""', "'''"
+    for line in split_lines(text):
+        buf: list[str] = []
+        i, n = 0, len(line)
+        while i < n:
+            ch = line[i]
+            if mode in ('"""', "'''"):
+                if line.startswith(mode, i):
+                    buf.append(mode)
+                    i += 3
+                    mode = ""
+                    continue
+                if mode == '"""' and ch == "\\" and i + 1 < n:
+                    buf.append(line[i : i + 2])
+                    i += 2
+                    continue
+                buf.append(ch)
+                i += 1
+                continue
+            if mode in ('"', "'"):
+                buf.append(ch)
+                if mode == '"' and ch == "\\" and i + 1 < n:
+                    buf.append(line[i + 1])
+                    i += 2
+                    continue
+                if ch == mode:
+                    mode = ""
+                i += 1
+                continue
+            if ch == "#":
+                break
+            if line.startswith(('"""', "'''"), i):
+                mode = line[i : i + 3]
+                buf.append(mode)
+                i += 3
+                continue
+            if ch in "\"'":
+                mode = ch
+            buf.append(ch)
+            i += 1
+        if mode in ('"', "'"):
+            mode = ""  # single-line strings cannot span lines
+        out.append("".join(buf))
+    return "\n".join(out) + "\n"
+
+
 def quoted(value: str) -> str:
     """Regex matching ``value`` as a quoted string literal ("..." or '...')."""
     v = re.escape(value)
@@ -183,19 +237,46 @@ def compose_yaml(text: str) -> list[yaml.Node]:
         raise ManifestError(f"YAML: {msg}") from None
 
 
-def ymap_get(node: yaml.Node | None, key: str) -> yaml.Node | None:
-    if not isinstance(node, yaml.MappingNode):
-        return None
+_MERGE_TAG = "tag:yaml.org,2002:merge"
+
+
+def _is_merge_key(k: yaml.Node) -> bool:
+    return isinstance(k, yaml.ScalarNode) and (k.tag == _MERGE_TAG or k.value == "<<")
+
+
+def ymap_items(
+    node: yaml.Node | None, _seen: frozenset[int] = frozenset()
+) -> list[tuple[str, yaml.Node]]:
+    """Key/value pairs of a mapping with YAML merge keys (``<<: *base`` or
+    ``<<: [*a, *b]``) resolved. Explicit keys override merged ones; in a merge
+    list the first mapping wins. Values keep their own source positions (an
+    inherited value points at the anchor's line). Cycle-safe.
+    """
+    if not isinstance(node, yaml.MappingNode) or id(node) in _seen:
+        return []
+    seen = _seen | {id(node)}
+    explicit: list[tuple[str, yaml.Node]] = []
+    merged: list[tuple[str, yaml.Node]] = []
     for k, v in node.value:
-        if isinstance(k, yaml.ScalarNode) and k.value == key:
+        if _is_merge_key(k):
+            sources = v.value if isinstance(v, yaml.SequenceNode) else [v]
+            for src in sources:
+                merged.extend(ymap_items(src, seen))
+        elif isinstance(k, yaml.ScalarNode):
+            explicit.append((k.value, v))
+    out: dict[str, yaml.Node] = {}
+    for key, v in explicit:
+        out.setdefault(key, v)
+    for key, v in merged:
+        out.setdefault(key, v)
+    return list(out.items())
+
+
+def ymap_get(node: yaml.Node | None, key: str) -> yaml.Node | None:
+    for k, v in ymap_items(node):
+        if k == key:
             return v
     return None
-
-
-def ymap_items(node: yaml.Node | None) -> list[tuple[str, yaml.Node]]:
-    if not isinstance(node, yaml.MappingNode):
-        return []
-    return [(k.value, v) for k, v in node.value if isinstance(k, yaml.ScalarNode)]
 
 
 def yscalar(node: yaml.Node | None) -> str | None:

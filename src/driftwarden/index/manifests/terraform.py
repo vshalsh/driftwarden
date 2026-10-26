@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import PurePosixPath
 
 from driftwarden.index.manifests._hcl import Attr, Block, parse_hcl
@@ -22,12 +23,52 @@ def matches(path: str) -> bool:
     return PurePosixPath(path).name.endswith((".tf", ".tofu"))
 
 
+_REGISTRY_ADDR = re.compile(
+    r"^(?:[A-Za-z0-9.-]+(?::\d+)?/)?[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_-]+)?$"
+)
+_GETTER = re.compile(r"^([A-Za-z0-9]+)::(.*)$", re.S)
+_SCP = re.compile(r"^(?P<user>[\w.-]+@)(?P<host>[\w.-]+)(?P<rest>:.*)$", re.S)
+
+
 def canonical_source(source: str) -> str:
-    s = source.strip().lower()
+    """Comparison key for a provider / module source address.
+
+    Registry addresses (``[host/]namespace/name[/system]``) are case-insensitive
+    and the public registry host is implied, so they are lower-cased. Every other
+    source (git, http(s), s3, gcs, GitHub/Bitbucket shorthand) is case-sensitive
+    except for the parts that are case-insensitive by definition: the forced
+    getter (``git::``), the URL scheme and the host name. Paths and query values
+    such as ``?ref=V1`` keep their case, so ``?ref=V1`` != ``?ref=v1``.
+    """
+    s = source.strip()
     for prefix in ("registry.terraform.io/", "registry.opentofu.org/"):
-        if s.startswith(prefix):
-            return s[len(prefix) :]
-    return s
+        if s.lower().startswith(prefix):
+            s = s[len(prefix) :]
+            break
+    low = s.lower()
+    if not low.startswith(("github.com/", "bitbucket.org/")) and _REGISTRY_ADDR.match(s):
+        return low
+    getter = ""
+    m = _GETTER.match(s)
+    if m:
+        getter, s = m.group(1).lower() + "::", m.group(2)
+    if "://" in s:
+        scheme, rest = s.split("://", 1)
+        end = len(rest)
+        for ch in "/?#":
+            i = rest.find(ch)
+            if i != -1:
+                end = min(end, i)
+        authority, tail = rest[:end], rest[end:]
+        user, at, host = authority.rpartition("@")
+        s = f"{scheme.lower()}://{user}{at}{host.lower()}{tail}"
+    elif scp := _SCP.match(s):
+        s = f"{scp.group('user')}{scp.group('host').lower()}{scp.group('rest')}"
+    else:
+        head, slash, tail = s.partition("/")
+        if "." in head:  # github.com/Org/Repo shorthand: the host comes first
+            s = head.lower() + slash + tail
+    return getter + s
 
 
 def _str(attr: Attr | None) -> str | None:

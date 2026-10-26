@@ -188,8 +188,14 @@ def scan_manifests(repo: str | Path, commit: str = "HEAD") -> list[ManifestResul
         except git.GitError as exc:
             results.append(ManifestResult(path=path, kind=parser.kind, errors=[str(exc)]))
             continue
-        if parser.sniff is not None and not parser.sniff(path, text):
-            continue
+        if parser.sniff is not None:
+            # Sniff the same normalised text parse_manifest() will see (BOM etc.).
+            try:
+                sniffed = _prepare(text)
+            except ManifestError:
+                continue  # undecodable *.yaml: not identifiable as a manifest
+            if not parser.sniff(path, sniffed):
+                continue
         res = parse_manifest(path, text)
         res.commit = sha
         res.refs = [r.model_copy(update={"commit": sha}) for r in res.refs]

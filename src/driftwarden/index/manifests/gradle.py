@@ -19,7 +19,13 @@ import re
 from pathlib import PurePosixPath
 from typing import Any
 
-from driftwarden.index.manifests._common import LineFinder, ManifestError, quoted, tomllib
+from driftwarden.index.manifests._common import (
+    LineFinder,
+    ManifestError,
+    quoted,
+    strip_toml_comments,
+    tomllib,
+)
 from driftwarden.models import DependencyRef
 from driftwarden.text import split_lines
 
@@ -167,7 +173,7 @@ def parse_catalog(text: str, path: str) -> list[DependencyRef]:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise ManifestError(f"TOML: {exc}") from None
-    lf = LineFinder(text)
+    lf = LineFinder(strip_toml_comments(text))
     versions = data.get("versions") if isinstance(data.get("versions"), dict) else {}
     refs: list[DependencyRef] = []
 

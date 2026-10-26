@@ -61,13 +61,21 @@ def parse(text: str, path: str) -> list[DependencyRef]:
         pkg = node.attr("Include") or node.attr("Update")
         if not pkg:
             continue
-        version = node.attr("Version") or node.attr("VersionOverride")
-        if version is None:
-            child = next((c for c in node.children if c.tag.lower() == "version"), None)
-            version = child.text.strip() if child is not None else None
+        # VersionOverride (central package management) wins over Version; each may
+        # be an attribute or a child element.
+        version = _prop(node, "VersionOverride") or _prop(node, "Version")
         scope = "central" if node.tag == "PackageVersion" else _scope(node)
         refs.append(_ref(pkg.strip(), version, path, node.line, scope))
     return refs
+
+
+def _prop(node: XmlNode, name: str) -> str | None:
+    """MSBuild item metadata ``name`` as attribute or child element (case-insensitive)."""
+    value = node.attr(name)
+    if value is None:
+        child = next((c for c in node.children if c.tag.lower() == name.lower()), None)
+        value = child.text if child is not None else None
+    return (value.strip() or None) if value is not None else None
 
 
 def _scope(node: XmlNode) -> str | None:

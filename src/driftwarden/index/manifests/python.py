@@ -11,7 +11,13 @@ import re
 from pathlib import PurePosixPath
 from typing import Any
 
-from driftwarden.index.manifests._common import LineFinder, ManifestError, quoted, tomllib
+from driftwarden.index.manifests._common import (
+    LineFinder,
+    ManifestError,
+    quoted,
+    strip_toml_comments,
+    tomllib,
+)
 from driftwarden.models import DependencyRef
 from driftwarden.text import split_lines
 
@@ -141,7 +147,7 @@ def parse_pyproject(text: str, path: str) -> list[DependencyRef]:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise ManifestError(f"TOML: {exc}") from None
-    lf = LineFinder(text)
+    lf = LineFinder(strip_toml_comments(text))
     refs: list[DependencyRef] = []
 
     def from_list(reqs: Any, section: str, scope: str | None) -> None:
@@ -212,7 +218,14 @@ def _poetry_spec(spec: Any) -> str | None:
             return spec["version"].strip() or None
         for k in ("git", "url", "path"):
             if isinstance(spec.get(k), str):
-                return f"@ {spec[k]}"
+                # Keep the pin (rev/tag/branch) and subdirectory: different pins are
+                # different dependencies, and G3 must be able to tell them apart.
+                pins = [
+                    f"{p}={spec[p]}"
+                    for p in ("rev", "tag", "branch", "subdirectory")
+                    if isinstance(spec.get(p), str) and spec[p]
+                ]
+                return f"@ {spec[k]}" + ("#" + "&".join(pins) if pins else "")
     if isinstance(spec, list):  # multiple-constraint form
         parts = [_poetry_spec(s) for s in spec]
         return " || ".join(p for p in parts if p) or None
