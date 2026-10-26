@@ -110,6 +110,9 @@ class XmlNode:
         return None
 
 
+_DTD = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.I)
+
+
 def _local(name: str) -> str:
     # expat with namespace_separator=" " gives "uri local"; plain gives "prefix:local".
     name = name.rsplit(" ", 1)[-1]
@@ -119,12 +122,20 @@ def _local(name: str) -> str:
 def parse_xml(text: str) -> XmlNode:
     """Parse XML into an XmlNode tree with line numbers. Raises ManifestError.
 
-    No DTD or external entities are loaded (expat's defaults); internal entity
-    expansion is bounded by expat's billion-laughs protection.
+    Manifests from untrusted repos must not be able to stall a scan, so any
+    DOCTYPE or entity declaration is rejected outright (no pom.xml, csproj or
+    packages.config needs one); this rules out entity-expansion bombs and
+    external entities. Character data is collected in lists, not by repeated
+    string concatenation.
     """
+    if _DTD.search(text):
+        raise ManifestError("XML: DOCTYPE / entity declarations are not allowed in manifests")
     parser = expat.ParserCreate(namespace_separator=" ")
     root: list[XmlNode] = []
-    stack: list[XmlNode] = []
+    stack: list[tuple[XmlNode, list[str]]] = []
+
+    def reject(*_args: object) -> None:
+        raise ManifestError("XML: DOCTYPE / entity declarations are not allowed in manifests")
 
     def start(name: str, attrs: dict[str, str]) -> None:
         node = XmlNode(
@@ -133,23 +144,26 @@ def parse_xml(text: str) -> XmlNode:
             line=parser.CurrentLineNumber,
         )
         if stack:
-            stack[-1].children.append(node)
+            stack[-1][0].children.append(node)
         else:
             root.append(node)
-        stack.append(node)
+        stack.append((node, []))
 
     def end(name: str) -> None:
-        stack.pop()
+        node, parts = stack.pop()
+        node.text = "".join(parts)
 
     def chars(data: str) -> None:
         if stack:
-            stack[-1].text += data
+            stack[-1][1].append(data)
 
+    parser.StartDoctypeDeclHandler = reject
+    parser.EntityDeclHandler = reject
     parser.StartElementHandler = start
     parser.EndElementHandler = end
     parser.CharacterDataHandler = chars
     try:
-        parser.Parse(text.lstrip("﻿"), True)
+        parser.Parse(text, True)
     except expat.ExpatError as exc:
         raise ManifestError(f"XML: {exc}") from None
     if not root:

@@ -42,8 +42,12 @@ _MAP = re.compile(
          (?:\s*,\s*version\s*[:=]\s*{_Q}(?P<v>[^"']*){_Q})?""",
     re.X,
 )
+# id 'x' / id("x") / id "x" version '1' apply false / kotlin("jvm") version "1.9.22"
 _PLUGIN = re.compile(
-    rf"""^\s*id\s*\(?\s*{_Q}(?P<id>[\w.-]+){_Q}\s*\)?(?:\s+version\s*\(?\s*{_Q}(?P<v>[^"']+){_Q})?"""
+    rf"""(?<![\w.])(?:id\s*\(?\s*{_Q}(?P<id>[\w.-]+){_Q}|kotlin\s*\(\s*{_Q}(?P<kt>[\w.-]+){_Q})
+         (?:\s*\))?
+         (?:\s*version\s*\(?\s*{_Q}(?P<v>[^"']+){_Q})?""",
+    re.X,
 )
 _TEST = re.compile(r"^(test|androidTest|integrationTest)")
 
@@ -118,12 +122,12 @@ def parse(text: str, path: str) -> list[DependencyRef]:
         if re.match(r"^\s*plugins\s*\{", line):
             in_plugins, depth = True, 0
         if in_plugins:
-            m = _PLUGIN.match(line)
-            if m:
+            for m in _PLUGIN.finditer(line):
+                plugin = m.group("id") or f"org.jetbrains.kotlin.{m.group('kt')}"
                 refs.append(
                     DependencyRef(
                         ecosystem="gradle-plugin",
-                        package=m.group("id"),
+                        package=plugin,
                         version_spec=m.group("v"),
                         manifest_path=path,
                         line=n,

@@ -8,13 +8,14 @@ commit. They are plain functions: no model, no network.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from pathlib import Path, PurePosixPath
 
 from driftwarden import git
 from driftwarden.index.manifests import canonical_package, canonical_version, parse_manifest
 from driftwarden.models import WORKTREE, DependencyRef, GroundingResult, Provenance
-from driftwarden.text import split_lines
+from driftwarden.text import read_text_file, split_lines
 
 _QUOTE_MAP = {
     "‘": "'",  # left single
@@ -30,6 +31,7 @@ _QUOTE_MAP = {
     "«": '"',  # guillemets
     "»": '"',
 }
+_FULL_SHA = re.compile(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")
 _EMPHASIS = frozenset("*_~")
 
 
@@ -217,7 +219,7 @@ def verify_source_quote(
         f = root / rel
         if not f.is_file():
             return _result(prov, False, f"{loc}: file missing in working tree", check_id, subject)
-        text = f.read_text(encoding="utf-8", errors="replace")
+        text = read_text_file(f)
     else:
         if not prov.commit.strip() or not git.commit_exists(root, prov.commit):
             return _result(prov, False, f"{loc}: unknown commit {prov.commit!r}", check_id, subject)
@@ -269,7 +271,7 @@ def _load_at(root: Path, rel: str, commit: str) -> tuple[str | None, str]:
         f = root / rel
         if not f.is_file():
             return None, "file missing in working tree"
-        return f.read_text(encoding="utf-8", errors="replace"), ""
+        return read_text_file(f), ""
     if not commit.strip() or not git.commit_exists(root, commit):
         return None, f"unknown commit {commit!r}"
     try:
@@ -315,6 +317,15 @@ def verify_dependency(
 
     if not commit.strip():
         return fail("no commit given")
+    if commit != WORKTREE:
+        # A moving ref (HEAD, branch, tag, short SHA) would make the claim
+        # non-reproducible: only a pinned, full object name is accepted.
+        if not _FULL_SHA.fullmatch(commit):
+            return fail(f"commit must be a full SHA (40/64 hex) or {WORKTREE}, got {commit!r}")
+        if not git.commit_exists(root, commit):
+            return fail(f"unknown commit {commit!r}")
+        if git.resolve_commit(root, commit) != commit.lower():
+            return fail(f"commit must be a full SHA (40/64 hex) or {WORKTREE}, got {commit!r}")
     rel = _safe_rel(dep.manifest_path)
     if rel is None:
         return fail("path is not repo-relative")

@@ -413,3 +413,30 @@ def test_dockerfile_unresolved_arg_and_scratch():
     text = "ARG BASE\nFROM $BASE\nFROM scratch\nFROM python:${PY:-3.12}-slim AS py\nFROM py\n"
     refs = parse_manifest("Dockerfile", text).refs
     assert [(r.package, r.version_spec, r.line) for r in refs] == [("python", "3.12-slim", 4)]
+
+
+def test_gradle_single_line_plugins_and_kotlin_shorthand():
+    text = 'plugins { id \'java\' }\nplugins {\n    kotlin("jvm") version "1.9.22"\n}\n'
+    refs = parse_manifest("build.gradle.kts", text).refs
+    assert [(r.package, r.version_spec, r.line) for r in refs] == [
+        ("java", None, 1),
+        ("org.jetbrains.kotlin.jvm", "1.9.22", 3),
+    ]
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-8-sig"])
+def test_utf16_and_bom_manifests_via_git_and_worktree(make_repo, encoding):
+    repo = make_repo()
+    (repo / "requirements.txt").write_bytes("requests==2.31.0\r\nflask==3.0.0\r\n".encode(encoding))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "c")
+    head = git(repo, "rev-parse", "HEAD").strip()
+    for commit in (head, WORKTREE):
+        res = parse_manifest_at(repo, "requirements.txt", commit)
+        assert res.errors == []
+        assert [(r.package, r.line) for r in res.refs] == [("requests", 1), ("flask", 2)]
+
+
+def test_binary_with_nuls_is_undecodable_not_empty():
+    res = parse_manifest("requirements.txt", "a\x00\x00\x00b�==1\n")
+    assert res.refs == [] and "undecodable manifest" in res.errors[0]

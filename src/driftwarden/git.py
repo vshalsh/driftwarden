@@ -10,6 +10,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from driftwarden.text import decode_text
+
 
 class GitError(Exception):
     """A git command failed."""
@@ -32,6 +34,10 @@ class LogEntry:
 
 
 def _run(args: list[str], cwd: str | Path) -> str:
+    return _run_bytes(args, cwd).decode("utf-8", "replace")
+
+
+def _run_bytes(args: list[str], cwd: str | Path) -> bytes:
     try:
         proc = subprocess.run(
             ["git", *args],
@@ -48,7 +54,7 @@ def _run(args: list[str], cwd: str | Path) -> str:
         if "not a git repository" in stderr:
             raise NotAGitRepoError(f"not a git repository: {cwd}")
         raise GitError(f"git {' '.join(args)} failed ({proc.returncode}): {stderr}")
-    return proc.stdout.decode("utf-8", "replace")
+    return proc.stdout
 
 
 def _dir(path: str | Path) -> Path:
@@ -94,9 +100,10 @@ def commit_exists(repo: str | Path, commit: str) -> bool:
 
 
 def show_file(repo: str | Path, commit: str, path: str) -> str:
-    """Contents of ``path`` (repo-relative, POSIX) at ``commit``."""
+    """Contents of ``path`` (repo-relative, POSIX) at ``commit``, decoded with
+    ``text.decode_text`` (UTF-8 by default; UTF-16/32 recognised)."""
     rel = Path(path).as_posix()
-    return _run(["show", f"{commit}:{rel}"], repo)
+    return decode_text(_run_bytes(["show", f"{commit}:{rel}"], repo))
 
 
 def resolve_commit(repo: str | Path, rev: str) -> str:
