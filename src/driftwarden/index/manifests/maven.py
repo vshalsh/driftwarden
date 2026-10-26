@@ -40,22 +40,71 @@ def _props(root: XmlNode) -> dict[str, str]:
     return props
 
 
-def _resolve(value: str | None, props: dict[str, str]) -> str | None:
+EXPANSION_BUDGET = 64 * 1024  # max characters of any expanded value
+
+
+class _Resolver:
+    """``${prop}`` expansion with cycle detection and a size budget.
+
+    Each property is expanded once (memoised). The length of an expansion is
+    computed from its parts *before* the string is built, so a property bomb
+    (``<v>${v}${v}...</v>`` or a chain of ten-fold references) is rejected with
+    a ManifestError without allocating it. Unknown properties stay verbatim.
+    """
+
+    def __init__(self, props: dict[str, str]) -> None:
+        self.props = props
+        self.memo: dict[str, str] = {}
+        self.active: set[str] = set()
+
+    def prop(self, name: str) -> str:
+        if name in self.memo:
+            return self.memo[name]
+        if name in self.active:
+            raise ManifestError(f"pom.xml: property cycle through ${{{name}}}")
+        self.active.add(name)
+        try:
+            value = self.expand(self.props[name])
+        finally:
+            self.active.discard(name)
+        self.memo[name] = value
+        return value
+
+    def expand(self, value: str) -> str:
+        parts: list[str] = []
+        size = 0
+        pos = 0
+        for m in _PROP.finditer(value):
+            name = m.group(1)
+            piece = self.prop(name) if name in self.props else m.group(0)
+            for chunk in (value[pos : m.start()], piece):
+                size += len(chunk)
+                if size > EXPANSION_BUDGET:
+                    raise ManifestError(
+                        f"pom.xml: property expansion exceeds budget of {EXPANSION_BUDGET} chars"
+                    )
+                parts.append(chunk)
+            pos = m.end()
+        tail = value[pos:]
+        if size + len(tail) > EXPANSION_BUDGET:
+            raise ManifestError(
+                f"pom.xml: property expansion exceeds budget of {EXPANSION_BUDGET} chars"
+            )
+        parts.append(tail)
+        return "".join(parts)
+
+
+def _resolve(value: str | None, resolver: _Resolver) -> str | None:
     if value is None:
         return None
-    for _ in range(10):  # bounded: properties may reference properties
-        new = _PROP.sub(lambda m: props.get(m.group(1), m.group(0)), value)
-        if new == value:
-            break
-        value = new
-    return value.strip() or None
+    return resolver.expand(value).strip() or None
 
 
 def parse(text: str, path: str) -> list[DependencyRef]:
     root = parse_xml(text)
     if root.tag != "project":
         raise ManifestError(f"pom.xml root element is <{root.tag}>, expected <project>")
-    props = _props(root)
+    props = _Resolver(_props(root))
     refs: list[DependencyRef] = []
 
     def add(node: XmlNode, scope: str | None) -> None:

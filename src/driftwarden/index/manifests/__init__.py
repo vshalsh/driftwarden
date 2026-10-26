@@ -20,6 +20,11 @@ Known limits (accepted for v0.1.0; tracked for a later ticket):
   dependencies inside that ``<profile>``. Repro: root ``<v>1</v>``, profile
   ``<v>2</v>``, profile dependency ``<version>${v}</version>`` -> reported as
   ``1``. Fix needs profile-aware property resolution.
+* go.mod quoted-version form is dropped. Repro: ``require "example.com/m"
+  "v0.9.1"`` -> no dependency (the unquoted ``require example.com/m v0.9.1`` works).
+* Kubernetes: an image scalar anchored earlier in the document and re-used by
+  alias in a container is suppressed by the visited-set. Repro: annotation
+  ``img: &image nginx:1.25`` then container ``image: *image`` -> no dependency.
 """
 
 from __future__ import annotations

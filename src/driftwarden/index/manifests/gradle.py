@@ -195,19 +195,21 @@ def parse_catalog(text: str, path: str) -> list[DependencyRef]:
     versions = data.get("versions") if isinstance(data.get("versions"), dict) else {}
     refs: list[DependencyRef] = []
 
-    def version_of(spec: dict[str, Any]) -> str | None:
-        v = spec.get("version")
+    def rich(v: Any) -> str | None:
+        """A plain version string, or a rich version table (strictly > require > prefer)."""
         if isinstance(v, str):
             return v
         if isinstance(v, dict):
-            if isinstance(v.get("ref"), str):
-                ref = versions.get(v["ref"])
-                return ref if isinstance(ref, str) else None
             for k in ("strictly", "require", "prefer"):
                 if isinstance(v.get(k), str):
                     return v[k]
-        ref = spec.get("version.ref")
-        return versions.get(ref) if isinstance(ref, str) else None
+        return None
+
+    def version_of(spec: dict[str, Any]) -> str | None:
+        v = spec.get("version")
+        if isinstance(v, dict) and isinstance(v.get("ref"), str):
+            return rich(versions.get(v["ref"]))  # [versions] entry may itself be rich
+        return rich(v)
 
     for table, eco in (("libraries", "maven"), ("plugins", "gradle-plugin")):
         body = data.get(table)

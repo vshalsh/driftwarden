@@ -37,6 +37,54 @@ def matches(path: str) -> bool:
 _HEREDOC = re.compile(r"""<<(?P<dash>-?)(?P<q>["']?)(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=q)""")
 
 
+def _heredoc_markers(inst: str) -> list[tuple[str, bool]]:
+    """(delimiter, strip-tabs) for each real heredoc opened by ``inst``.
+
+    ``<<`` only opens a heredoc outside single/double quotes and outside shell
+    arithmetic ``$(( ... ))``; ``RUN echo "<<EOF"`` and ``$((1<<EOF))`` do not.
+    """
+    found: list[tuple[str, bool]] = []
+    quote = ""
+    arith = 0
+    i, n = 0, len(inst)
+    while i < n:
+        ch = inst[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if inst.startswith("$((", i):
+            arith += 1
+            i += 3
+            continue
+        if arith:
+            if inst.startswith("))", i):
+                arith -= 1
+                i += 2
+                continue
+            i += 1
+            continue
+        if inst.startswith("<<", i):
+            m = _HEREDOC.match(inst, i)
+            if m:
+                found.append((m.group("word"), bool(m.group("dash"))))
+                i = m.end()
+                continue
+            i += 2
+            continue
+        if ch in "\"'":
+            quote = ch
+        i += 1
+    return found
+
+
 def _logical_lines(text: str) -> list[tuple[int, str]]:
     """Join backslash continuations; returns (first line number, joined text).
 
@@ -66,8 +114,7 @@ def _logical_lines(text: str) -> list[tuple[int, str]]:
         out.append((start, inst))
         buf = []
         # Skip the bodies of every heredoc opened by this instruction, in order.
-        for m in _HEREDOC.finditer(inst):
-            word, dash = m.group("word"), bool(m.group("dash"))
+        for word, dash in _heredoc_markers(inst):
             while i < len(lines):
                 body = lines[i].lstrip("\t") if dash else lines[i]
                 i += 1
