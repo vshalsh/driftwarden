@@ -441,12 +441,13 @@ def test_unicode_normalisation_nfc_vs_nfd(tmp_path):
 
 
 def test_observation_underscore_identifier_collapses(tmp_path):
-    """Documents a known weakness: '_' is stripped on both sides, so snake_case == snakecase."""
+    """Was a known weakness (O-2): '_' was stripped on both sides, so snake_case == snakecase.
+    Fixed by L-021: intraword underscores are preserved."""
     text = "# 10. Names\n\n## Decision\n\nUse snake_case names.\n"
     repo = _repo(tmp_path, {"docs/adr/0010-names.md": text})
     dec = _single(repo)
     r = verify_source_quote(repo, dec.source.model_copy(update={"quote": "Use snakecase names."}))
-    assert r.status in ("VERIFIED", "MISMATCH")  # informational; reported to PM, not asserted
+    assert r.status == "MISMATCH"
 
 
 # ------------------------------------------------------------ long ADRs
