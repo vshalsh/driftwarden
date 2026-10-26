@@ -73,16 +73,22 @@ def scan(
     if not path.exists():
         err.print(f"[red]error:[/red] path does not exist: {path}")
         raise typer.Exit(2)
+    # Config errors are reported first (D-002): a broken config is a usage error the
+    # user must see even when the path is also not a git repository.
+    git_error: git.GitError | None = None
     try:
         root = git.repo_root(path)
     except git.GitError as exc:
-        err.print(f"[red]error:[/red] {exc}")
-        raise typer.Exit(2) from exc
+        git_error = exc
+        root = path if path.is_dir() else path.parent
     try:
         cfg = load_config(root, config)
     except ConfigError as exc:
-        err.print(f"[red]config error:[/red] {exc}")
+        err.print(f"[red]config error:[/red] {escape(str(exc))}")
         raise typer.Exit(2) from exc
+    if git_error is not None:
+        err.print(f"[red]error:[/red] {git_error}")
+        raise typer.Exit(2) from git_error
 
     console.print(f"driftwarden {__version__} - scan {root}")
     console.print(
