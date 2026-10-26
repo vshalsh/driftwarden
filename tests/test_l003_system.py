@@ -877,7 +877,11 @@ def test_non_utf8_filename(tmp_path):
     root.mkdir()
     git(root, "init", "-q", "-b", "main")
     (root / "ok.py").write_text("")
-    with open(os.path.join(os.fsencode(root), b"bad\xff.py"), "wb") as fh:
+    try:
+        fh = open(os.path.join(os.fsencode(root), b"bad\xff.py"), "wb")
+    except OSError:  # e.g. macOS APFS: EILSEQ (Errno 92) for non-UTF-8 names
+        pytest.skip("filesystem rejects non-UTF-8 names")
+    with fh:
         fh.write(b"import ok\n")
     ix = build_index(root)
     assert len(ix.files) == 2
