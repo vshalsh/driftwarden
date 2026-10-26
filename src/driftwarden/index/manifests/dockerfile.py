@@ -33,13 +33,25 @@ def matches(path: str) -> bool:
     )
 
 
+# BuildKit heredoc marker: <<EOF, <<-EOF, <<"EOF", <<'EOF' (word delimiter only).
+_HEREDOC = re.compile(r"""<<(?P<dash>-?)(?P<q>["']?)(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=q)""")
+
+
 def _logical_lines(text: str) -> list[tuple[int, str]]:
-    """Join backslash continuations; returns (first line number, joined text)."""
+    """Join backslash continuations; returns (first line number, joined text).
+
+    Heredoc bodies (``COPY <<EOF /x`` ... ``EOF``, ``RUN <<-"END"`` ...) are
+    payload of the enclosing instruction and are consumed, never parsed as
+    instructions. An unterminated heredoc consumes the rest of the file.
+    """
+    lines = split_lines(text)
     out: list[tuple[int, str]] = []
     buf: list[str] = []
     start = 0
-    for n, line in enumerate(split_lines(text), 1):
-        stripped = line.strip()
+    i = 0
+    while i < len(lines):
+        n, stripped = i + 1, lines[i].strip()
+        i += 1
         if not buf:
             start = n
             if not stripped or stripped.startswith("#"):
@@ -50,8 +62,17 @@ def _logical_lines(text: str) -> list[tuple[int, str]]:
             buf.append(stripped[:-1])
             continue
         buf.append(stripped)
-        out.append((start, " ".join(buf)))
+        inst = " ".join(buf)
+        out.append((start, inst))
         buf = []
+        # Skip the bodies of every heredoc opened by this instruction, in order.
+        for m in _HEREDOC.finditer(inst):
+            word, dash = m.group("word"), bool(m.group("dash"))
+            while i < len(lines):
+                body = lines[i].lstrip("\t") if dash else lines[i]
+                i += 1
+                if body.rstrip("\r") == word:
+                    break
     if buf:
         out.append((start, " ".join(buf)))
     return out

@@ -16,6 +16,7 @@ than a whole-version ``$var``) is skipped.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -124,37 +125,54 @@ def parse(text: str, path: str) -> list[DependencyRef]:
     refs: list[DependencyRef] = []
     in_plugins = False
     depth = 0
+    dep_lines: list[str] = []  # comment-free text outside plugins {}, same line count
     for n, line in enumerate(lines, 1):
         if re.match(r"^\s*plugins\s*\{", line):
             in_plugins, depth = True, 0
-        if in_plugins:
-            for m in _PLUGIN.finditer(line):
-                plugin = m.group("id") or f"org.jetbrains.kotlin.{m.group('kt')}"
-                refs.append(
-                    DependencyRef(
-                        ecosystem="gradle-plugin",
-                        package=plugin,
-                        version_spec=m.group("v"),
-                        manifest_path=path,
-                        line=n,
-                        scope="plugin",
-                    )
-                )
-            depth += line.count("{") - line.count("}")
-            if depth <= 0:
-                in_plugins = False
+        if not in_plugins:
+            dep_lines.append(line)
             continue
-        for m in _COORD.finditer(line):
-            parts = m.group("coord").split(":")
-            version = parts[2] if len(parts) > 2 else None
-            if version and version.startswith("$"):
-                version = variables.get(version.lstrip("${").rstrip("}"), version)
-            refs.append(_ref(f"{parts[0]}:{parts[1]}", version or None, path, n, m.group("cfg")))
-        for m in _MAP.finditer(line):
+        dep_lines.append("")  # inside plugins { ... }
+        for m in _PLUGIN.finditer(line):
+            plugin = m.group("id") or f"org.jetbrains.kotlin.{m.group('kt')}"
             refs.append(
-                _ref(f"{m.group('g')}:{m.group('a')}", m.group("v"), path, n, m.group("cfg"))
+                DependencyRef(
+                    ecosystem="gradle-plugin",
+                    package=plugin,
+                    version_spec=m.group("v"),
+                    manifest_path=path,
+                    line=n,
+                    scope="plugin",
+                )
             )
-    return refs
+        depth += line.count("{") - line.count("}")
+        if depth <= 0:
+            in_plugins = False
+
+    # Dependency declarations may span lines (Kotlin ``implementation(\n "g:a:v"\n)``,
+    # Groovy map notation), so match over the whole text; the reported line is
+    # the line of the coordinate / group string itself.
+    body = "\n".join(dep_lines)
+    starts = [0]
+    for ln in dep_lines[:-1]:
+        starts.append(starts[-1] + len(ln) + 1)
+    found: list[tuple[int, DependencyRef]] = []
+    for m in _COORD.finditer(body):
+        parts = m.group("coord").split(":")
+        version = parts[2] if len(parts) > 2 else None
+        if version and version.startswith("$"):
+            version = variables.get(version.lstrip("${").rstrip("}"), version)
+        pos = m.start("coord")
+        line_no = bisect_right(starts, pos)
+        pkg = f"{parts[0]}:{parts[1]}"
+        found.append((pos, _ref(pkg, version or None, path, line_no, m.group("cfg"))))
+    for m in _MAP.finditer(body):
+        pos = m.start("g")
+        line_no = bisect_right(starts, pos)
+        pkg = f"{m.group('g')}:{m.group('a')}"
+        found.append((pos, _ref(pkg, m.group("v"), path, line_no, m.group("cfg"))))
+    deps = [r for _, r in sorted(found, key=lambda t: t[0])]
+    return sorted(refs + deps, key=lambda r: r.line or 0)  # stable: file order
 
 
 def _ref(pkg: str, version: str | None, path: str, line: int, cfg: str) -> DependencyRef:

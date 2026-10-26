@@ -7,6 +7,19 @@ was at the cited commit.
 
 Public entry points never raise on manifest *content*: a malformed manifest
 gives a ``ManifestResult`` with ``errors`` set and whatever could be read.
+
+Known limits (accepted for v0.1.0; tracked for a later ticket):
+
+* npm line lookup: a package in an inline section object followed by the same
+  package in a later multi-line section gets the wrong *line* (package, version
+  and scope stay correct). Repro: ``{"dependencies": {"react": "1"},`` on one
+  line, then ``"devDependencies": {`` / ``"react": "2"`` on later lines -> the
+  dependencies entry reports the devDependencies line. Fix needs object-scoped
+  JSON positions.
+* Maven profile-local ``<properties>`` do not override root properties for
+  dependencies inside that ``<profile>``. Repro: root ``<v>1</v>``, profile
+  ``<v>2</v>``, profile dependency ``<version>${v}</version>`` -> reported as
+  ``1``. Fix needs profile-aware property resolution.
 """
 
 from __future__ import annotations

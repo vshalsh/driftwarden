@@ -244,32 +244,43 @@ def _is_merge_key(k: yaml.Node) -> bool:
     return isinstance(k, yaml.ScalarNode) and (k.tag == _MERGE_TAG or k.value == "<<")
 
 
-def ymap_items(
-    node: yaml.Node | None, _seen: frozenset[int] = frozenset()
-) -> list[tuple[str, yaml.Node]]:
+def ymap_items(node: yaml.Node | None) -> list[tuple[str, yaml.Node]]:
     """Key/value pairs of a mapping with YAML merge keys (``<<: *base`` or
     ``<<: [*a, *b]``) resolved. Explicit keys override merged ones; in a merge
     list the first mapping wins. Values keep their own source positions (an
-    inherited value points at the anchor's line). Cycle-safe.
+    inherited value points at the anchor's line).
+
+    Each mapping is resolved once per call (memoised by node), so an anchor
+    chain where every level merges the previous one twice stays linear instead
+    of exponential. A merge cycle resolves to nothing at the point of re-entry.
     """
-    if not isinstance(node, yaml.MappingNode) or id(node) in _seen:
-        return []
-    seen = _seen | {id(node)}
-    explicit: list[tuple[str, yaml.Node]] = []
-    merged: list[tuple[str, yaml.Node]] = []
+    return list(_resolve_map(node, {}, set()).items())
+
+
+def _resolve_map(
+    node: yaml.Node | None, memo: dict[int, dict[str, yaml.Node]], active: set[int]
+) -> dict[str, yaml.Node]:
+    if not isinstance(node, yaml.MappingNode):
+        return {}
+    key = id(node)
+    if key in memo:
+        return memo[key]
+    if key in active:
+        return {}  # merge cycle
+    active.add(key)
+    out: dict[str, yaml.Node] = {}
+    merges: list[yaml.Node] = []
     for k, v in node.value:
         if _is_merge_key(k):
-            sources = v.value if isinstance(v, yaml.SequenceNode) else [v]
-            for src in sources:
-                merged.extend(ymap_items(src, seen))
+            merges.extend(v.value if isinstance(v, yaml.SequenceNode) else [v])
         elif isinstance(k, yaml.ScalarNode):
-            explicit.append((k.value, v))
-    out: dict[str, yaml.Node] = {}
-    for key, v in explicit:
-        out.setdefault(key, v)
-    for key, v in merged:
-        out.setdefault(key, v)
-    return list(out.items())
+            out.setdefault(k.value, v)
+    for src in merges:
+        for mk, mv in _resolve_map(src, memo, active).items():
+            out.setdefault(mk, mv)
+    active.discard(key)
+    memo[key] = out
+    return out
 
 
 def ymap_get(node: yaml.Node | None, key: str) -> yaml.Node | None:

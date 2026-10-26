@@ -31,6 +31,13 @@ _PEP508 = re.compile(
          (?:;(?P<marker>.*))?$""",
     re.X,
 )
+# PEP 508 direct reference: the URL runs to whitespace; a marker needs whitespace
+# before its ';' (a ';' inside the URL, e.g. ``?version=1;build=2``, is the URL's).
+_URL_REQ = re.compile(
+    rf"""^\s*(?P<name>{_NAME})\s*(?:\[[^\]]*\])?\s*@\s*(?P<url>\S+)
+         (?:\s+;.*|\s*)$""",
+    re.X | re.S,
+)
 _EGG = re.compile(rf"[#&]egg=(?P<name>{_NAME})")
 
 
@@ -51,6 +58,9 @@ def canonical_spec(spec: str | None) -> str | None:
 
 def parse_requirement(req: str) -> tuple[str, str | None] | None:
     """PEP 508 string -> (name, version_spec). None if it is not a requirement."""
+    u = _URL_REQ.match(req)
+    if u:
+        return u.group("name"), "@ " + u.group("url")
     m = _PEP508.match(req)
     if not m:
         return None
