@@ -412,6 +412,12 @@ class AdrScan:
     head: str | None
     decisions: list[Decision]
     errors: list[tuple[str, str]]  # (path, message)
+    # ADR files that hold no decision text at all (0 bytes or whitespace only).
+    # They are listed, not parsed: there is nothing to quote, so nothing to verify.
+    skipped: list[tuple[str, str]] = field(default_factory=list)  # (path, note)
+
+
+EMPTY_NOTE = "empty file, no decision to verify"
 
 
 def read_source(root: Path, head: str | None, rel: str) -> tuple[str, str]:
@@ -432,10 +438,14 @@ def scan_adrs(path: str | Path, config: Config | None = None) -> AdrScan:
         head = None  # repository with no commits yet: everything is WORKTREE
     decisions: list[Decision] = []
     errors: list[tuple[str, str]] = []
+    skipped: list[tuple[str, str]] = []
     seen: dict[str, int] = {}
     for rel in discover_adr_files(root, config):
         try:
             text, commit = read_source(root, head, rel)
+            if not text.strip():
+                skipped.append((rel, EMPTY_NOTE))
+                continue
             dec = parse_adr(text, rel, commit)
         except (OSError, git.GitError, ValueError) as exc:
             errors.append((rel, str(exc)))
@@ -445,4 +455,4 @@ def scan_adrs(path: str | Path, config: Config | None = None) -> AdrScan:
         if n > 1:
             dec = dec.model_copy(update={"id": f"{dec.id}~{n}"})
         decisions.append(dec)
-    return AdrScan(root=root, head=head, decisions=decisions, errors=errors)
+    return AdrScan(root=root, head=head, decisions=decisions, errors=errors, skipped=skipped)
