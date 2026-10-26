@@ -465,7 +465,9 @@ class _Resolver:
                 roots.add(d)
         for pkg in self.py_packages:
             top = pkg
-            while posixpath.dirname(top) in self.py_packages:
+            # pkg == "" means the repo root itself is a package (flat layout); the root
+            # is already a source root. Stop at "" because dirname("") == "".
+            while top and posixpath.dirname(top) in self.py_packages:
                 top = posixpath.dirname(top)
             if top:
                 roots.add(posixpath.dirname(top))

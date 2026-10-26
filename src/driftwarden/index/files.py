@@ -385,8 +385,38 @@ def _ignored(rel: str, is_dir: bool, stack: list[GitIgnore]) -> bool:
 # --------------------------------------------------------------------------- walking
 
 
-def _excluded(rel: str, patterns: list[str]) -> bool:
-    return any(fnmatch.fnmatchcase(rel, pat) for pat in patterns)
+ALWAYS_SKIP_DIRS = frozenset({".git", ".driftwarden"})
+"""Directory names never indexed, at any depth: git internals and DriftWarden's own output."""
+
+_DIR_PATTERN = re.compile(r"^([^/*?\[\]]+)/\*\*$")
+
+
+class _Excludes:
+    """``Config.exclude`` globs (fnmatch on repo-relative paths).
+
+    A pattern of the form ``name/**`` (one literal directory name) matches that
+    directory at any depth, so ``node_modules/**`` also excludes
+    ``packages/x/node_modules/...``. Other patterns match the whole path as written.
+    """
+
+    def __init__(self, patterns: list[str]) -> None:
+        self.dir_names = set(ALWAYS_SKIP_DIRS)
+        self.globs: list[str] = []
+        for pat in patterns:
+            m = _DIR_PATTERN.match(pat)
+            if m:
+                self.dir_names.add(m.group(1))
+            else:  # a leading "/" anchors to the root, which fnmatch on rel paths does anyway
+                self.globs.append(pat.lstrip("/"))
+
+    def dir_excluded(self, name: str) -> bool:
+        return name in self.dir_names
+
+    def __call__(self, rel: str) -> bool:
+        parts = rel.split("/")
+        if any(p in self.dir_names for p in parts[:-1]) or parts[-1] in ALWAYS_SKIP_DIRS:
+            return True
+        return any(fnmatch.fnmatchcase(rel, pat) for pat in self.globs)
 
 
 def _git_listing(root: Path, untracked: bool) -> tuple[list[str], set[str]] | None:
@@ -417,8 +447,9 @@ def _git_listing(root: Path, untracked: bool) -> tuple[list[str], set[str]] | No
     return paths, tracked_set
 
 
-def _walk_listing(root: Path) -> list[str]:
-    """Filesystem walk applying nested .gitignore files. Does not follow symlinks."""
+def _walk_listing(root: Path, excludes: _Excludes) -> list[str]:
+    """Filesystem walk applying nested .gitignore files. Does not follow symlinks, and
+    does not descend into excluded directories (``node_modules`` etc.)."""
     out: list[str] = []
     stacks: dict[str, list[GitIgnore]] = {}
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -434,7 +465,7 @@ def _walk_listing(root: Path) -> list[str]:
         for d in sorted(dirnames):
             rel = f"{rel_dir}/{d}" if rel_dir else d
             full = Path(dirpath) / d
-            if d == ".git":
+            if excludes.dir_excluded(d):
                 continue
             if full.is_symlink():
                 # Listed as a file entry (a link), never descended into.
@@ -502,26 +533,28 @@ def index_files(
     """List and classify the files of the repository at ``root``.
 
     ``exclude`` are fnmatch globs on repo-relative paths (defaults to
-    ``config.DEFAULT_EXCLUDES``). ``untracked=False`` lists only files git tracks.
-    ``use_git=False`` forces the filesystem walk even inside a git work tree.
+    ``config.DEFAULT_EXCLUDES``); ``name/**`` patterns match that directory at any
+    depth. ``.git`` and ``.driftwarden`` directories are always skipped, at any depth.
+    ``untracked=False`` lists only files git tracks. ``use_git=False`` forces the
+    filesystem walk even inside a git work tree.
     """
     root = Path(root).resolve()
     if not root.is_dir():
         raise NotADirectoryError(f"not a directory: {root}")
-    patterns = list(DEFAULT_EXCLUDES if exclude is None else exclude)
+    excludes = _Excludes(list(DEFAULT_EXCLUDES if exclude is None else exclude))
 
     listing = _git_listing(root, untracked) if use_git else None
     if listing is not None:
         paths, tracked = listing
         source = "git"
     else:
-        paths, tracked = _walk_listing(root), None
+        paths, tracked = _walk_listing(root, excludes), None
         source = "walk"
 
     files: list[FileEntry] = []
     skipped: list[tuple[str, str]] = []
     for rel in paths:
-        if rel == ".git" or rel.startswith(".git/") or _excluded(rel, patterns):
+        if excludes(rel):
             continue
         entry = _entry(root, rel, None if tracked is None else rel in tracked)
         if entry is None:
