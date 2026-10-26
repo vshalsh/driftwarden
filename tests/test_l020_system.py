@@ -61,6 +61,7 @@ def test_bom_only_adr_is_treated_as_empty(tmp_path):
     repo = _repo(tmp_path, {"docs/adr/0001-bom.md": b"\xef\xbb\xbf"})
     res = scan_adrs(repo)
     assert res.decisions == [], "BOM-only file must not produce a decision"
+    assert [r for r, _ in res.skipped] == ["docs/adr/0001-bom.md"]
     out = runner.invoke(app, ["scan", str(repo), "--out", str(tmp_path / "o")])
     assert out.exit_code == 0, out.output
     assert "MISMATCH" not in out.output
@@ -68,6 +69,9 @@ def test_bom_only_adr_is_treated_as_empty(tmp_path):
 
 def test_bom_plus_whitespace_only_is_empty(tmp_path):
     repo = _repo(tmp_path, {"docs/adr/0001-bom.md": b"\xef\xbb\xbf\n\n"})
+    res = scan_adrs(repo)
+    assert res.decisions == [] and res.errors == []
+    assert [r for r, _ in res.skipped] == ["docs/adr/0001-bom.md"]
     out = runner.invoke(app, ["scan", str(repo), "--out", str(tmp_path / "o")])
     assert out.exit_code == 0, out.output
     assert "MISMATCH" not in out.output

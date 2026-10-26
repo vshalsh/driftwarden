@@ -443,7 +443,9 @@ def scan_adrs(path: str | Path, config: Config | None = None) -> AdrScan:
     for rel in discover_adr_files(root, config):
         try:
             text, commit = read_source(root, head, rel)
-            if not text.strip():
+            # D-003: str.strip() keeps U+FEFF, so a BOM-only file looked non-empty.
+            # Emptiness check only; real ADR text (and its offsets) is untouched.
+            if not text.replace("﻿", "").strip():
                 skipped.append((rel, EMPTY_NOTE))
                 continue
             dec = parse_adr(text, rel, commit)
