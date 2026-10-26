@@ -1,0 +1,12 @@
+# Runtime requirements
+-r requirements-base.txt
+--index-url https://pypi.org/simple
+
+fastapi>=0.110,<1.0
+SQLAlchemy[asyncio] == 2.0.29
+psycopg2-binary==2.9.9 ; python_version >= "3.10"
+requests  # unpinned on purpose
+uvicorn[standard]>=0.29 \
+    --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000
+mylib @ https://example.invalid/mylib-1.0.tar.gz
+-e git+https://example.invalid/acme/tooling.git@v1.2#egg=acme-tooling

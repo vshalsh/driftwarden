@@ -1,0 +1,10 @@
+[versions]
+guava = "33.1.0-jre"
+
+[libraries]
+guava = { module = "com.google.guava:guava", version.ref = "guava" }
+slf4j-api = "org.slf4j:slf4j-api:2.0.12"
+commons-lang3 = { group = "org.apache.commons", name = "commons-lang3", version = "3.14.0" }
+
+[plugins]
+versions = { id = "com.github.ben-manes.versions", version = "0.51.0" }

@@ -1,4 +1,11 @@
-"""Repository indexer: files, languages and the import graph (pipeline stage 4)."""
+"""Repository indexer (pipeline stage 4). Deterministic, no LLM.
+
+* ``files`` / ``imports``: files, languages and the import graph (``build_index``).
+* ``manifests``: dependency-manifest parsers, one module per ecosystem, the
+  ground truth for grounding check G3 (``verify_dependency``). Import them from
+  ``driftwarden.index.manifests``; its package docstring lists the parsers'
+  Known limits.
+"""
 
 from __future__ import annotations
 

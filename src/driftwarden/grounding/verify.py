@@ -1,17 +1,21 @@
 """Deterministic verifiers for AI-produced provenance (README "Grounding & traceability").
 
 ``verify_source_quote`` implements G1 (decision quotes from ADRs) and will be
-reused for G2 (code evidence). It is a plain function: no model, no network.
+reused for G2 (code evidence). ``verify_dependency`` implements G3 (dependency
+facts) by re-running the non-LLM manifest parsers on the manifest at the cited
+commit. They are plain functions: no model, no network.
 """
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from pathlib import Path, PurePosixPath
 
 from driftwarden import git
-from driftwarden.models import WORKTREE, GroundingResult, Provenance
-from driftwarden.text import split_lines
+from driftwarden.index.manifests import canonical_package, canonical_version, parse_manifest
+from driftwarden.models import WORKTREE, DependencyRef, GroundingResult, Provenance
+from driftwarden.text import read_text_file, split_lines
 
 _QUOTE_MAP = {
     "‘": "'",  # left single
@@ -27,6 +31,7 @@ _QUOTE_MAP = {
     "«": '"',  # guillemets
     "»": '"',
 }
+_FULL_SHA = re.compile(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")
 _EMPHASIS = frozenset("*_~")
 
 
@@ -172,7 +177,9 @@ def _safe_rel(path: str) -> str | None:
     return str(p)
 
 
-def _result(prov: Provenance, ok: bool, reason: str, check_id: str, subject: str | None):
+def _result(
+    prov: Provenance | DependencyRef, ok: bool, reason: str, check_id: str, subject: str | None
+):
     return GroundingResult(
         check_id=check_id,
         status="VERIFIED" if ok else "MISMATCH",
@@ -212,7 +219,7 @@ def verify_source_quote(
         f = root / rel
         if not f.is_file():
             return _result(prov, False, f"{loc}: file missing in working tree", check_id, subject)
-        text = f.read_text(encoding="utf-8", errors="replace")
+        text = read_text_file(f)
     else:
         if not prov.commit.strip() or not git.commit_exists(root, prov.commit):
             return _result(prov, False, f"{loc}: unknown commit {prov.commit!r}", check_id, subject)
@@ -256,3 +263,124 @@ def verify_source_quote(
     else:
         reason = f"{loc}: quote not found in cited range or anywhere in the file"
     return _result(prov, False, reason, check_id, subject)
+
+
+def _load_at(root: Path, rel: str, commit: str) -> tuple[str | None, str]:
+    """(text, "") or (None, reason) for ``rel`` at ``commit`` / the working tree."""
+    if commit == WORKTREE:
+        f = root / rel
+        if not f.is_file():
+            return None, "file missing in working tree"
+        return read_text_file(f), ""
+    if not commit.strip() or not git.commit_exists(root, commit):
+        return None, f"unknown commit {commit!r}"
+    try:
+        return git.show_file(root, commit, rel), ""
+    except git.GitError:
+        return None, f"file missing at commit {commit[:12]}"
+
+
+def _fmt_dep(r: DependencyRef) -> str:
+    spec = r.version_spec if r.version_spec is not None else "(unversioned)"
+    scope = f" [{r.scope}]" if r.scope else ""
+    return f"{r.package} {spec} at line {r.line}{scope}"
+
+
+def verify_dependency(
+    repo: str | Path,
+    dep: DependencyRef,
+    *,
+    check_id: str = "G3",
+    subject: str | None = None,
+) -> GroundingResult:
+    """Check a G3 dependency claim: ``dep.package`` with ``dep.version_spec`` is
+    declared in ``dep.manifest_path`` at ``dep.commit`` (or the working tree when
+    the commit is WORKTREE).
+
+    The manifest is read with ``git show`` and re-parsed by the deterministic
+    parser for its type. Package names are compared by each ecosystem's own
+    rules (PEP 503 for PyPI, case-insensitive for NuGet, Docker Hub aliases for
+    images); version specs must match exactly after whitespace normalisation,
+    and ``None`` means "declared without a version". ``line``, ``ecosystem`` and
+    ``scope`` are checked when the claim states them.
+
+    Returns VERIFIED, or MISMATCH with a precise reason. Never raises for bad
+    provenance or a malformed manifest; it raises only if ``repo`` itself is not
+    a git repository.
+    """
+    root = git.repo_root(repo)
+    commit = dep.commit or ""
+    loc = f"{dep.manifest_path}@{commit[:12] or '?'}"
+
+    def fail(reason: str) -> GroundingResult:
+        return _result(dep, False, f"{loc}: {reason}", check_id, subject)
+
+    if not commit.strip():
+        return fail("no commit given")
+    if commit != WORKTREE:
+        # A moving ref (HEAD, branch, tag, short SHA) would make the claim
+        # non-reproducible: only a pinned, full object name is accepted.
+        if not _FULL_SHA.fullmatch(commit):
+            return fail(f"commit must be a full SHA (40/64 hex) or {WORKTREE}, got {commit!r}")
+        if not git.commit_exists(root, commit):
+            return fail(f"unknown commit {commit!r}")
+        if git.resolve_commit(root, commit) != commit.lower():
+            return fail(f"commit must be a full SHA (40/64 hex) or {WORKTREE}, got {commit!r}")
+    rel = _safe_rel(dep.manifest_path)
+    if rel is None:
+        return fail("path is not repo-relative")
+    if not dep.package.strip():
+        return fail("package is empty")
+
+    text, why = _load_at(root, rel, commit)
+    if text is None:
+        return fail(why)
+
+    parsed = parse_manifest(rel, text)
+    if parsed.kind is None:
+        return fail("not a recognised dependency manifest")
+    if parsed.errors and not parsed.refs:
+        return fail(f"manifest could not be parsed: {'; '.join(parsed.errors)}")
+
+    same_name = [
+        r
+        for r in parsed.refs
+        if canonical_package(r.ecosystem, r.package) == canonical_package(r.ecosystem, dep.package)
+    ]
+    cands = [r for r in same_name if dep.ecosystem is None or r.ecosystem == dep.ecosystem]
+    if not cands:
+        if same_name:
+            ecos = ", ".join(sorted({r.ecosystem or "?" for r in same_name}))
+            return fail(f"{dep.package!r} is declared as ecosystem {ecos}, not {dep.ecosystem}")
+        extra = f"; parse errors: {'; '.join(parsed.errors)}" if parsed.errors else ""
+        return fail(
+            f"package {dep.package!r} not declared ({parsed.kind} manifest declares "
+            f"{len(parsed.refs)} dependencies){extra}"
+        )
+
+    vmatch = [
+        r
+        for r in cands
+        if canonical_version(r.ecosystem, r.version_spec)
+        == canonical_version(r.ecosystem, dep.version_spec)
+    ]
+    if not vmatch:
+        claimed = dep.version_spec if dep.version_spec is not None else "(unversioned)"
+        found = "; ".join(_fmt_dep(r) for r in cands[:5])
+        return fail(f"version_spec {claimed!r} does not match: manifest declares {found}")
+
+    if dep.scope is not None:
+        smatch = [r for r in vmatch if r.scope == dep.scope]
+        if not smatch:
+            found = "; ".join(_fmt_dep(r) for r in vmatch[:5])
+            return fail(f"scope {dep.scope!r} does not match: manifest declares {found}")
+        vmatch = smatch
+
+    if dep.line is not None:
+        lmatch = [r for r in vmatch if r.line == dep.line]
+        if not lmatch:
+            lines = ", ".join(str(r.line) for r in vmatch[:5])
+            return fail(f"{dep.package} is declared at line {lines}, not line {dep.line}")
+        vmatch = lmatch
+
+    return _result(dep, True, f"{loc}: {_fmt_dep(vmatch[0])} verified", check_id, subject)

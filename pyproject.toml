@@ -25,6 +25,7 @@ dependencies = [
     "rich>=13",
     "tomli>=2; python_version < '3.11'",
     "jinja2>=3",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
