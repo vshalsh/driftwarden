@@ -126,7 +126,7 @@ def test_multiplication_and_spaced_operators():
         ("*x*", "x"),
         ("_x_", "x"),
         ("**x**", "x"),
-        ("__x__", "x"),
+        ("__x y__", "x y"),  # D-005: whitespace-free __x__ is now literal (identifier)
         ("***x***", "x"),
         ("~~x~~", "x"),
         ("**a *b* c**", "a b c"),

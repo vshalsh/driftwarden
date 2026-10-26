@@ -30,6 +30,35 @@ _QUOTE_MAP = {
 _EMPHASIS = frozenset("*_~")
 
 
+def _code_span_indices(chars: list[str]) -> set[int]:
+    """Indices inside backtick code spans (a run of N backticks up to the next run
+    of exactly N). Unmatched backtick runs are literal and protect nothing."""
+    n = len(chars)
+    runs: list[tuple[int, int]] = []  # (start, length)
+    i = 0
+    while i < n:
+        if chars[i] == "`":
+            j = i
+            while j < n and chars[j] == "`":
+                j += 1
+            runs.append((i, j - i))
+            i = j
+        else:
+            i += 1
+    inside: set[int] = set()
+    k = 0
+    while k < len(runs):
+        start, length = runs[k]
+        close = next((m for m in range(k + 1, len(runs)) if runs[m][1] == length), None)
+        if close is None:
+            k += 1
+            continue
+        c_start, c_len = runs[close]
+        inside.update(range(start, c_start + c_len))
+        k = close + 1
+    return inside
+
+
 def _emphasis_markers(chars: list[str]) -> set[int]:
     """Indices of emphasis delimiters in ``chars`` that open or close a pair.
 
@@ -40,18 +69,24 @@ def _emphasis_markers(chars: list[str]) -> set[int]:
     char and run length. Only paired runs are removed, so intraword delimiters
     (``snake_case``, ``a*b``), lone markers (``_private``, ``* item``) and code
     such as ``f(*args, **kwargs)`` are kept verbatim.
+
+    Two deliberate departures from CommonMark, because identifiers win:
+    an underscore run of 2+ (``__``) does not pair around content with no
+    whitespace, so ``__init__`` stays ``__init__`` (D-005); and delimiters inside
+    a backtick code span are literal (D-006).
     """
     n = len(chars)
+    code = _code_span_indices(chars)
     stack: list[tuple[str, int, int]] = []  # (char, run length, start index)
     drop: set[int] = set()
     i = 0
     while i < n:
         ch = chars[i]
-        if ch not in _EMPHASIS:
+        if ch not in _EMPHASIS or i in code:
             i += 1
             continue
         j = i
-        while j < n and chars[j] == ch:
+        while j < n and chars[j] == ch and j not in code:
             j += 1
         prev = chars[i - 1] if i > 0 else " "
         nxt = chars[j] if j < n else " "
@@ -63,6 +98,9 @@ def _emphasis_markers(chars: list[str]) -> set[int]:
             for k in range(len(stack) - 1, -1, -1):
                 s_ch, s_len, s_start = stack[k]
                 if s_ch == ch and s_len == length and s_start + s_len < i:
+                    inner = chars[s_start + s_len : i]
+                    if ch == "_" and length >= 2 and not any(c.isspace() for c in inner):
+                        continue  # bare identifier / dunder such as __init__
                     drop.update(range(s_start, s_start + s_len))
                     drop.update(range(i, j))
                     del stack[k:]  # delimiters opened inside the pair cannot close later

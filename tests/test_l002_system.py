@@ -403,7 +403,8 @@ def test_markdown_emphasis_and_curly_quotes_roundtrip(tmp_path):
         "We must use only legacy \"curly\" and 'single' quotes, don't we?",
         "We **must** use _only_ ~~legacy~~ “curly” and ‘single’ quotes, don’t we?",
         "We must use only legacy “curly” and 'single' quotes, don’t we?",
-        "Use `code` and emphasis plus strong text.",
+        # D-005 (L-021): whitespace-free __strong__ is kept literally, like __init__.
+        "Use `code` and emphasis plus __strong__ text.",
     ],
 )
 def test_emphasis_and_quote_variants_verify(tmp_path, quote):

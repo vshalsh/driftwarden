@@ -69,7 +69,7 @@ def test_identifier_and_lone_markers_are_preserved(tmp_path, file_text, fake):
     ("text", "expected"),
     [
         ("We **must** do it", "We must do it"),
-        ("We __must__ do it", "We must do it"),
+        ("We __must do__ it", "We must do it"),
         ("use _only_ this", "use only this"),
         ("use *only* this", "use only this"),
         ("not ~~legacy~~ now", "not legacy now"),
@@ -90,23 +90,33 @@ def test_normalise_strips_paired_emphasis(text, expected):
     "text",
     [
         "snake_case",
-        "__init__.py is a file",  # closer followed by '.' then alnum is fine; see below
+        "__init__.py is a file",  # D-005: dunders are identifiers, not strong emphasis
+        "call __init__ first",
+        "__strong__",  # trade-off: any whitespace-free __word__ is kept literally
         "a_b_c",
         "* bullet item",
         "x ** 2",
         "unpaired **bold",
         "mismatched **run* here",
         "path/to_some_file.md",
+        "use `*x*` and `__y__` and ``a ` *b* ``",  # D-006: code spans are literal
     ],
 )
 def test_normalise_keeps_unpaired_or_intraword_markers(text):
-    out = normalise(text)
-    if text.startswith("__init__"):
-        # Markdown renders __init__ as bold "init": the pair is stripped, like
-        # a renderer would, and the same rule applies to quote and file.
-        assert out == "init.py is a file"
-    else:
-        assert out == text
+    assert normalise(text) == text
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("**init** and `**init**`", "init and `**init**`"),
+        ("*a* `*b*` *c*", "a `*b*` c"),
+        ("unclosed ` tick *x*", "unclosed ` tick x"),  # lone backtick protects nothing
+        ("**bold** `code`", "bold `code`"),
+    ],
+)
+def test_code_spans_only_protect_their_contents(text, expected):
+    assert normalise(text) == expected
 
 
 def test_emphasis_variants_of_same_sentence_verify(tmp_path):
