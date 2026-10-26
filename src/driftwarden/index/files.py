@@ -483,6 +483,19 @@ def _walk_listing(root: Path, excludes: _Excludes) -> list[str]:
     return out
 
 
+def _symlinked_ancestor(root: Path, rel: str, cache: dict[str, bool]) -> str | None:
+    """The first ancestor directory of ``rel`` that is a symlink, or None."""
+    cur = ""
+    for part in rel.rstrip("/").split("/")[:-1]:
+        cur = f"{cur}/{part}" if cur else part
+        is_link = cache.get(cur)
+        if is_link is None:
+            is_link = cache[cur] = os.path.islink(root / cur)
+        if is_link:
+            return cur
+    return None
+
+
 def _entry(root: Path, rel: str, tracked: bool | None) -> FileEntry | None:
     full = root / rel
     try:
@@ -553,8 +566,15 @@ def index_files(
 
     files: list[FileEntry] = []
     skipped: list[tuple[str, str]] = []
+    link_dirs: dict[str, bool] = {}
     for rel in paths:
         if excludes(rel):
+            continue
+        via = _symlinked_ancestor(root, rel, link_dirs)
+        if via is not None:
+            # git still lists files of a tracked directory that was replaced by a
+            # symlink; lstat/open would follow the link, possibly out of the repository.
+            skipped.append((rel, f"path goes through symlinked directory {via!r}; not read"))
             continue
         entry = _entry(root, rel, None if tracked is None else rel in tracked)
         if entry is None:

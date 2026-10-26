@@ -11,7 +11,6 @@ from driftwarden.index.imports import (
     extract_java,
     extract_js,
     extract_python,
-    mask,
     parse_go_mod,
 )
 
@@ -303,10 +302,10 @@ def test_go_mod_parse():
 
 
 def test_mask_preserves_offsets():
-    from driftwarden.index.imports import _JS_LEX
+    from driftwarden.index.imports import mask_js
 
     src = "a = 'x // y' // z\n/* q\n r */ b = `t\nu`\n"
-    out = mask(src, _JS_LEX)
+    out = mask_js(src)
     assert len(out) == len(src)
     assert out.count("\n") == src.count("\n")
     assert "//" not in out and "/*" not in out and "z" not in out

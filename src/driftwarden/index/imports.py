@@ -10,7 +10,8 @@ Each import becomes an :class:`ImportEdge` with a ``category``:
 
 ``local``
     Resolved to a file in the repository (``target`` is its repo-relative path; for
-    Go, whose imports name packages, ``target`` is the package directory).
+    Go, whose imports name packages, ``target`` is the package directory, with the
+    repository root written as ``"."``).
 ``stdlib``
     The language's standard library (Python ``sys.stdlib_module_names``, Node
     built-ins, ``java.*``/``javax.*``/``jdk.*``, Go paths without a dot).
@@ -113,7 +114,7 @@ class ImportGraph:
 
     def dependencies(self, path: str) -> set[str]:
         """Repo paths that ``path`` imports (local edges only)."""
-        return {e.target for e in self.edges if e.source == path and e.target}
+        return {e.target for e in self.edges if e.source == path and e.target is not None}
 
     def dependents(self, target: str) -> set[str]:
         return {e.source for e in self.edges if e.target == target}
@@ -140,42 +141,112 @@ class _Lines:
         return bisect.bisect_left(self._nl, offset) + 1
 
 
-_C_COMMENT = r"(?P<c>//[^\n]*|/\*[\s\S]*?\*/)"
+# Every token pattern either matches in one left-to-right pass or fails within its own
+# line: unterminated block comments, text blocks and raw strings run to end of input
+# (``\Z``) instead of failing, so a stray opener can never trigger a rescan per
+# occurrence (quadratic time on adversarial input).
+_C_COMMENT = r"(?P<c>//[^\n]*|/\*[\s\S]*?(?:\*/|\Z))"
 _DQ = r'"(?:\\[\s\S]|[^"\\\n])*"'
 _SQ = r"'(?:\\[\s\S]|[^'\\\n])*'"
-_BT = r"`(?:\\[\s\S]|[^`\\])*`"
 
-_JS_LEX = re.compile(
-    _C_COMMENT
-    + rf"|(?P<s>{_DQ}|{_SQ}|{_BT})"
-    # A regex literal can follow an operator/opening bracket or `return`-like keyword;
-    # anything else starting with "/" is division.
-    + r"|(?P<pre>[(,=:\[!&|?{};+\-*%<>~^]|^|\b(?:return|typeof|case|in|of|delete|void|"
-    r"throw|yield|await|do|else))(?P<ws>[ \t]*)"
-    r"(?P<r>/(?![*/])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n\[])+/[A-Za-z]*)",
-    re.M,
+_JAVA_LEX = re.compile(
+    _C_COMMENT + rf'|(?P<s>"""[\s\S]*?(?:"""|\Z)|{_DQ}|' + r"'(?:\\.|[^'\\\n])+')"
 )
-_JAVA_LEX = re.compile(_C_COMMENT + rf'|(?P<s>"""[\s\S]*?"""|{_DQ}|' + r"'(?:\\.|[^'\\\n])+')")
-_GO_LEX = re.compile(_C_COMMENT + rf"|(?P<s>{_DQ}|`[^`]*`|" + r"'(?:\\.|[^'\\\n])+')")
+_GO_LEX = re.compile(_C_COMMENT + rf"|(?P<s>{_DQ}|`[^`]*(?:`|\Z)|" + r"'(?:\\.|[^'\\\n])+')")
+
+# JavaScript/TypeScript. A regex literal may follow an operator, an opening bracket, a
+# line start or a `return`-like keyword; any other "/" is division. The lookbehinds are
+# zero-width so braces stay available as tokens inside template interpolations.
+_JS_REGEX_PRE = "|".join(
+    [r"(?<=[(,=:\[!&|?{};+\-*%<>~^])", "^"]
+    + [
+        rf"(?<=\b{kw})"
+        for kw in (
+            "return", "typeof", "case", "in", "of", "delete", "void", "throw", "yield",
+            "await", "do", "else",
+        )
+    ]
+)  # fmt: skip
+_JS_COMMON = (
+    _C_COMMENT
+    + rf"|(?P<s>{_DQ}|{_SQ})"
+    + r"|(?P<bt>`)"
+    + rf"|(?P<r>(?:{_JS_REGEX_PRE})[ \t]*/(?![*/])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n\[])+/"
+    r"[A-Za-z]*)"
+)
+_JS_TOP = re.compile(_JS_COMMON, re.M)
+_JS_NESTED = re.compile(_JS_COMMON + r"|(?P<open>\{)|(?P<close>\})", re.M)
+_JS_TEMPLATE_TEXT = re.compile(r"(?:\\[\s\S]|[^`\\$]|\$(?!\{))*")
 
 _NOT_NL = re.compile(r"[^\n]")
 
 
+def _mask_string(s: str) -> str:
+    q = 3 if s.startswith('"""') else 1
+    if len(s) >= 2 * q and s.endswith(s[:q]):
+        return s[:q] + _NOT_NL.sub("s", s[q:-q]) + s[-q:]
+    return s[:q] + _NOT_NL.sub("s", s[q:])  # unterminated, ran to end of input
+
+
 def mask(text: str, lexer: re.Pattern[str]) -> str:
-    """Blank comments and regex literals, and replace string contents with ``s``,
-    keeping quotes, newlines and every offset unchanged."""
+    """Blank comments and replace string contents with ``s``, keeping quotes, newlines
+    and every offset unchanged. For Java and Go; JS/TS uses :func:`mask_js`."""
 
     def repl(m: re.Match[str]) -> str:
         if m.group("c") is not None:
             return _NOT_NL.sub(" ", m.group(0))
-        s = m.group("s")
-        if s is not None:
-            q = 3 if s.startswith('"""') else 1
-            return s[:q] + _NOT_NL.sub("s", s[q:-q]) + s[-q:]
-        # regex literal: keep the preceding token, blank the literal
-        return m.group("pre") + m.group("ws") + _NOT_NL.sub(" ", m.group("r"))
+        return _mask_string(m.group("s"))
 
     return lexer.sub(repl, text)
+
+
+def mask_js(text: str) -> str:
+    """:func:`mask` for JavaScript/TypeScript: also blanks regex literals, and masks
+    only the literal text of template literals. ``${...}`` interpolations stay code,
+    lexed recursively, so ``require()``/``import()`` inside them are still found."""
+    out: list[str] = []
+    stack: list[int] = []  # open-brace depth inside each active ${...}
+    pos = 0
+
+    def template(pos: int) -> int:
+        """Mask template text from ``pos``; return where code resumes."""
+        end = _JS_TEMPLATE_TEXT.match(text, pos).end()  # type: ignore[union-attr]
+        out.append(_NOT_NL.sub("s", text[pos:end]))
+        if text.startswith("${", end):
+            out.append("${")
+            stack.append(0)
+            return end + 2
+        if end < len(text):  # the closing backtick
+            out.append("`")
+            return end + 1
+        return end  # unterminated template: runs to end of input
+
+    while pos < len(text):
+        m = (_JS_NESTED if stack else _JS_TOP).search(text, pos)
+        if m is None:
+            out.append(text[pos:])
+            break
+        out.append(text[pos : m.start()])
+        kind, tok = m.lastgroup, m.group()
+        pos = m.end()
+        if kind == "c" or kind == "r":
+            out.append(_NOT_NL.sub(" ", tok))
+        elif kind == "s":
+            out.append(_mask_string(tok))
+        elif kind == "bt":
+            out.append("`")
+            pos = template(pos)
+        elif kind == "open":
+            stack[-1] += 1
+            out.append(tok)
+        elif kind == "close":
+            out.append(tok)
+            if stack[-1]:
+                stack[-1] -= 1
+            else:  # end of ${...}: back to the enclosing template's text
+                stack.pop()
+                pos = template(pos)
+    return "".join(out)
 
 
 def _quoted(original: str, start: int, end: int) -> str:
@@ -186,7 +257,7 @@ def _quoted(original: str, start: int, end: int) -> str:
 # --------------------------------------------------------------------------- python
 
 _PY_LINE_RE = re.compile(
-    r"^[ \t]*(?:from[ \t]+(?P<from>\.*[\w.]*)[ \t]+import[ \t]+(?P<names>[^#\n]+)"
+    r"^[ \t]*(?:from[ \t]+(?P<from>[.\w]+)[ \t]+import[ \t]+(?P<names>[^#\n]+)"
     r"|import[ \t]+(?P<mods>[^#\n]+))",
     re.M,
 )
@@ -274,7 +345,10 @@ _JS_SPEC = r"(?P<q>['\"])[^'\"\n]*(?P=q)"
 _JS_PATTERNS = (
     (
         "import",
-        re.compile(r"(?<![\w$.])import\s*(?:type\s+)?(?:[\w$*{}\s,]*?[\s}*]from\s*)?" + _JS_SPEC),
+        # The clause must start with a non-space character and "from" is found with a
+        # one-character lookbehind, so no two quantifiers compete for the same
+        # whitespace (linear time even on huge whitespace/comment runs).
+        re.compile(r"(?<![\w$.])import\s*(?:[\w$*{][\w$*{}\s,]*?(?<=[\s}*])from\s*)?" + _JS_SPEC),
     ),
     (
         "export",
@@ -294,7 +368,7 @@ _JS_PATTERNS = (
 def extract_js(text: str) -> list[RawImport]:
     """Imports in JavaScript/TypeScript: ``import``, ``export … from``, ``require()``,
     ``import()`` with a literal specifier, and TS ``import x = require()``."""
-    masked = mask(text, _JS_LEX)
+    masked = mask_js(text)
     lines = _Lines(text)
     seen: set[int] = set()
     out: list[RawImport] = []
@@ -315,7 +389,7 @@ def extract_js(text: str) -> list[RawImport]:
 
 # --------------------------------------------------------------------------- java
 
-_JAVA_PACKAGE = re.compile(r"^\s*package\s+([\w.]+)\s*;", re.M)
+_JAVA_PACKAGE = re.compile(r"^[ \t]*package\s+([\w.]+)\s*;", re.M)
 _JAVA_IMPORT = re.compile(r"^[ \t]*import\s+(static\s+)?([\w.]+?)(\s*\.\s*\*)?\s*;", re.M)
 
 
@@ -399,9 +473,19 @@ NODE_BUILTINS = frozenset(
     tls trace_events tty url util v8 vm wasi worker_threads zlib test""".split()
 )
 
+# The JDK's own packages (Java SE 11+ module graph). Only the javax packages the JDK
+# ships are listed: javax.persistence, javax.servlet, javax.inject, javax.annotation,
+# javax.xml.bind, javax.ws.rs ... are Java/Jakarta EE libraries, i.e. external.
 JAVA_STDLIB_PREFIXES = (
-    "java.", "javax.", "jdk.", "sun.", "com.sun.", "org.w3c.dom.", "org.xml.sax.",
-    "org.ietf.jgss.", "org.omg.",
+    "java.", "jdk.", "sun.", "com.sun.", "org.w3c.dom.", "org.xml.sax.", "org.ietf.jgss.",
+    "javax.accessibility.", "javax.annotation.processing.", "javax.crypto.",
+    "javax.imageio.", "javax.lang.model.", "javax.management.", "javax.naming.",
+    "javax.net.", "javax.print.", "javax.rmi.ssl.", "javax.script.", "javax.security.auth.",
+    "javax.security.cert.", "javax.security.sasl.", "javax.smartcardio.", "javax.sound.",
+    "javax.sql.", "javax.swing.", "javax.tools.", "javax.transaction.xa.",
+    "javax.xml.catalog.", "javax.xml.crypto.", "javax.xml.datatype.", "javax.xml.namespace.",
+    "javax.xml.parsers.", "javax.xml.stream.", "javax.xml.transform.",
+    "javax.xml.validation.", "javax.xml.xpath.", "javax.xml.XMLConstants.",
 )  # fmt: skip
 
 JS_EXTENSIONS = (".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts")
@@ -455,7 +539,10 @@ class _Resolver:
         self.java_classes: dict[str, str] = {}
         self.java_packages: dict[str, list[str]] = defaultdict(list)
         self.go_modules: list[tuple[str, str]] = []  # (module path, repo dir), longest first
-        self.dirs_with_go = {posixpath.dirname(f.path) for f in files if f.path.endswith(".go")}
+        # Go package directories; the repository root is "." (never "").
+        self.dirs_with_go = {
+            posixpath.dirname(f.path) or "." for f in files if f.path.endswith(".go")
+        }
 
     # -- python
     def _python_roots(self, py: list[str]) -> list[str]:
@@ -487,9 +574,11 @@ class _Resolver:
     def _py_module_file(self, base: str, dotted: str) -> str | None:
         stem = self._join(base, dotted)
         pre = stem + "/" if stem else ""
+        # CPython's FileFinder order: a regular package (dir/__init__) beats a same-named
+        # module (dir.py). Stubs (.pyi) only count when there is no runtime file.
         cands = [f"{pre}__init__.py", f"{pre}__init__.pyi"]
         if stem:
-            cands = [f"{stem}.py", *cands, f"{stem}.pyi"]
+            cands = [f"{pre}__init__.py", f"{stem}.py", f"{pre}__init__.pyi", f"{stem}.pyi"]
         for c in cands:
             if c in self.paths:
                 return c
@@ -508,11 +597,16 @@ class _Resolver:
 
         roots = self._roots_for(source)
         if raw.kind == "from":
+            # A package or module in any root wins over a namespace directory (no
+            # __init__) in an earlier root, as in Python's path-based finder.
             for root in roots:
                 mod_file = self._py_module_file(root, raw.module)
+                if mod_file:
+                    return self._py_from(self._join(root, raw.module), mod_file, raw.names, shown)
+            for root in roots:
                 pkg_dir = self._join(root, raw.module)
-                if mod_file or pkg_dir in self.py_dirs:
-                    return self._py_from(pkg_dir, mod_file, raw.names, shown)
+                if pkg_dir in self.py_dirs:
+                    return self._py_from(pkg_dir, None, raw.names, shown)
         # Deepest local prefix: a.b.c -> a/b/c.py, else a/b, else a.
         parts = raw.module.split(".")
         for n in range(len(parts), 0, -1):
@@ -603,20 +697,20 @@ class _Resolver:
     # -- go
     def add_go_mod(self, path: str, text: str) -> None:
         module, replaces = parse_go_mod(text)
-        d = posixpath.dirname(path)
+        d = posixpath.dirname(path) or "."
         if module:
             self.go_modules.append((module, d))
         for mod, rel in replaces:
             target = posixpath.normpath(posixpath.join(d, rel))
-            if not target.startswith(".."):
-                self.go_modules.append((mod, "" if target == "." else target))
+            if target != ".." and not target.startswith("../"):
+                self.go_modules.append((mod, target))
         self.go_modules.sort(key=lambda m: -len(m[0]))
 
     def go(self, spec: str) -> tuple[Category, str | None, str | None]:
         for module, d in self.go_modules:
             if spec == module or spec.startswith(module + "/"):
                 rest = spec[len(module) + 1 :] if spec != module else ""
-                pkg_dir = posixpath.join(d, rest) if d else rest
+                pkg_dir = posixpath.normpath(posixpath.join(d, rest)) if rest else d
                 if pkg_dir in self.dirs_with_go:
                     return "local", pkg_dir, None
                 return "unresolved", None, None
