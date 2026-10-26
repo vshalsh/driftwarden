@@ -45,6 +45,13 @@ addopts = "-q"
 line-length = 100
 target-version = "py310"
 src = ["src", "tests"]
+# Honour excludes even for paths passed explicitly (pre-commit, editors).
+force-exclude = true
+
+[tool.ruff.format]
+# Docs are hand-written prose; `ruff format` must never rewrite them (or the
+# Python code blocks inside them).
+exclude = ["*.md", "*.markdown", "docs/**"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]

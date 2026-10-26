@@ -665,14 +665,16 @@ def test_scan_no_adrs_pass_rate_na(tmp_path):
     assert res.exit_code == 0 and "n/a" in res.output
 
 
-def test_scan_default_out_is_cwd_logs(tmp_path, monkeypatch):
+def test_scan_default_out_is_scanned_repo_dot_driftwarden(tmp_path, monkeypatch):
+    """L-022: the default ledger location moved from CWD to <repo>/.driftwarden."""
     repo = _repo(tmp_path, {"docs/adr/0007-redis.md": NYGARD})
     work = tmp_path / "cwd"
     work.mkdir()
     monkeypatch.chdir(work)
     res = runner.invoke(app, ["scan", str(repo)])
     assert res.exit_code == 0
-    assert list((work / "logs" / "grounding").glob("*.jsonl"))
+    assert list((repo / ".driftwarden" / "logs" / "grounding").glob("*.jsonl"))
+    assert not (work / "logs").exists()
 
 
 def test_scan_does_not_write_ledger_into_scanned_repo_by_default(tmp_path, monkeypatch):
