@@ -45,6 +45,27 @@ def make_repo(tmp_path):
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "adr_repos"
+INDEX_FIXTURES = Path(__file__).parent / "fixtures" / "index_repos"
+
+
+@pytest.fixture
+def index_fixture(tmp_path):
+    """Copy tests/fixtures/index_repos/<name> into tmp_path; commit it unless git=False."""
+    import shutil
+
+    counter = iter(range(10_000))
+
+    def _make(name: str, git_init: bool = True) -> Path:
+        dest = tmp_path / f"ix-{name}-{next(counter)}"
+        shutil.copytree(INDEX_FIXTURES / name, dest, symlinks=True)
+        if git_init:
+            git(dest, "init", "-q", "-b", "main")
+            git(dest, "config", "commit.gpgsign", "false")
+            git(dest, "add", "-A")
+            git(dest, "commit", "-q", "-m", "fixture")
+        return dest
+
+    return _make
 
 
 @pytest.fixture
