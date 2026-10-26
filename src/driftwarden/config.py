@@ -25,6 +25,7 @@ Provider = Literal["anthropic", "openai"]
 
 DEFAULT_EXCLUDES = [
     ".git/**",
+    ".driftwarden/**",
     "node_modules/**",
     ".venv/**",
     "venv/**",

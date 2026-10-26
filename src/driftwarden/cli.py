@@ -47,6 +47,19 @@ def _parse_formats(value: str | None) -> list[str]:
     return fmts
 
 
+DEFAULT_OUT_DIR = ".driftwarden"
+
+
+def _default_out(root: Path) -> Path:
+    """``<repo>/.driftwarden``, self-ignored so a scan never dirties the scanned repo."""
+    base = root / DEFAULT_OUT_DIR
+    base.mkdir(parents=True, exist_ok=True)
+    ignore = base / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text("# Written by driftwarden scan; run output, not source.\n*\n")
+    return base
+
+
 @app.command()
 def version() -> None:
     """Print the DriftWarden version."""
@@ -61,7 +74,10 @@ def scan(
         "", "--format", help="Comma list of report formats: json,md,sarif,html"
     ),
     out: Path | None = typer.Option(
-        None, "--out", help="Output directory (grounding ledger goes to OUT/logs/grounding)."
+        None,
+        "--out",
+        help="Output directory (grounding ledger goes to OUT/logs/grounding). "
+        "Default: <repo>/.driftwarden.",
     ),
     config: Path | None = typer.Option(None, "--config", help="Config file to use."),
 ) -> None:
@@ -102,7 +118,7 @@ def scan(
     for rel, msg in result.errors:
         err.print(f"[yellow]warning:[/yellow] could not read {rel}: {msg}")
 
-    ledger = Ledger(out if out is not None else Path.cwd())
+    ledger = Ledger(out if out is not None else _default_out(root))
     rows = []
     for dec in result.decisions:
         gr = verify_source_quote(root, dec.source, check_id="G1", subject=dec.id)
