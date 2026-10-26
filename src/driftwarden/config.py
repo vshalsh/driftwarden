@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -23,8 +23,11 @@ else:  # pragma: no cover - exercised on 3.10 only
 Mode = Literal["auto", "offline", "llm"]
 Provider = Literal["anthropic", "openai"]
 
+LEDGER_EXCLUDE = ".driftwarden/**"
+
 DEFAULT_EXCLUDES = [
     ".git/**",
+    ".driftwarden/**",
     "node_modules/**",
     ".venv/**",
     "venv/**",
@@ -43,6 +46,13 @@ class Config(BaseModel):
 
     adr_paths: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=lambda: list(DEFAULT_EXCLUDES))
+
+    @field_validator("exclude")
+    @classmethod
+    def _always_exclude_ledger(cls, value: list[str]) -> list[str]:
+        # Run output must never be read as ADRs, even when the user replaces `exclude`.
+        return value if LEDGER_EXCLUDE in value else [*value, LEDGER_EXCLUDE]
+
     mode: Mode = "auto"
     provider: Provider = "anthropic"
     model: str | None = None

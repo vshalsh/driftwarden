@@ -403,7 +403,8 @@ def test_markdown_emphasis_and_curly_quotes_roundtrip(tmp_path):
         "We must use only legacy \"curly\" and 'single' quotes, don't we?",
         "We **must** use _only_ ~~legacy~~ “curly” and ‘single’ quotes, don’t we?",
         "We must use only legacy “curly” and 'single' quotes, don’t we?",
-        "Use `code` and emphasis plus strong text.",
+        # D-005 (L-021): whitespace-free __strong__ is kept literally, like __init__.
+        "Use `code` and emphasis plus __strong__ text.",
     ],
 )
 def test_emphasis_and_quote_variants_verify(tmp_path, quote):
@@ -441,12 +442,13 @@ def test_unicode_normalisation_nfc_vs_nfd(tmp_path):
 
 
 def test_observation_underscore_identifier_collapses(tmp_path):
-    """Documents a known weakness: '_' is stripped on both sides, so snake_case == snakecase."""
+    """Was a known weakness (O-2): '_' was stripped on both sides, so snake_case == snakecase.
+    Fixed by L-021: intraword underscores are preserved."""
     text = "# 10. Names\n\n## Decision\n\nUse snake_case names.\n"
     repo = _repo(tmp_path, {"docs/adr/0010-names.md": text})
     dec = _single(repo)
     r = verify_source_quote(repo, dec.source.model_copy(update={"quote": "Use snakecase names."}))
-    assert r.status in ("VERIFIED", "MISMATCH")  # informational; reported to PM, not asserted
+    assert r.status == "MISMATCH"
 
 
 # ------------------------------------------------------------ long ADRs
@@ -663,14 +665,16 @@ def test_scan_no_adrs_pass_rate_na(tmp_path):
     assert res.exit_code == 0 and "n/a" in res.output
 
 
-def test_scan_default_out_is_cwd_logs(tmp_path, monkeypatch):
+def test_scan_default_out_is_scanned_repo_dot_driftwarden(tmp_path, monkeypatch):
+    """L-022: the default ledger location moved from CWD to <repo>/.driftwarden."""
     repo = _repo(tmp_path, {"docs/adr/0007-redis.md": NYGARD})
     work = tmp_path / "cwd"
     work.mkdir()
     monkeypatch.chdir(work)
     res = runner.invoke(app, ["scan", str(repo)])
     assert res.exit_code == 0
-    assert list((work / "logs" / "grounding").glob("*.jsonl"))
+    assert list((repo / ".driftwarden" / "logs" / "grounding").glob("*.jsonl"))
+    assert not (work / "logs").exists()
 
 
 def test_scan_does_not_write_ledger_into_scanned_repo_by_default(tmp_path, monkeypatch):
