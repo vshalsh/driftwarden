@@ -167,6 +167,8 @@ def scan(
         console.print("[yellow]note:[/yellow] repository has no commits; reading working tree")
     for rel, msg in result.errors:
         err.print(f"[yellow]warning:[/yellow] could not read {rel}: {msg}")
+    for rel, note in result.skipped:
+        console.print(f"[yellow]skipped[/yellow] {escape(rel)}: {escape(note)}", highlight=False)
 
     if out is not None:
         if not _writable(out):
@@ -208,6 +210,12 @@ def scan(
         console.print(
             f"Grounding (G1): {summary['verified']}/{summary['total']} VERIFIED, "
             f"pass rate {rate}. Ledger: {ledger.path}",
+            highlight=False,
+        )
+    elif result.skipped:
+        console.print(
+            f"No decisions to verify ({len(result.skipped)} empty ADR file(s) skipped). "
+            "Grounding (G1): nothing to verify (pass rate n/a).",
             highlight=False,
         )
     else:
