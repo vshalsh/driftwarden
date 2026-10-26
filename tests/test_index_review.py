@@ -239,3 +239,53 @@ def test_r7_symlinked_ancestor_inside_repo_is_rejected_too(tmp_path):
     assert {f.path for f in ix.files} == {"real/m.py", "alias"}
     assert ix.get("alias").is_symlink
     assert "alias/m.py" in dict(ix.skipped)
+
+
+# --------------------------------------------------------------- round 2 (PR #9 @9f9a76d)
+
+
+def test_r2a_symlinked_gitignore_is_not_read_in_walk_mode(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "rules").write_text("*.py\n")  # would hide every .py if it were read
+    root = tmp_path / "r"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "a.py").write_text("import os\n")
+    (root / "b.py").write_text("")
+    try:
+        (root / ".gitignore").symlink_to(outside / "rules")
+        (root / "sub" / ".gitignore").symlink_to(outside / "rules")
+    except (OSError, NotImplementedError):  # pragma: no cover
+        pytest.skip("symlinks not supported")
+    ix = index_files(root, use_git=False)
+    assert ix.source == "walk"
+    assert {f.path for f in ix} == {".gitignore", "b.py", "sub/.gitignore", "sub/a.py"}
+    assert ix.get(".gitignore").is_symlink and ix.get("sub/.gitignore").is_symlink
+
+
+def test_r2b_bare_test_is_a_package_not_a_node_builtin(tmp_path):
+    root = mk(tmp_path, {"a.js": "import t from 'test';\nimport n from 'node:test';\n"})
+    got = {(e.module, e.category, e.package) for e in build_index(root).imports}
+    assert got == {("test", "external", "test"), ("node:test", "stdlib", "test")}
+
+
+def test_r2c_require_resolves_json_and_node_addons(tmp_path):
+    root = mk(
+        tmp_path,
+        {
+            "a.js": (
+                "const c = require('./config');\n"
+                "const addon = require('./native/addon');\n"
+                "const both = require('./both');\n"
+            ),
+            "config.json": "{}",
+            "native/addon.node": "",
+            "both.js": "",
+            "both.json": "{}",
+        },
+    )
+    assert targets(root, "a.js") == {
+        ("./config", "local", "config.json"),
+        ("./native/addon", "local", "native/addon.node"),
+        ("./both", "local", "both.js"),  # .js before .json, as in Node
+    }

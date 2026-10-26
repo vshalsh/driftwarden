@@ -457,7 +457,9 @@ def _walk_listing(root: Path, excludes: _Excludes) -> list[str]:
         rel_dir = "" if rel_dir == "." else rel_dir
         parent = rel_dir.rsplit("/", 1)[0] if "/" in rel_dir else ""
         stack = list(stacks.get(parent, [])) if rel_dir else []
-        if ".gitignore" in filenames:
+        # A symlinked .gitignore is listed as a link but never read: it could point
+        # outside the repository (git itself refuses to follow it, too).
+        if ".gitignore" in filenames and not os.path.islink(Path(dirpath) / ".gitignore"):
             stack.append(GitIgnore.from_file(Path(dirpath) / ".gitignore", rel_dir))
         stacks[rel_dir] = stack
 

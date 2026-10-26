@@ -40,6 +40,18 @@ Resolution rules, briefly:
   matching class; ``pkg.*`` gives one edge per file of that package.
 * **Go**: every ``go.mod`` contributes its module path (and local ``replace``
   directives); an import under a module path maps to that directory.
+
+Known limits (accepted for v0.1; a fix needs a real JS tokenizer or a
+module-scoped resolver):
+
+* JS postfix ``++``/``--`` followed by ``/`` is read as a regex opener, so in
+  ``n++ / require('x')`` the ``require`` is masked and missed.
+* A Python namespace package split across several source roots: ``from ns import b``
+  searches only the first root that has an ``ns/`` directory (``ns/a.py`` in the
+  repo root and ``src/ns/b.py`` -> ``b`` is ``unresolved``).
+* Go ``replace`` directives are global, not scoped to the declaring module: in a
+  multi-module repo, ``replace x => ./y`` in ``a/go.mod`` also applies to imports
+  from ``b/``.
 """
 
 from __future__ import annotations
@@ -470,8 +482,8 @@ NODE_BUILTINS = frozenset(
     """assert async_hooks buffer child_process cluster console constants crypto dgram
     diagnostics_channel dns domain events fs http http2 https inspector module net os path
     perf_hooks process punycode querystring readline repl stream string_decoder sys timers
-    tls trace_events tty url util v8 vm wasi worker_threads zlib test""".split()
-)
+    tls trace_events tty url util v8 vm wasi worker_threads zlib""".split()
+)  # `test` is builtin only as `node:test`; a bare "test" is the npm package of that name
 
 # The JDK's own packages (Java SE 11+ module graph). Only the javax packages the JDK
 # ships are listed: javax.persistence, javax.servlet, javax.inject, javax.annotation,
@@ -488,7 +500,11 @@ JAVA_STDLIB_PREFIXES = (
     "javax.xml.validation.", "javax.xml.xpath.", "javax.xml.XMLConstants.",
 )  # fmt: skip
 
-JS_EXTENSIONS = (".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts")
+# Script extensions first (TypeScript's resolver), then CommonJS's `.json` and native
+# `.node` addons, which Node tries after `.js` (require('./config') -> config.json).
+JS_EXTENSIONS = (
+    ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".json", ".node",
+)  # fmt: skip
 _JS_TS_TWINS = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
 
 
@@ -666,7 +682,7 @@ class _Resolver:
         for twin in _JS_TS_TWINS.get(ext, ()):
             if stem + twin in self.paths:
                 return stem + twin
-        for ext in JS_EXTENSIONS + (".json",):
+        for ext in JS_EXTENSIONS:
             cand = posixpath.join(p, "index" + ext) if p else "index" + ext
             if cand in self.paths:
                 return cand
