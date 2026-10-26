@@ -1,0 +1,17 @@
+services:
+  api:
+    build: ./services/api
+    image: registry.example.com:5000/acme/api:${API_TAG:-latest}
+    depends_on: [db, cache]
+  db:
+    image: postgres:16.2
+    environment:
+      POSTGRES_PASSWORD: example
+  cache:
+    image: "redis:7-alpine"
+  queue:
+    image: rabbitmq
+  worker:
+    build: ./worker
+volumes:
+  data: {}

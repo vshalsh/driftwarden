@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 2
+  template:
+    spec:
+      initContainers:
+        - name: migrate
+          image: ghcr.io/acme/migrate:2024.04
+      containers:
+        - name: api
+          image: ghcr.io/acme/api:1.4.2
+          ports:
+            - containerPort: 8080
+        - name: sidecar
+          image: envoyproxy/envoy:v1.29.1
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: report
+              image: busybox
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: settings
+data:
+  image: not-a-container-image

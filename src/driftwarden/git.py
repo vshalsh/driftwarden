@@ -99,6 +99,17 @@ def show_file(repo: str | Path, commit: str, path: str) -> str:
     return _run(["show", f"{commit}:{rel}"], repo)
 
 
+def resolve_commit(repo: str | Path, rev: str) -> str:
+    """Full SHA of the commit ``rev`` names. Raises GitError if it is not a commit."""
+    return _run(["rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"], repo).strip()
+
+
+def ls_tree(repo: str | Path, commit: str) -> list[str]:
+    """All file paths (repo-relative, POSIX) tracked at ``commit``."""
+    out = _run(["ls-tree", "-r", "-z", "--name-only", f"{commit}^{{commit}}"], repo)
+    return [p for p in out.split("\0") if p]
+
+
 def log(
     repo: str | Path,
     path: str | None = None,
