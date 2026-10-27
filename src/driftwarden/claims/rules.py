@@ -47,18 +47,81 @@ VIOLATED, so the library errs towards no claim):
   or location ("In adapters/, ..."), a list member ("PostgreSQL and | Redis are the
   only ..."), a trailing purpose / location / time ("... for analytics", "... in
   production", "(for analytics)"), a relative clause ("... that is not allowed") --
-  drops the clause's claims. Only a short whitelist may be left over: articles,
+  drops the clause's claims. Only a documented whitelist may be left over: articles,
   linking words ("therefore", "from today"), universal phrases ("for all services",
-  "in the codebase", "anywhere"), rationale ("because ...", "rather than X",
-  "instead of X", "as described by ...") and ADR boilerplate ("without a new ADR").
-  A trailing manner adverb ("directly", "synchronously") is captured as ``manner``.
+  "in the codebase", "anywhere", "across the organisation", "as a team", "as a rule"),
+  rationale ("because ...", "since ...", "as described by ...") and ADR boilerplate
+  ("without a new ADR"). A trailing manner adverb ("directly", "synchronously") is
+  captured as ``manner``.
+* **Harmless decorations** (L-024) are whitelisted so that the claim survives:
+  a leading label or discourse marker is removed before matching (``_LEAD_DECOR``:
+  "Decision:", "Outcome:", "Chosen option:" before a full clause, "In summary,",
+  "Given the above,", "As a result,", "After a long discussion,", "Note that",
+  "Importantly,", "Per ADR-0003,", "The team agreed that", "We decided that"), and so is
+  a parenthetical reference (``_ref_paren``: "(see ADR-0007)", "(see the security
+  review)", "(approved by Jane Doe)", "(cf. RFC-12, 2024-05-01)") -- only a recognised
+  head followed by ids, dates, names after "by" and the closed rationale vocabulary;
+  the guards below still see the brackets, and any other bracket ("(see ADR-7, scope:
+  payments)", "(see ADR-7, production only)") stays in the text and drops the claim.
+  Mid-sentence discourse markers (", as a rule,", ", in summary,", ", therefore,")
+  and labels such as "Status: Accepted.", "Final decision:", "Decision (2024-05-01):"
+  are removed too.
+* **Rationale is a whitelist of closed shapes** (``_strip_rationale``, L-024 D1-D9),
+  checked on the whole sentence BEFORE clause splitting, from the marker to the next
+  clause punctuation. Vocabulary shapes: every word after the marker must be in a
+  closed list of generic goals and reasons (``_RATIONALE_VOCAB``: cost, ops cost,
+  complexity, risk, vendor lock-in, consistency, reliability, our expertise, the
+  benchmark results, ...) -- "to <goal verb> ..." (reduce, avoid, simplify, keep ...
+  simple, ensure, ...), "in order to / so as to <goal verb> ...", "due to / owing to /
+  because of / thanks to / based on / given ...", "for <purpose noun> ...", ", which
+  <goal verb>s ..."; references ("as discussed in / as per / per / in line with /
+  consistent with ...") take ADR / RFC ids and the same vocabulary (names after "by":
+  "as described by Michael Nygard"). Reason clauses ("because ...", "since ...", "so
+  that ...") may say anything except a place, scope, condition or time ("in", "for",
+  "to", "as", "per", "across", "only", "staging", "Q3", "by default", "with the
+  legacy system", ...). A whitelisted phrase is removed; any other phrase after a
+  marker ("to reduce ops cost for payments", "due to licensing concerns in the EU",
+  "to simplify payments", "in order to store sessions", "given the staging
+  environment", "given that the flag is on", ", which only runs in production") makes
+  the whole sentence yield no claim. A purpose 'to <verb>' with an operational verb
+  ("to store sessions") is not a marker at all, so clause coverage drops it, and an
+  unmatched region whose only verb is an infinitive ("..., as a rule to access the
+  database") is a fragment, not a clause. A contrast ("instead of Kafka", "rather than
+  MongoDB or Cassandra") consumes only the contrasted term; a scope after it ("instead
+  of Kafka in staging", "instead of Kafka between services") still drops the claim.
+  Rationale is never captured as a category ("We will use Kafka for consistency" has
+  no ``for``) or a scope ("in order to", "in line with"), and a comma + rationale ends
+  a term list ("Do not use Redis, given our expertise" forbids Redis only); a later
+  list member that is not name-like ("Redis, as a rule") refuses the whole list.
+* Scope qualifiers are never whitelisted: "for <workload>" ("for analytics", "for
+  audit logging", "for sessions"), "in <place>", "only in ...", "except", "until",
+  "when", "if", "outside", "per service", "as a cache", "between services", "by
+  default", "with the legacy system" drop the claim (or are captured, e.g. ``scope``),
+  and never end up inside a term (a term stops at "only", "with", "by", "which",
+  "that", "between", "everywhere"; "Chosen option: Redis only in staging" is no claim).
+* Decision (L-024 D5): a ban directly followed, in its clause, by a comma-less "for
+  <abstract noun>" ("Do not use Redis for performance / for security / for cost") is
+  read as a workload ("for performance-critical paths"), so that forbid claim is
+  dropped (another clause's claims are not touched); with a comma
+  (", for security reasons") or leading ("For security reasons, ...") it is rationale.
+* Permission and aspiration (L-024) never yield an obligation: "can", "could", "may",
+  "might", "is allowed / free / permitted / encouraged / welcome to", "ought to",
+  "would like to", "may choose to" inside a require match drop it, and an aspirational
+  word drops an only match; a quantified subject ("All services", "Every team") never
+  takes a modal into the subject ("Every team can use Django" yields nothing). 'may'
+  as a restriction is only meaningful in the boundary patterns ("Only adapters/ may
+  import boto3", "Y may be imported only from Z").
 * A sentence that reports, hedges, conditions or time-limits a statement yields no
   claim: rejected/dropped proposals and draft labels ("Rejected:", "Proposal:",
   "Option A:", "TODO:", "(draft)", "(TBD)"), reported speech in any tense ("says",
   "said that", "stated that", "suggested", "Nobody thinks ..."), hedges and frequency
   adverbs ("maybe", "generally", "typically", "currently"), conditions and exceptions
-  ("if", "unless", "except", "other than") and time limits ("until", "before",
-  "after", "once", "during", "pending", "this quarter", "for six months", "for now").
+  ("if", "unless", "except", "other than", and -- leading or not -- "when",
+  "whenever", "wherever", "as long as", a leading "Where ...", and a temporal "while":
+  "While migrating, ...", "... while running in CI") and time limits
+  ("until", "before", "after", "once", "during", "pending", "this quarter", "for six
+  months", "for now"); "After a long discussion," is a discourse marker, not a time
+  limit, and is removed first.
 * A negator before a match in its clause, or inside a require/only match ("Services
   don't have to use X", "need not", "rarely"), drops it.
 * A require/only/boundary term that is one of several alternatives or a bound ("Redis
@@ -72,10 +135,23 @@ VIOLATED, so the library errs towards no claim):
 
 Known limits (recall gaps, documented rather than guessed at):
 
-* Clause coverage is lexical and fail-closed: any uncaptured content word drops the
-  claim, so legitimate decorations outside the whitelist ("We will use Kafka, which
-  gives us replay") cost the claim. Conjunctive subjects ("PostgreSQL and Redis are
-  the only datastores", "Services and handlers must not use X") yield no claim.
+* Clause coverage is lexical and fail-closed: any uncaptured content word outside the
+  whitelist drops the claim, so decorations it does not list ("We will use Kafka, our
+  long-time favourite", "We will use Kafka; it gives us replay"), a
+  purpose with an operational verb ("to share state"), a reference bracket with a
+  scope-like word, and mid-sentence markers it does not list ("We will, in summary,
+  use X") cost the claim. Conjunctive
+  subjects ("PostgreSQL and Redis are the only datastores", "Services and handlers must
+  not use X") yield no claim.
+* "when" anywhere in a sentence drops it. "while" is kept only as a concession ("While
+  Redis is fast, services must not use Redis": the concession is removed) or as a
+  contrast that joins two full rules ("Services must use Kafka, while batch jobs must
+  use RabbitMQ": both are claimed, L-024 D8); every other "while" is a condition.
+* The rationale vocabulary is closed on purpose: a reason it does not list ("to
+  reduce remote code execution risk", ", which leaks memory", "to ensure sessions are
+  fast") costs the claim. Measured with Sonnet's L-024 generator (231,205 sentences):
+  3.2 % of harmless decorations drop the claim (main 70.7 %), 0 scope / condition
+  sentences leak a bare claim (main 12,616).
 * The guards are lexical: "before", "after", "once", "during", "says", "claims",
   "states", "proposed", "currently", "generally", ... anywhere in a sentence drop it,
   including real rules that merely mention them; exceptions ("except in tests") are
@@ -141,6 +217,47 @@ _SUBJ_STOP = (
 _W = rf"(?!(?:{_SUBJ_STOP})\b)[\w.+#/@'-]+"
 
 
+# Permission / aspiration words (N2): "can", "may", "is allowed to", "is free to", "ought
+# to", "would like to", "may choose to" grant an option or state a wish, never an
+# obligation, so they must not end up inside a require/only claim (nor in its subject).
+# 'may' is only meaningful as a restriction in the boundary patterns ("Only adapters/
+# may import boto3", "Y may be imported only from Z").
+_PERMISSIVE_WORDS = (
+    r"can|could|may|might|ought|would|allowed|permitted|free|encouraged|welcome|able|want|"
+    r"wants|wish|wishes|hope|hopes|like|likes|aim|aims|try|tries|strive|strives|prefer|"
+    r"prefers|optionally|optional|recommended|suggested|invited"
+)
+_PERMISSIVE = re.compile(rf"\b(?:{_PERMISSIVE_WORDS})\b", re.IGNORECASE)
+# The aspirational subset: "Only X may be used" is a restriction, "Only X ought to" is not.
+_ASPIRATIONAL = re.compile(
+    r"\b(?:ought|would|might|could|free|encouraged|welcome|want|wants|wish|wishes|hope|hopes|"
+    r"like|likes|aim|aims|try|tries|strive|strives|prefer|prefers|optionally|optional|"
+    r"recommended|suggested|invited)\b",
+    re.IGNORECASE,
+)
+# A quantified subject ("All services", "Every team") never contains a modal or a
+# permission word: "Every team can use Django" has no subject "team can".
+_WQ = rf"(?!(?:{_SUBJ_STOP}|{_PERMISSIVE_WORDS}|to)\b)[\w.+#/@'-]+"
+
+# Rationale that may follow "for" / "as" without naming a category or a scope (N4):
+# "for consistency", "for security reasons", "as discussed in ADR-3", "as a rule".
+_PURPOSE_NOUNS = (
+    r"consistency|simplicity|maintainability|security|performance|reliability|portability|"
+    r"observability|resilience|scalability|testability|readability|uniformity|"
+    r"standardi[sz]ation|safety|stability|clarity|auditability|traceability|operability|"
+    r"efficiency|predictability|interoperability|cost|costs|(?:[\w-]+\s+){0,2}reasons"
+)
+_PURPOSE_FOR = (
+    rf"for\s+(?:the\s+sake\s+of\s+)?(?:{_PURPOSE_NOUNS})"
+    r"(?=\s*(?:[,.;:!)]|$)|\s+(?:because|since|as|and)\b)"
+)
+_AS_RATIONALE = (
+    r"(?:described|defined|documented|proposed|recommended|outlined|explained|discussed|"
+    r"agreed|decided|noted|mentioned|required|per|a\s+rule|a\s+team|a\s+company|"
+    r"an\s+organi[sz]ation|standard|such|usual|always)\b"
+)
+
+
 def _term(name: str) -> str:
     return rf"(?P<{name}>{_C}{{1,120}}?)"
 
@@ -162,7 +279,21 @@ _MANNER_WORDS = (
 _STOP_WORDS = (
     "and|or|nor|but|because|so|when|unless|except|without|instead|rather|for|as|in|from|within|"
     "inside|outside|via|through|to|which|that|if|is|are|was|were|will|would|must|may|"
-    "should|shall|can|by|on|at|with|using|since|until|where|while|we|only|" + _MANNER_WORDS
+    "should|shall|can|by|on|at|with|using|since|until|where|while|we|only|"
+    # rationale starters ("... due to licensing", "... given our expertise", "... per ADR-3")
+    "due|owing|given|based|per|thanks|across|throughout|everywhere|between|whose|who|"
+    + _MANNER_WORDS
+)
+# "in order to", "in line with": a rationale, never a location captured as ``scope``
+_NOT_SCOPE = (
+    r"(?!(?:order|line|keeping|summary|short|practice|general|particular|addition|turn|"
+    r"fact|effect|total|principle|future)\b)"
+)
+# A comma followed by a rationale / purpose phrase ends a term list: "Do not use Redis,
+# given our expertise" lists one term, not two (N3); the tail is left to clause coverage.
+_RATIONALE_COMMA = (
+    r"\s*,\s*(?:given|due|owing|based|as|per|thanks|following|to|for|in\s+order|so\s+as|"
+    r"since|because|which|so)\b"
 )
 # End of a single term: a clause word, clause punctuation, a sentence end or the end.
 _STOP = rf"(?=\s+(?:{_STOP_WORDS})\b|\s*(?:[,;:!?()—–\"]|\.(?:\s|$))|\s*$)"
@@ -170,8 +301,9 @@ _STOP = rf"(?=\s+(?:{_STOP_WORDS})\b|\s*(?:[,;:!?()—–\"]|\.(?:\s|$))|\s*$)"
 _LSTOP = (
     r"(?=\s+(?:without|unless|except|outside|because|in|from|within|inside|for|to|"
     r"when|if|so|since|until|unless|instead|rather|on|at|under|across|throughout|via|"
-    r"through|over|during|" + _MANNER_WORDS + r")\b|\s*(?:[;:!?()—–\"]|\.(?:\s|$))|"
-    r"\s*$|"
+    r"through|over|during|due|owing|given|based|per|thanks|as|with|by|only|everywhere|"
+    r"between|which|that|who|whose|" + _MANNER_WORDS + r")\b|"
+    r"\s*(?:[;:!?()—–\"]|\.(?:\s|$))|\s*$|" + _RATIONALE_COMMA + r"|"
     # a new clause after a comma ("Don't use MongoDB, use PostgreSQL"): not a list item
     r"\s*,\s*(?:but|instead|rather|use|prefer|we|they|which|so|and\s+(?:use|prefer))\b|"
     # "(,) and PostgreSQL is the only datastore", "and must use X", "but never Y":
@@ -301,16 +433,30 @@ def _single_term(x: str | None) -> str | None:
     return x
 
 
+# A word that never occurs inside a technology name: a later list member containing one
+# is a clause or a rationale ("Redis, given our expertise", "eval, as a rule"), so the
+# whole list is refused rather than half-read.
+_NOT_A_NAME = re.compile(
+    r"(?<![\w-])(?:given|due|owing|based|since|so|which|because|as|per|thanks|following|to|"
+    r"for|in|on|at|of|by|with|from|into|that|this|is|are|was|were|be|been|being|has|have|"
+    r"had|do|does|did|we|they|it|our|their|its|us|keeps?|makes?|gives?|means?|lets?|"
+    r"allows?|only|everywhere|between)(?![\w-])",
+    _I,
+)
+
+
 def split_list(raw: str | None) -> list[str]:
     """``"another database, cache-as-database or document store"`` -> three terms."""
     if raw is None:
         return []
     parts = re.split(r"\s*,\s*(?:(?:and|or|nor)\s+)?|\s+(?:and|or|nor|and/or)\s+", raw)
     out: list[str] = []
-    for p in parts:
+    for k, p in enumerate(parts):
         t = clean_term(p)
         if t is None and _JUNK_TERM.search(p):
             return []  # one junk member: the list is not a list of names (fail closed)
+        if k and _NOT_A_NAME.search(p):
+            return []  # "Redis, given our expertise": a clause, not a second name (N3)
         if t and t not in out:
             out.append(t)
     return out
@@ -542,7 +688,22 @@ def _require(subject: str | None, x: str | None, cat: str | None) -> Built:
     return (subject or (cat.lower() if cat else "technology")), rule
 
 
+# A clause inside a MADR choice: a modal / auxiliary, or a lower-case verb form
+_CHOICE_CLAUSE = re.compile(
+    r"(?i:\b(?:must|shall|should|will|would|can|cannot|may|might|could|is|are|was|were|be|"
+    r"been|has|have|had|do|does|did|need|needs)\b|n't\b)"
+    rf"|(?<![\w.+#/@'-])(?:{_VERBS}|{_PASSIVE}|decided|agreed|chose|choose|prefer)"
+    r"(?![\w.+#/@'-])"
+)
+
+
 def _b_chosen(g: dict) -> Built:
+    x = g["x"] or ""
+    if _CHOICE_CLAUSE.search(x) or _NOT_A_NAME.search(x):
+        # "Chosen option: some services have to use Redis", "Chosen option: Redis only in
+        # staging": a clause or a scoped choice, not a name ("Google Cloud Run", "Microsoft
+        # Access", "Octopus Deploy" are names: a capitalised verb-like word is not a verb)
+        return None
     return _require("chosen option", g["x"], None)
 
 
@@ -691,10 +852,10 @@ RULES: tuple[RulePattern, ...] = (
         "only",
         '"Use only X for Y" / "Only X may be used for Y".',
         _rx(
-            rf"(?<!not\s)\b(?:use|uses|using)\s+only\s+{_term('x')}\s+(?:for|as)\s+"
-            rf"{_term('cat')}{_STOP}",
+            rf"(?<!not\s)\b(?:use|uses|using)\s+only\s+{_term('x')}\s+(?!{_PURPOSE_FOR})"
+            rf"(?:for|as\s+(?!{_AS_RATIONALE}))\s*{_term('cat')}{_STOP}",
             rf"(?<!not\s)\bonly\s+{_term('x')}\s+(?:may|can|shall|must|should|will)\s+be\s+"
-            rf"used\s+(?:for|as)\s+{_term('cat')}{_STOP}",
+            rf"used\s+(?!{_PURPOSE_FOR})(?:for|as\s+(?!{_AS_RATIONALE}))\s*{_term('cat')}{_STOP}",
         ),
         _b_only_use_for,
         examples=("We use only Redis for caching.", "Only structlog may be used for logging."),
@@ -731,7 +892,7 @@ RULES: tuple[RulePattern, ...] = (
         _rx(
             rf"(?:{_subj('who')}\s+)?(?:(?:have|has)\s+)?standardi[sz](?:e|es|ed)\s+on\s+"
             rf"{_term('x')}"
-            rf"(?:\s+(?:for|as)\s+{_term('cat')})?{_STOP}"
+            rf"(?:\s+(?!{_PURPOSE_FOR})(?:for|as\s+(?!{_AS_RATIONALE}))\s*{_term('cat')})?{_STOP}"
         ),
         _b_standardise,
         examples=(
@@ -771,13 +932,13 @@ RULES: tuple[RulePattern, ...] = (
             rf"(?:{_subj('who')}\s+)?(?:{_NEG_MODAL})\s+"
             rf"(?:(?P<manner>{_MANNER_WORDS})\s+|ever\s+)?"
             rf"(?P<v>{_VERBS})\s+{_list('y')}"
-            rf"(?:\s+(?:in|from|within|inside)\s+{_term('scope')})?{_LSTOP}",
+            rf"(?:\s+(?:in|from|within|inside)\s+{_NOT_SCOPE}{_term('scope')})?{_LSTOP}",
             rf"{_subj('who')}\s+(?:must|shall|should|may|can|will|are to|is to)\s+"
             rf"(?P<v>{_VERBS})\s+neither\s+{_list('y')}"
-            rf"(?:\s+(?:in|from|within|inside)\s+{_term('scope')})?{_LSTOP}",
+            rf"(?:\s+(?:in|from|within|inside)\s+{_NOT_SCOPE}{_term('scope')})?{_LSTOP}",
             rf"(?:^|\bwe\s+(?:will|shall|must|should)\s+)avoid\s+"
             rf"(?:(?P<v>using|importing|depending on|calling|adding|introducing)\s+)?"
-            rf"{_list('y')}(?:\s+(?:in|from|within|inside)\s+{_term('scope')})?{_LSTOP}",
+            rf"{_list('y')}(?:\s+(?:in|from|within|inside)\s+{_NOT_SCOPE}{_term('scope')})?{_LSTOP}",
         ),
         _b_must_not,
         examples=(
@@ -807,7 +968,7 @@ RULES: tuple[RulePattern, ...] = (
         '"Y must not be used/imported".',
         _rx(
             rf"{_subj('y')}\s+(?:must|shall|may|should|can|will)\s*(?:not|never|n't)\s+be\s+"
-            rf"(?P<v>{_PASSIVE})(?:\s+(?:in|within|inside|by|from)\s+{_term('scope')})?{_STOP}"
+            rf"(?P<v>{_PASSIVE})(?:\s+(?:in|within|inside|by|from)\s+{_NOT_SCOPE}{_term('scope')})?{_STOP}"
         ),
         _b_not_be_used,
         examples=(
@@ -824,7 +985,7 @@ RULES: tuple[RulePattern, ...] = (
             rf"(?:\b(?:the\s+)?(?:use|usage|imports?|adoption|introduction)\s+of\s+)?"
             rf"{_subj('y')}\s+(?:is|are|will be|shall be|remain|remains)\s+"
             rf"(?:not\s+(?:allowed|permitted)|forbidden|prohibited|banned|disallowed)"
-            rf"(?:\s+(?:in|within|inside|from)\s+{_term('scope')})?{_STOP}"
+            rf"(?:\s+(?:in|within|inside|from)\s+{_NOT_SCOPE}{_term('scope')})?{_STOP}"
         ),
         _b_not_allowed,
         examples=(
@@ -845,7 +1006,7 @@ RULES: tuple[RulePattern, ...] = (
         '"Never import Y" / "We never use Y".',
         _rx(
             rf"(?:{_subj('who')}\s+)?never\s+(?P<v>{_VERBS})\s+{_list('y')}"
-            rf"(?:\s+(?:in|from|within|inside)\s+{_term('scope')})?{_LSTOP}"
+            rf"(?:\s+(?:in|from|within|inside)\s+{_NOT_SCOPE}{_term('scope')})?{_LSTOP}"
         ),
         _b_never,
         examples=(
@@ -881,7 +1042,8 @@ RULES: tuple[RulePattern, ...] = (
         _rx(
             rf"{_subj('who')}\s+(?:must|shall|should|are required to|is required to|"
             rf"have to|has to|need to|needs to)\s+(?:always\s+)?(?:use|be built (?:with|on)|"
-            rf"be written in|run on)\s+{_term('x')}(?:\s+for\s+{_term('cat')})?{_STOP}"
+            rf"be written in|run on)\s+{_term('x')}"
+            rf"(?:\s+(?!{_PURPOSE_FOR})for\s+{_term('cat')})?{_STOP}"
         ),
         _b_must_use,
         examples=(
@@ -901,8 +1063,9 @@ RULES: tuple[RulePattern, ...] = (
         "require",
         '"All A use X".',
         _rx(
-            rf"\b(?:all|every|each)\s+{_term('who')}\s+(?:use|uses|run on|runs on|"
-            rf"is built with|are built with|is written in|are written in)\s+{_term('x')}{_STOP}"
+            rf"\b(?:all|every|each)\s+(?P<who>{_WQ}(?:\s+{_WQ}){{0,5}}?)\s+"
+            rf"(?:use|uses|run on|runs on|is built with|are built with|is written in|"
+            rf"are written in)\s+{_term('x')}{_STOP}"
         ),
         _b_all_use,
         examples=(
@@ -919,7 +1082,8 @@ RULES: tuple[RulePattern, ...] = (
             rf"\bwe\s+(?:will\s+|shall\s+|have decided to\s+|decided to\s+|are going to\s+|"
             rf"agreed to\s+|have agreed to\s+|choose to\s+|chose to\s+)?"
             rf"(?:use|adopt|go with|build on|rely on)\s+{_term('x')}"
-            rf"(?:\s+(?:as|for)\s+(?:our\s+|the\s+|a\s+|an\s+)?{_term('cat')})?{_STOP}",
+            rf"(?:\s+(?!{_PURPOSE_FOR})(?:as\s+(?!{_AS_RATIONALE})|for\s+)"
+            rf"(?:our\s+|the\s+|a\s+|an\s+)?{_term('cat')})?{_STOP}",
             # the alternative named after a ban; only the "use X" clause is claimed
             rf"^(?:do not|don't|never)\s+use\s+[^,;]{{1,120}}?[,;]\s+"
             rf"(?P<claim>(?:but\s+|instead\s+)?use\s+{_term('x')}(?:\s+instead)?){_STOP}",
@@ -1132,9 +1296,161 @@ _NOT_A_DECISION = re.compile(
     r"until|till|before|after|once|pending|during|meanwhile|in the (?:short|interim|meantime)|"
     r"short[- ]term)\b"
     r"|\b(?:this|next|the coming) (?:week|sprint|month|quarter|year|release)\b"
-    r"|\bfor (?:\w+ )?(?:days?|weeks?|sprints?|months?|quarters?|years?)\b",
+    r"|\bfor (?:\w+ )?(?:days?|weeks?|sprints?|months?|quarters?|years?)\b"
+    # temporal / conditional subordinate clauses, leading or not (N1): "When running
+    # locally, ...", "Whenever ...", "While ...", "... when running in CI", "Where
+    # latency matters, ..."
+    r"|\b(?:when|whenever|wherever|as long as|so long as|as soon as|"
+    r"in the event (?:of|that)|on condition that)\b"
+    r"|^where\b",
     _I,
 )
+
+# Semantically harmless material that is removed before matching (N4). It never narrows
+# or widens a rule: a leading label or discourse marker ("Decision:", "In summary,",
+# "Given the above,", "After a long discussion,", "Note that", "The team agreed that",
+# "Per ADR-0003,"), and a parenthetical reference ("(see ADR-0007)", "(approved by the
+# architecture board)"). Anything else in front of a rule, or in brackets, is still
+# subject to clause coverage (fail closed).
+_REF = r"(?:ADR|RFC)[- ]?\d+[a-z]?"
+_REF_PLACE = (
+    rf"(?:{_REF}|(?:the|our)\s+(?:[\w-]+\s+){{0,2}}(?:review|meeting|discussion|workshop|"
+    r"retro|retrospective|sync|session|board|council|guild|committee|rfc|adr|"
+    r"guidelines?|policy|standards?))"
+)
+_LEAD_DECOR = re.compile(
+    r"^(?:"
+    # labels: "Decision:", "Outcome:", "Chosen option:" (only before a full clause; a
+    # bare "Chosen option: X" is the MADR require pattern itself)
+    r"(?:(?:final|agreed)\s+decision|decision|decision\s+outcome|outcome|resolution|"
+    r"conclusion|summary|ruling|agreement|update|note|nb|n\.b\.|important|tl;?dr|"
+    r"in\s+short)(?:\s*\(\s*\d{4}-\d{2}-\d{2}\s*\))?\s*:\s*"
+    r"|status\s*:\s*(?:accepted|approved|agreed|decided|final)\s*[.;]\s+"
+    r"|chosen\s+option\s*:\s*(?=(?:we|the\s+team|our\s+team)\b|(?:do\s+not|don't|never|"
+    r"use|only|no)\b|[\w.+#/@'-]+(?:\s+[\w.+#/@'-]+){0,5}\s+(?:must|shall|should|will|"
+    r"may|can|cannot|is|are)\b)"
+    # discourse markers followed by a comma
+    r"|(?:in\s+summary|in\s+short|in\s+conclusion|to\s+summari[sz]e|to\s+conclude|"
+    r"overall|as\s+a\s+result|as\s+such|consequently|therefore|thus|hence|accordingly|"
+    r"importantly|notably|to\s+be\s+clear|for\s+clarity|to\s+clarify|in\s+other\s+words|"
+    r"simply\s+put|put\s+simply|for\s+the\s+record|for\s+this\s+reason|"
+    r"for\s+these\s+reasons|to\s+that\s+end|to\s+this\s+end|on\s+balance|"
+    r"all\s+things\s+considered|having\s+considered\s+the\s+(?:options|alternatives)|"
+    r"going\s+forward|from\s+now\s+on|henceforth|effective\s+immediately|"
+    r"with\s+immediate\s+effect|as\s+of\s+today|finally|ultimately|"
+    r"given\s+(?:the\s+above|this|that|all\s+(?:of\s+)?this|"
+    r"(?:the|these)\s+(?:above\s+)?(?:constraints|trade-?offs|considerations|findings|"
+    r"results|facts|requirements|drivers|forces)(?:\s+above)?)|"
+    r"after\s+(?:(?:a|much|some|long|lengthy|careful|extensive|thorough|detailed|"
+    r"further)\s+)*(?:discussion|deliberation|consideration|review|evaluation|debate|"
+    r"analysis)(?:\s+(?:with|among|within|in)\s+(?:the|our)\s+(?:team|group|guild|board|"
+    r"council))?|"
+    r"following\s+(?:the|a|our)\s+(?:discussion|review|evaluation|analysis|spike)|"
+    rf"(?:as\s+)?per\s+{_REF}|in\s+line\s+with\s+{_REF}|following\s+{_REF}|"
+    rf"as\s+(?:discussed|agreed|decided|noted)(?:\s+(?:in|at)\s+{_REF_PLACE})?"
+    r")\s*,\s*"
+    # clause introducers
+    r"|(?:(?:please\s+)?note\s+that|it\s+is\s+important\s+to\s+note\s+that|"
+    r"importantly\s+|"
+    r"(?:the|our)\s+(?:team|architecture\s+team|engineering\s+team|"
+    r"(?:architecture\s+)?(?:board|group|council|committee|guild))\s+"
+    r"(?:has\s+|have\s+)?(?:agreed|decided|concluded)\s+(?:that\s+)?|"
+    r"we\s+(?:have\s+)?(?:agreed|decided|concluded)\s+that\s+|"
+    r"it\s+(?:was|has\s+been|is)\s+(?:agreed|decided)\s+that\s+|"
+    r"this\s+(?:adr|decision)\s+(?:records|establishes)\s+that\s+)"
+    r")+",
+    _I,
+)
+# A parenthesis is removed only when it is a recognised reference (``_ref_paren``): a
+# head ("see", "cf.", "ref:", "per", "details in", "approved by", ...) followed only by
+# ADR / RFC / PR / issue ids, dates, names after "by" and the closed rationale vocabulary,
+# or a bare id / date. Anything else ("(see ADR-7, scope: payments)") stays in the text,
+# where clause coverage rejects the claim.
+_PAREN = re.compile(r"\s*\(([^()]{0,160})\)")
+_REF_HEAD = re.compile(
+    r"^\s*(?:(?P<see>see(?:\s+also)?|cf\.?|ref\.?:?|refs?\.?:?|reference:?|per|as\s+per|"
+    r"details\s+in|discussed\s+in|tracked\s+in|recorded\s+in|documented\s+in|"
+    r"decided\s+in|agreed\s+in)"
+    r"|(?P<by>(?:approved|agreed|reviewed|signed\s+off|ratified|decided|owned)\s+by))\s+",
+    _I,
+)
+_REF_TOKEN = re.compile(
+    r"^(?:(?:ADR|RFC|PR|MR)[- ]?#?\d+[a-z]?|#\d+|\d{4}(?:-\d{2}(?:-\d{2})?)?|\d{1,2}|"
+    r"january|february|march|april|may|june|july|august|september|october|november|"
+    r"december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|pr|mr|issue|ticket|adr|rfc)$",
+    _I,
+)
+_REF_FOR = frozenset("details more background context rationale".split())
+
+
+def _ref_paren(m: re.Match[str]) -> str:
+    body = m.group(1).strip()
+    if re.fullmatch(r"(?:(?:ADR|RFC|PR|MR)[- ]?#?\d+[a-z]?|#\d+|\d{4}-\d{2}-\d{2})", body, _I):
+        return ""
+    h = _REF_HEAD.match(body)
+    if not h or re.search(r"[^\w\s,.:#/'-]", body):
+        return m.group(0)
+    words = _WORD.findall(body[h.end() :])
+    if not words:
+        return m.group(0)
+    for i, w in enumerate(words):
+        lw = w.strip(".:'").lower()
+        if _REF_TOKEN.match(w.strip(".:,")) or _in_vocab(lw) or lw in _REF_FOR:
+            continue
+        if lw == "for" and i + 1 < len(words) and words[i + 1].lower() in _REF_FOR:
+            continue
+        if h.group("by") and w[:1].isupper() and w.replace("-", "").isalpha():
+            continue  # a name after "approved by"
+        return m.group(0)
+    return ""
+
+
+_TOK = r"[\w.+#/@'-]+"
+# "While Redis is fast, ...": a concession (subject + is/are + adjective), not a time limit
+_WHILE_CONCESSION = re.compile(
+    rf"^(?:while|whilst|although|though)\s+(?:{_TOK}\s+){{1,4}}?(?:is|are)\s+"
+    r"(?!(?:\w+ing|in|on|at|under|being|still|not|during|behind|within|inside|outside|"
+    r"only|used|deployed|run|running)\b)[\w-]+\s*,\s*",
+    _I,
+)
+# "..., while batch jobs must use RabbitMQ": a second, independent rule
+_WHILE_CONTRAST = re.compile(
+    rf",\s*(?:while|whilst|whereas)\s+(?=(?:{_TOK}\s+){{1,4}}?(?:must|shall|should|will|"
+    r"cannot|can't|may|need\s+to|needs\s+to|have\s+to|has\s+to|are\s+to|is\s+to|do\s+not|"
+    r"does\s+not|don't|doesn't)\b)",
+    _I,
+)
+_WHILE = re.compile(r"\b(?:while|whilst)\b", _I)
+
+
+def _strip_while(clean: str) -> str | None:
+    """``clean`` without a leading concession; None when a 'while' is a condition."""
+    m = _WHILE_CONCESSION.match(clean)
+    if m:
+        clean = clean[m.end() :]
+    rest = _WHILE_CONTRAST.sub(", ", clean)
+    return None if _WHILE.search(rest) else clean
+
+
+# A discourse marker between commas inside the sentence ("Services, as a rule, must ...")
+_MID_DECOR = re.compile(
+    r",\s*(?:in\s+summary|in\s+short|in\s+conclusion|as\s+a\s+(?:general\s+)?rule|"
+    r"therefore|thus|hence|consequently|accordingly|importantly|overall|as\s+such|"
+    r"for\s+(?:consistency|simplicity|maintainability|security\s+reasons|cost\s+reasons))"
+    r"\s*,\s*",
+    _I,
+)
+
+
+def _strip_lead_decor(clean: str) -> str:
+    """``clean`` without a harmless leading label / discourse marker (``_LEAD_DECOR``) and
+    without mid-sentence discourse markers (``_MID_DECOR``)."""
+    m = _LEAD_DECOR.match(clean)
+    if m and m.end() < len(clean):
+        clean = clean[m.end() :]
+    return _MID_DECOR.sub(" ", clean)
+
+
 # A negator in front of a match, in the same clause: "We do not standardise on X".
 _NEGATOR = re.compile(
     r"\b(?:not|never|no longer|neither|nor|without|nobody|no one|none|rarely|hardly|"
@@ -1219,21 +1535,225 @@ _FILLER_PHRASES = re.compile(
     r"(?:codebase|code\s+base|repository|repo|project|system)"
     r"|(?:for|in|across|by|to|throughout)\s+(?:all|every|each|any)(?:\s+of\s+(?:the|our))?"
     r"\s+[\w-]+"  # one noun: "for all services" (not "for all new services")
-    r"|anywhere|everywhere|at\s+all|going\s+forward|from\s+(?:now\s+on|today)"
-    r"|as\s+of\s+today|with\s+immediate\s+effect|effective\s+immediately|in\s+this\s+adr)\b",
+    r"|anywhere|everywhere|at\s+all(?:\s+times)?|going\s+forward|from\s+(?:now\s+on|today)"
+    r"|as\s+of\s+today|with\s+immediate\s+effect|effective\s+immediately|in\s+this\s+adr"
+    # who agreed, not where it applies (N4): "across the organisation", "as a team"
+    r"|across\s+(?:the|our)\s+(?:whole\s+|entire\s+)?(?:organi[sz]ation|company|org|"
+    r"engineering\s+organi[sz]ation|engineering\s+org)"
+    r"|(?:organi[sz]ation|company|org)[- ]wide"
+    r"|as\s+(?:a|one)\s+(?:team|company|organi[sz]ation)|as\s+a\s+(?:general\s+)?rule"
+    r"|as\s+(?:a\s+)?standard(?:\s+practice)?|as\s+(?:a\s+)?matter\s+of\s+policy"
+    r"|at\s+all\s+times|without\s+exception|(?:for|in)\s+the\s+long\s+(?:term|run)"
+    r"|throughout\s+the\s+(?:whole\s+|entire\s+)?(?:company|organi[sz]ation|org))\b",
     _I,
 )
 # From here to the end of the gap is rationale or ADR boilerplate, not a qualifier.
 _RATIONALE = re.compile(
-    # a contrast names what was NOT chosen; it does not qualify the chosen term
-    r"\b(?:rather\s+than|instead\s+of|"
-    r"because|since|given\s+that|so\s+that|as\s+(?:described|defined|documented|"
-    r"proposed|recommended|outlined|explained)|without\s+(?:a|an)\s+(?:new\s+|separate\s+|"
-    r"superseding\s+)?ADR)\b",
+    r"\bwithout\s+(?:a|an)\s+(?:new\s+|separate\s+|superseding\s+)?ADR\b",
+    _I,
+)
+# A contrast names what was NOT chosen ("instead of Kafka"): the contrasted term is
+# consumed, but whatever follows it is still checked, so "X instead of Y in staging"
+# keeps its scope qualifier and the claim is dropped (N5).
+_CONTRAST = re.compile(
+    r"\b(?:rather\s+than|instead\s+of|in\s+place\s+of|in\s+preference\s+to)\s+"
+    r"(?:(?:using|adopting|building|running|writing|keeping|maintaining|introducing|adding|"
+    r"importing|calling|operating|hosting|self-hosting)\s+)?"
+    r"(?:(?:the|a|an|our|any)\s+)?"
+    rf"(?:(?!(?:{_STOP_WORDS})\b)[\w.+#/@'-]+)(?:\s+(?!(?:{_STOP_WORDS})\b)[\w.+#/@'-]+){{0,3}}"
+    r"(?:\s*(?:,|\bor\b|\band\b|\bnor\b)\s*(?:(?:the|a|an)\s+)?"
+    rf"(?!(?:{_STOP_WORDS})\b)[\w.+#/@'-]+(?:\s+(?!(?:{_STOP_WORDS})\b)[\w.+#/@'-]+){{0,3}})*",
     _I,
 )
 _TOKEN = re.compile(r"[\w'/.+#@-]+")
+# "to access the database": an infinitive is not a clause of its own (L-024 D9 family)
+_INFINITIVE = re.compile(rf"\bto\s+(?:{_VERBS}|{_PASSIVE})\b", _I)
 _MANNER = re.compile(rf"^\s*(?:{_MANNER_WORDS})\s*[.!]?\s*$", _I)
+
+
+# --------------------------------------------------------------------------- rationale whitelist
+#
+# Purpose and rationale phrases (N4, L-024 D1-D9) are a WHITELIST of closed shapes, checked
+# on the whole sentence BEFORE it is split into clauses (so a word that doubles as a verb,
+# "vendor lock-in", "call volume", cannot hide a scope behind a clause cut). A phrase runs
+# from its marker to the next clause punctuation (, ; : ( ) — or the sentence end):
+#
+# * vocabulary shapes -- every word after the marker must be in ``_RATIONALE_VOCAB`` (generic
+#   goals and reasons: cost, ops cost, complexity, risk, vendor lock-in, consistency, our
+#   expertise, the benchmark results, ... -- never a domain, an environment or a workload):
+#   "to <goal verb> ..." (reduce, avoid, simplify, keep ... simple, ensure, ...), "in order
+#   to / so as to <goal verb> ...", "due to / owing to / because of / thanks to / based on /
+#   given ...", "for <purpose noun> ..." (consistency, security reasons, ...), ", which
+#   <goal verb>s ..." ("which keeps deployment simple");
+# * reference / reason shapes -- no word of ``_RATIONALE_SCOPE`` (prepositions that place
+#   a rule, scope / condition words, environments, time words) may follow the marker:
+#   "as discussed in / as agreed in / as described by / as per / per <ADR|the|our> / in
+#   line with / consistent with ...", "because ...", "since ...", "so that ...".
+#
+# A whitelisted phrase is removed before matching. A marker whose phrase does not fit its
+# shape ("to reduce ops cost for payments", "due to licensing concerns in the EU", "given
+# the staging environment", "given that the flag is on", "in order to store sessions",
+# ", which only runs in production") makes the sentence yield no claim (fail closed).
+# "for <purpose noun>" without a comma after a ban ("Do not use Redis for performance")
+# reads as a workload, so a forbid claim is dropped then (D5).
+
+_GOAL_VERBS = (
+    r"reduce|lower|cut|minimi[sz]e|maximi[sz]e|limit|avoid|prevent|eliminate|remove|improve|"
+    r"increase|simplify|ensure|guarantee|keep|make|speed\s+up|standardi[sz]e|unify|"
+    r"harmoni[sz]e|future-proof|de-?risk|lessen|ease|mitigate|preserve|retain|protect|stay|"
+    r"remain|save|contain|consolidate|streamline|decouple"
+)
+_WHICH_VERBS = (
+    r"keeps|gives|makes|reduces|avoids|simplifies|improves|lowers|minimi[sz]es|cuts|limits|"
+    r"ensures|removes|eliminates|prevents|saves|lessens|eases|mitigates|preserves|retains|"
+    r"streamlines|consolidates|guarantees|helps|lets|means"
+)
+_RATIONALE_PURPOSE_NOUNS = (
+    r"consistency|simplicity|maintainability|security|performance|reliability|portability|"
+    r"observability|resilience|scalability|testability|compliance|cost|costs|safety|stability|"
+    r"clarity|auditability|traceability|efficiency|uniformity|predictability|"
+    r"interoperability|the\s+sake|(?:[\w-]+\s+){0,2}reasons"
+)
+_RATIONALE_VOCAB = frozenset(
+    """the a an our its their this these those it things everything us and or of any all
+    unnecessary further overall long-term future more less one
+    cost costs ops operational operating operations overhead complexity risk risks lock-in
+    vendor duplication maintenance burden toil debt technical consistency simplicity
+    reliability maintainability security performance latency availability resilience
+    portability observability scalability testability compliance licensing licence license
+    licences licenses concerns concern issues issue reasons reason constraints requirements
+    budget history team size expertise experience skills familiarity knowledge architecture
+    stack system systems codebase platform deployment deployments infrastructure dependencies
+    dependency footprint onboarding coupling sprawl fragmentation drift bugs errors outages
+    downtime incidents surprises confusion effort work friction support upgrades tooling
+    toolchain build builds time times benchmark benchmarks results findings privacy auth
+    authentication spend money resources attack surface exposure vulnerabilities legal
+    regulatory quality velocity productivity developer developers engineering above sake
+    simple simpler small smaller low lower lean leaner consistent manageable maintainable
+    portable secure safer safe cheap cheaper boring stable predictable uniform clean cleaner
+    easy easier reliable fast faster down minimal tidy standard known proven mature high
+    higher good better strong stronger central centralised centralized single common
+    efficient efficiency safety stability clarity auditability traceability uniformity
+    predictability interoperability review analysis evaluation recommendation recommendations
+    guidelines guideline policy policies standards decision discussion wiki rfc adr
+    throughput durability ordering guarantees guarantee scale isolation
+    platform board meeting council guild committee rfcs adrs
+    """.split()
+)
+_RATIONALE_SCOPE = re.compile(
+    r"(?<![\w-])(?:in|on|at|for|to|as|per|across|within|between|outside|inside|only|except|"
+    r"excluding|unless|until|till|when|whenever|while|whilst|if|throughout|during|"
+    r"before|after|once|staging|production|prod|tests?|ci|locally|local|dev|development|"
+    r"mobile|edge|regions?|tenants?|environments?|default|q[1-4]|now|today|version|release|"
+    r"launch|given|with\s+(?:the|our|a|an|legacy|existing|new|older)|"
+    r"\d{4}|january|february|march|april|may|june|july|august|september|october|november|"
+    r"december)(?![\w-])",
+    re.IGNORECASE,
+)
+_RATIONALE_MARK = re.compile(
+    r"(?P<pre>,\s*|^|\s+)(?:"
+    rf"(?P<purpose>(?:in\s+order\s+|so\s+as\s+)?to\s+(?=(?:{_GOAL_VERBS})\b))"
+    r"|(?P<order>in\s+order\s+to|so\s+as\s+to)\b"
+    r"|(?P<cause>due\s+to|owing\s+to|because\s+of|thanks\s+to|based\s+on|given)\b"
+    rf"|(?P<for>for\s+(?=(?:{_RATIONALE_PURPOSE_NOUNS})(?![\w-])))"
+    r"|(?P<which>which)\b"
+    r"|(?P<ref>as\s+(?:discussed|agreed|decided|noted|described|documented|defined|outlined|"
+    r"explained|recommended|proposed|required|mentioned|captured|recorded|summari[sz]ed)"
+    r"(?:\s+(?:in|by|at|with|during|on))?|as\s+per|per\s+(?=(?:ADR|RFC|the|our)\b)|"
+    r"in\s+line\s+with|consistent\s+with|in\s+keeping\s+with|aligned\s+with)\b"
+    r"|(?P<clause>because|since|so\s+that)\b"
+    r")",
+    re.IGNORECASE,
+)
+_RATIONALE_END = re.compile(r"[,;:!?()\[\]{}—–\"]|\s-\s|\.(?=\s|$)")
+_WORD = re.compile(r"[\w'/.+#@-]+")
+_REF_ID = re.compile(r"^(?:(?:ADR|RFC)[- ]?\d+[a-z]?|#\d+)$", re.IGNORECASE)
+_WHICH_RX = re.compile(rf"^\s*(?:{_WHICH_VERBS})\b", re.IGNORECASE)
+_GOAL_RX = re.compile(rf"^\s*(?:{_GOAL_VERBS})\b", re.IGNORECASE)
+_GOAL_WORDS = re.compile(rf"^(?:{_GOAL_VERBS}|up)$", re.IGNORECASE)
+
+
+def _vocab_only(text: str, *, goal_first: bool = False) -> bool:
+    words = [w.strip(".'").lower() for w in _WORD.findall(text)]
+    if not words:
+        return False
+    if goal_first and not _GOAL_RX.match(text):
+        return False
+    return all(_in_vocab(w) for w in words)
+
+
+def _in_vocab(w: str) -> bool:
+    return (
+        w in _RATIONALE_VOCAB
+        or bool(_GOAL_WORDS.match(w))
+        or (w.endswith("s") and w[:-1] in _RATIONALE_VOCAB)
+    )
+
+
+_CLAUSE_GAP = re.compile(r"[,;:!?()\[\]{}—–]|\s-\s|\b(?:and|but|while|whereas|so|then)\b", _I)
+
+
+def _bare_for_qualifies(clean: str, span: tuple[int, int], bare_at: list[int]) -> bool:
+    """A bare "for <purpose noun>" was removed right after this match, in its clause."""
+    return any(p >= span[0] and not _CLAUSE_GAP.search(clean, min(span[1], p), p) for p in bare_at)
+
+
+def _strip_rationale(clean: str) -> tuple[str, list[int]] | None:
+    """``clean`` without its whitelisted rationale phrases, and the positions (in the
+    returned text) where a bare (comma-less) "for <purpose noun>" was removed; None when a
+    marker's phrase is not a rationale."""
+    ends = [m.start() for m in _RATIONALE_END.finditer(clean)]
+    cut: list[tuple[int, int]] = []
+    bare: set[int] = set()  # indexes into ``cut`` of bare "for <purpose>" phrases
+    pos = 0
+    while True:
+        m = _RATIONALE_MARK.search(clean, pos)
+        if not m:
+            break
+        k = bisect.bisect_left(ends, m.end())
+        end = ends[k] if k < len(ends) else len(clean)
+        phrase = clean[m.end() : end]
+        kind = m.lastgroup
+        if kind == "which" and "," not in m.group("pre"):
+            pos = m.end()  # a restrictive "X which ..." is not a rationale (clause coverage)
+            continue
+        if kind == "which":
+            ok = bool(_WHICH_RX.match(phrase)) and _vocab_only(_WHICH_RX.sub("", phrase, 1))
+        elif kind == "purpose":
+            ok = _vocab_only(phrase, goal_first=True)
+        elif kind == "order":
+            ok = _vocab_only(phrase, goal_first=True)
+        elif kind in ("cause", "for"):
+            words = [w.lower() for w in _WORD.findall(phrase)]
+            ok = bool(words) and words[0] != "that" and _vocab_only(phrase)
+            if kind == "for" and ok and "," not in m.group("pre") and m.start() > 0:
+                bare.add(len(cut))
+        elif kind == "ref":  # a reference: ADR / RFC ids, reviews, the wiki; names after "by"
+            by = m.group("ref").lower().endswith(" by")
+            words = _WORD.findall(phrase)
+            ok = bool(words) and all(
+                _in_vocab(w.strip(".'").lower())
+                or _REF_ID.match(w)
+                or (by and w[:1].isupper() and w.isalpha())
+                for w in words
+            )
+        else:  # clause: "because ...", "since ...", "so that ...": never a place or a time
+            ok = bool(phrase.strip()) and not _RATIONALE_SCOPE.search(phrase)
+        if not ok:
+            return None
+        cut.append((m.start(), end))
+        pos = max(end, m.end())
+    if not cut:
+        return clean, []
+    out, at, size, bare_at = [], 0, 0, []
+    for i, (a, b) in enumerate(cut):
+        out.append(clean[at:a])
+        size += a - at
+        if i in bare:
+            bare_at.append(size)
+        at = b
+    out.append(clean[at:])
+    return "".join(out), bare_at
 
 
 def _clauses(clean: str) -> list[tuple[int, int]]:
@@ -1249,6 +1769,7 @@ def _clauses(clean: str) -> list[tuple[int, int]]:
 
 def _content(gap: str) -> list[str]:
     """Words of ``gap`` that are not fillers (empty: nothing was left uncaptured)."""
+    gap = _CONTRAST.sub(" ", gap)  # the contrasted term only; the rest is still checked
     r = _RATIONALE.search(gap)
     if r:
         gap = gap[: r.start()]
@@ -1311,7 +1832,9 @@ def _covered(clean: str, matches: list[Match]) -> list[Match]:
             # an orphan fragment with no verb qualifies a neighbouring clause
             # ("In adapters/, ...", "PostgreSQL and | Redis are ...", "... (for analytics)")
             text = clean[a:b]
-            if _content(text) and not _CLAUSE_VERB.search(text):
+            if _content(text) and (
+                not _CLAUSE_VERB.search(text) or not _CLAUSE_VERB.search(_INFINITIVE.sub(" ", text))
+            ):
                 # fail closed: the nearest claim-bearing region on each side
                 drop.update(q for q in (prev_with[r], next_with[r]) if q is not None)
             continue
@@ -1341,9 +1864,17 @@ def _covered(clean: str, matches: list[Match]) -> list[Match]:
 def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> list[Match]:
     """Typed matches for one sentence, in priority order, without overlaps, each
     accounting for its whole clause (``_covered``)."""
-    clean = clean_sentence(mask_comments(sentence))
+    clean = _strip_lead_decor(clean_sentence(mask_comments(sentence)))
     if not clean or clean.endswith("?") or _NOT_A_DECISION.search(clean):
         return []
+    clean = _strip_while(clean)
+    if clean is None:
+        return []  # a temporal / conditional 'while' (N1)
+    clean = _PAREN.sub(_ref_paren, clean).strip()  # after the guards: they see the brackets
+    stripped = _strip_rationale(clean)
+    if stripped is None:
+        return []  # a 'rationale' that carries a scope or a condition (L-024 D1-D4, D9)
+    clean, bare_at = stripped
     neg = _Clauses(clean)
     taken: list[tuple[int, int]] = []  # sorted, non-overlapping
     out: list[Match] = []
@@ -1362,6 +1893,16 @@ def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> li
                     continue  # "We do not standardise on X", "must not NOT use X"
                 if pat.kind in ("require", "only") and _NEGATOR.search(clean, *span):
                     continue  # "Services don't have to use X", "need not use X"
+                # the modal part of the match: up to the technology term, so a term
+                # such as "Kafka-like broker" or "lock-free queue" is not a permission
+                lead_end = next(
+                    (m.start(g) for g in ("x", "q") if g in rx.groupindex and m.group(g)),
+                    span[1],
+                )
+                if (pat.kind == "require" and _PERMISSIVE.search(clean, span[0], lead_end)) or (
+                    pat.kind == "only" and _ASPIRATIONAL.search(clean, span[0], lead_end)
+                ):
+                    continue  # a permission or a wish is not an obligation (N2)
                 if pat.kind in ("require", "only", "boundary") and _alternative(clean, m):
                     continue
                 built = pat.build(m.groupdict())
@@ -1370,6 +1911,8 @@ def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> li
                 subject, rule = built
                 if rule_errors(pat.kind, rule):
                     continue
+                if pat.kind == "forbid" and _bare_for_qualifies(clean, span, bare_at):
+                    continue  # "Do not use Redis for performance": a workload, not a reason
                 taken.insert(k, span)
                 out.append(Match(pat.id, pat.kind, subject, rule, span))
     return _covered(clean, out)

@@ -1272,7 +1272,7 @@ def test_allowed_list_kept_whole_when_captured_whole():
 
 
 def test_cross_origin_dedup_needs_the_same_sentence_not_just_the_same_line(make_repo):
-    line = "Services must not use Redis in domain/. Redis is banned across all code."
+    line = "Services must not use Redis in domain/. Redis is off limits for all code."
     repo = make_repo({"docs/adr/0001-x.md": f"# 1. X\n\n## Decision\n\n{line}\n"})
     (d,) = scan_adrs(repo).decisions
     s = d.source.line_start
@@ -1282,12 +1282,12 @@ def test_cross_origin_dedup_needs_the_same_sentence_not_just_the_same_line(make_
                 "line_start": s, "line_end": s}  # fmt: skip
 
     props = [
-        lc({"forbid": ["redis"]}, "Redis is banned across all code."),  # broader, own sentence
+        lc({"forbid": ["redis"]}, "Redis is off limits for all code."),  # broader, own sentence
         lc({"forbid": ["redis"]}, "Services must not use Redis in domain/."),  # restatement
     ]
     cs = structure_decision(d, repo, mode="llm", provider=scripted(lambda a, r: props))
     llm = [c for c in cs.claims if c.origin == "llm"]
-    assert [c.source.quote for c in llm] == ["Redis is banned across all code."]
+    assert [c.source.quote for c in llm] == ["Redis is off limits for all code."]
     assert "1 duplicate claim(s) merged" in cs.notes
 
 
