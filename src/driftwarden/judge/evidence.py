@@ -183,6 +183,21 @@ def _as_text(data: bytes, path: str) -> str | None:
     return None if "\x00" in text else text
 
 
+def _maybe_script(path: str) -> bool:
+    """An extensionless file the name alone cannot classify (``bin/worker``)."""
+    name = path.rsplit("/", 1)[-1]
+    return "." not in name and detect_language(path) is None
+
+
+def _unparsed(manifests: list[ManifestResult]) -> list[tuple[str, str]]:
+    """Manifests that matched but yielded nothing (too large, malformed): evidence gap."""
+    return [
+        (m.path, f"manifest not read: {'; '.join(m.errors)[:200]}")
+        for m in manifests
+        if m.errors and not m.refs
+    ]
+
+
 def _too_large(path: str, size: int) -> tuple[str, str] | None:
     if size > MAX_PARSE_BYTES and detect_language(path) in TEXT_LANGUAGES:
         return path, f"{size} bytes, over the {MAX_PARSE_BYTES} byte parse limit; not read"
@@ -224,7 +239,9 @@ def load_snapshot(repo: str | Path, commit: str = "HEAD", config: Config | None 
     excludes = _Excludes(list(cfg.exclude))
     entries = [e for e in git.tree_entries(root, sha) if _safe(e.path) and not excludes(e.path)]
     want = [e for e in entries if e.mode != "120000" and e.size <= MAX_PARSE_BYTES]
-    want = [e for e in want if _wanted(e.path)]
+    # Extensionless files may be scripts with a shebang (bin/worker): read them too and
+    # keep the ones the indexer's shebang detection recognises.
+    want = [e for e in want if _wanted(e.path) or _maybe_script(e.path)]
     blobs = git.read_blobs(root, [e.sha for e in want])
     wanted = {e.path for e in want}
 
@@ -251,7 +268,7 @@ def load_snapshot(repo: str | Path, commit: str = "HEAD", config: Config | None 
             binary = text is None
             lang = None if binary else detect_language(e.path, data[:SNIFF_BYTES])
             file_entries.append(FileEntry(e.path, e.size, lang, binary, tracked=True))
-            if text is None:
+            if text is None or (not _wanted(e.path) and lang not in TEXT_LANGUAGES):
                 continue
             dest = base / e.path
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -261,6 +278,7 @@ def load_snapshot(repo: str | Path, commit: str = "HEAD", config: Config | None 
         graph = build_import_graph(FileIndex(root=base, files=file_entries, source="git"))
 
     manifests = [m for m in scan_manifests(root, sha) if not excludes(m.path)]
+    skipped.extend(_unparsed(manifests))
     files = FileIndex(root=root, files=file_entries, source=f"git:{sha}")
     return Snapshot(
         root=root,
@@ -290,7 +308,7 @@ def _worktree_snapshot(root: Path, cfg: Config) -> Snapshot:
             if big:
                 skipped.append(big)
             continue
-        if not _wanted(f.path):
+        if not (_wanted(f.path) or f.language in TEXT_LANGUAGES):  # shebang scripts too
             continue
         try:
             data = (root / f.path).read_bytes()
@@ -302,6 +320,7 @@ def _worktree_snapshot(root: Path, cfg: Config) -> Snapshot:
         res = _manifest_at(f.path, decode_text(data), WORKTREE)
         if res is not None:
             manifests.append(res)
+    skipped.extend(_unparsed(manifests))
     return Snapshot(
         root=root,
         commit=WORKTREE,
@@ -364,9 +383,12 @@ def is_weak_scope(scope: str | None) -> bool:
 
 
 def in_dir(path: str, directory: str) -> bool:
-    """``path`` is inside ``directory`` (at the root, or as a nested path segment:
-    ``adapters`` contains ``src/app/adapters/s3.py``)."""
+    """``path`` is ``directory`` itself or inside it (at the root, or as a nested path
+    segment: ``adapters`` contains ``src/app/adapters/s3.py``). Equality matters for
+    Go, whose local import edges target the package directory itself."""
     if directory in ("", "."):
+        return True
+    if path == directory or path.endswith("/" + directory):
         return True
     return path.startswith(directory + "/") or f"/{directory}/" in f"/{path}"
 
@@ -379,20 +401,28 @@ def _str_list(value: object) -> list[str]:
     return []
 
 
+def dir_exists(directory: str, snap: Snapshot) -> bool:
+    """A directory ``directory`` exists in ``snap`` (at the root or nested)."""
+    return any(k == directory or k.endswith("/" + directory) for k in snap.directories())
+
+
 def resolve_dir(raw: str, snap: Snapshot) -> str | None:
-    """A repository directory named by ``raw`` ("adapters/", "`infra/aws/`",
-    "./src/db"), or None. A word without a slash counts only if a directory of
-    that name exists ("persistence" yes, "the persistence layer" no)."""
+    """A repository directory named by ``raw``, or None.
+
+    Explicit directory spellings ("adapters/", "`infra/aws/`", "./src/db") are
+    taken as written. Anything else ("persistence", "internal/cloud") counts only
+    if such a directory exists in the snapshot, so package names with a slash
+    (``@aws-sdk/client-s3``, ``github.com/x/y``) are never mistaken for paths."""
     t = raw.strip().strip("`'\"")
-    pathish = "/" in t
+    explicit = t.endswith("/") or t.startswith("./")
     while t.startswith("./"):
         t = t[2:]
     t = t.strip("/")
     if not t or " " in t or ".." in t.split("/"):
         return None
-    if pathish:
+    if explicit or dir_exists(t, snap):
         return t
-    return t if any(posixpath.basename(d) == t for d in snap.directories()) else None
+    return None
 
 
 # --------------------------------------------------------------------------- occurrences
@@ -450,6 +480,9 @@ class EvidenceSet(BaseModel):
     searched: str = Field(default="", description="What was searched, for absence verdicts.")
     skipped: list[str] = Field(
         default_factory=list, description="Source files that were too large to read."
+    )
+    required_terms: dict[str, list[str]] = Field(
+        default_factory=dict, description="require: each required term -> its technology ids."
     )
     notes: list[str] = Field(default_factory=list)
 
@@ -577,14 +610,17 @@ class _Collector:
     def build(self) -> list[Evidence]:
         ordered = sorted(self.items, key=lambda it: it[0])
         kept: list[dict] = []
-        per: dict[str, int] = {}
+        per: dict[tuple, int] = {}
         dropped = 0
         for _, d in ordered:
-            r = d["relation"]
-            if r != "keyword" and per.get(r, 0) >= self.max:
+            # The cap is per (relation, kind, production) group, so many manifest
+            # declarations can never crowd out the one decisive production import:
+            # every group the verdict depends on keeps at least its first items.
+            g = (d["relation"], d["kind"], d["production"])
+            if d["relation"] != "keyword" and per.get(g, 0) >= self.max:
                 dropped += 1
                 continue
-            per[r] = per.get(r, 0) + 1
+            per[g] = per.get(g, 0) + 1
             kept.append(d)
         if dropped:
             self.notes.append(f"{dropped} further evidence item(s) not listed (cap {self.max})")
@@ -702,6 +738,7 @@ def _require(c: _Collector, es: EvidenceSet) -> None:
         return
     required = _techs(res)
     c.scan(required, "required")
+    es.required_terms = {r.term: [t.id for t in r.technologies] for r in res}
     cat = catalog.category_for(rule.get("for") if isinstance(rule.get("for"), str) else None)
     if cat is None and len(res) == 1 and res[0].kind == "technology":
         cat = res[0].category
@@ -748,9 +785,8 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
     if len(dirs) < len(raw_dirs):
         es.undecidable = f"some of allowed_in {raw_dirs} do not name a repository directory"
         return
-    known = c.snap.directories()
     for d in dirs:
-        if not any(k == d or k.endswith("/" + d) for k in known):
+        if not dir_exists(d, c.snap):
             es.notes.append(f"allowed path {d}/ does not exist at this commit")
 
     def side(o: _Occurrence) -> EvidenceRelation:
@@ -761,6 +797,8 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
     res: list[Resolution] = []
     local_dirs: list[str] = []
     for t in targets:
+        # A repo directory only when spelled as one ("payments/") or when it exists;
+        # otherwise a technology / package name such as "@aws-sdk/client-s3".
         d = resolve_dir(t, c.snap) if "/" in t else None
         if d is not None:
             local_dirs.append(d)
@@ -820,7 +858,5 @@ def collect_evidence(
         shown = "; ".join(f"{p} ({why})" for p, why in snap.skipped[:5])
         more = f" (+{len(snap.skipped) - 5} more)" if len(snap.skipped) > 5 else ""
         es.skipped = [p for p, _ in snap.skipped]
-        es.notes.append(
-            f"incomplete evidence: {len(snap.skipped)} large file(s) skipped: {shown}{more}"
-        )
+        es.notes.append(f"incomplete evidence: {len(snap.skipped)} file(s) skipped: {shown}{more}")
     return es
