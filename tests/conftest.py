@@ -83,3 +83,41 @@ def fixture_repo(tmp_path):
         return dest
 
     return _make
+
+
+@pytest.fixture(scope="session")
+def perf_factor() -> float:
+    """CPU-speed multiplier for pure-Python time budgets: 1.0 on the reference Linux box
+    (~22 ms for the probe), larger on slower runners. Budgets stay tight where the machine is
+    fast and scale up where it is not, instead of a flat wall clock."""
+    import time
+
+    from driftwarden.claims.rules import match_sentence
+
+    s = "We will use A, we will use B, " * 100
+    best = 1e9
+    for _ in range(3):
+        t = time.perf_counter()
+        for _ in range(5):
+            match_sentence(s)
+        best = min(best, (time.perf_counter() - t) / 5)
+    return max(1.0, best / 0.025)
+
+
+def time_5000_claim_adr(make_repo, body_fn, adr_fn, offline_fn, n: int):
+    """Wall time of an end-to-end n-claim ADR (scan + structure + G1 verify), plus the repo,
+    the claim set and the measured cost of one G1 verification (200 sampled calls)."""
+    import time
+
+    from driftwarden.grounding.verify import verify_source_quote
+
+    body = "\n".join(body_fn(i) for i in range(n))
+    t = time.perf_counter()
+    repo, cs = offline_fn(make_repo, adr_fn(body))
+    dt = time.perf_counter() - t
+    sample = cs.claims[:: max(1, len(cs.claims) // 200)][:200]
+    t = time.perf_counter()
+    for c in sample:
+        assert verify_source_quote(repo, c.source).status == "VERIFIED"
+    per_call = (time.perf_counter() - t) / max(1, len(sample))
+    return dt, per_call, repo, cs
