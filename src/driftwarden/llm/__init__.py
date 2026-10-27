@@ -22,7 +22,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from driftwarden.config import Config
+from driftwarden.config import Config, is_env_var_name
 from driftwarden.llm import anthropic as _anthropic
 from driftwarden.llm import openai_compat as _openai
 from driftwarden.llm.base import (
@@ -138,6 +138,10 @@ def get_provider(
 
 
 def _no_key(config: Config, key_name: str, common: dict) -> Provider:
+    # Config validation already rejects key-shaped names; this guards configs built
+    # without validation (model_construct) so a pasted secret is never echoed.
+    if not is_env_var_name(key_name):
+        key_name = "<the variable named by api_key_env>"
     if config.mode == "llm":
         raise ProviderConfigError(
             f"mode = llm with provider {config.provider!r} needs an API key in the "

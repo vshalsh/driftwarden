@@ -7,6 +7,7 @@ import json
 import urllib.error
 import urllib.request
 from typing import Any
+from urllib.parse import urlsplit
 
 from driftwarden.llm.base import TransportError
 
@@ -43,13 +44,15 @@ def urllib_transport(
         except Exception:  # noqa: BLE001 - best effort only
             pass
         raise TransportError(
-            f"HTTP {exc.code} from {_host(url)}: {detail}".rstrip(": "),
+            _scrub(f"HTTP {exc.code} from {_host(url)}: {detail}".rstrip(": "), url, headers),
             status=exc.code,
             retryable=is_retryable_status(exc.code),
         ) from None
     except (urllib.error.URLError, http.client.HTTPException, OSError) as exc:
         reason = getattr(exc, "reason", exc)
-        raise TransportError(f"cannot reach {_host(url)}: {reason}", retryable=True) from None
+        raise TransportError(
+            _scrub(f"cannot reach {_host(url)}: {reason}", url, headers), retryable=True
+        ) from None
     try:
         parsed = json.loads(raw)
     except (ValueError, UnicodeDecodeError) as exc:
@@ -62,16 +65,47 @@ def urllib_transport(
 
 
 def _host(url: str) -> str:
-    from urllib.parse import urlsplit
+    """``scheme://host[:port]`` of ``url``: no userinfo, path or query."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        port = parts.port
+    except ValueError:
+        return "<invalid url>"
+    if ":" in host:  # IPv6 literal
+        host = f"[{host}]"
+    return f"{parts.scheme}://{host}{f':{port}' if port else ''}" if host else "<invalid url>"
 
-    parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}" if parts.netloc else url
+
+def _scrub(text: str, url: str, headers: dict[str, str]) -> str:
+    """Remove URL userinfo and every request header value (API keys) from ``text``."""
+    secrets = [v for v in headers.values() if isinstance(v, str) and len(v) >= 8]
+    secrets += [v.partition(" ")[2] for v in list(secrets) if " " in v]  # "Bearer <key>"
+    try:
+        userinfo = urlsplit(url).netloc.rpartition("@")[0]
+    except ValueError:
+        userinfo = ""
+    if userinfo:
+        secrets += [userinfo, *userinfo.split(":")]
+    for secret in sorted(secrets, key=len, reverse=True):
+        if secret:
+            text = text.replace(secret, "[REDACTED]")
+    return text
+
+
+def redact_url(url: str) -> str:
+    """``url`` with any ``user:password@`` userinfo and query string removed."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<invalid url>"
+    if "@" not in parts.netloc and not parts.query:
+        return url
+    return _host(url) + parts.path
 
 
 def check_url(url: str) -> str:
     """Reject non-HTTP schemes (``file:``, ``ftp:``...) that urllib would otherwise open."""
-    from urllib.parse import urlsplit
-
     if urlsplit(url).scheme not in ("http", "https"):
-        raise ValueError(f"base_url must be http:// or https://, got {url!r}")
+        raise ValueError(f"base_url must be http:// or https://, got {redact_url(url)!r}")
     return url.rstrip("/")

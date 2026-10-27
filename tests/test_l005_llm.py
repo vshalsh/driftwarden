@@ -521,3 +521,66 @@ def test_real_transport_cannot_reach_network(tmp_path):
 def test_non_http_base_url_rejected():
     with pytest.raises(ValueError):
         AnthropicProvider(api_key=FAKE_KEY, base_url="file:///etc/passwd")
+
+
+# ------------------------------------------------------------------ review fixes (D1-D11)
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "string", "pattern": "("},
+        {"$ref": "#"},
+        {"$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}}, "$ref": "#/$defs/A"},
+        {"$ref": "#/$defs/missing"},
+    ],
+)
+def test_unusable_caller_schema_is_a_config_error_before_any_call(schema):
+    t = FakeTransport()
+    p, _ = anthropic(t)
+    with pytest.raises(ProviderConfigError, match="invalid JSON schema"):
+        p.complete_json("x", schema)
+    assert t.calls == []
+
+
+def test_schema_error_log_names_schema_locations_only(tmp_path):
+    t = FakeTransport(*[anthropic_reply('{"claim_id": "X", "status": "LEAKY", "lines": []}')] * 2)
+    p, _ = anthropic(t, attempts=2, log=CostLog(tmp_path))
+    with pytest.raises(SchemaValidationError):
+        p.complete_json("x", Finding)
+    rec = p.cost_log.records[0]
+    assert rec["outcome"] == "schema_error" and rec["error"] == "literal_error"
+    assert "LEAKY" not in p.cost_log.path.read_text(encoding="utf-8")
+
+
+def test_key_echoed_by_server_is_redacted_from_raised_error():
+    t = FakeTransport(TransportError(f"HTTP 401: bad key {FAKE_KEY}", status=401))
+    p, _ = anthropic(t)
+    with pytest.raises(TransportError) as ei:
+        p.complete("x")
+    assert FAKE_KEY not in str(ei.value) and ei.value.status == 401
+
+
+def test_base_url_userinfo_not_in_repr():
+    p = OpenAICompatProvider(
+        "m", base_url="https://u:pw-secret@h.example/v1", cost_log=CostLog(None)
+    )
+    assert "pw-secret" not in repr(p)
+
+
+@pytest.mark.parametrize("name", ["ANTHROPIC_API_KEY", "MY_LLM_KEY", "AZURE_OPENAI_API_KEY", "X"])
+def test_conventional_env_names_accepted(name):
+    assert Config(api_key_env=name).api_key_env == name
+
+
+@pytest.mark.parametrize(
+    "pasted", ["gsk_SECRETabcdef0123456789", "AKIAIOSFODNN7EXAMPLE", "A" * 65, "lower_case"]
+)
+def test_key_shaped_env_names_rejected(pasted):
+    with pytest.raises(ValueError) as ei:
+        Config(api_key_env=pasted)
+    assert pasted not in str(ei.value)
+
+
+def test_backoff_huge_attempt_is_capped():
+    assert RetryPolicy(max_delay=7.0).delay(10**6) == 7.0
