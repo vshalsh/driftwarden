@@ -438,7 +438,7 @@ def literal_technology(term: str) -> Technology | None:
         patterns=(
             f"pypi:{t}", f"py:{py}", f"py:{py}.*", f"npm:{t}", f"go:{t}", f"go:{t}/*",
             f"maven:{t}", f"maven:*:{t}", f"java:{t}", f"java:{t}.*", f"nuget:{t}",
-            f"docker:{t}",
+            f"docker:{t}", f"terraform:{t}", f"terraform:*/{t}",
         ),
         literal=True,
     )  # fmt: skip

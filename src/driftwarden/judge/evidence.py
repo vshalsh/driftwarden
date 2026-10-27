@@ -57,6 +57,12 @@ itself). The per-claim cap keeps up to ``max_per_relation`` items per
 (relation, kind, production, technology) group, so a flood of one package can
 never hide another technology the verdict depends on; truncation is noted.
 
+Python ``from mysql import connector`` is matched as ``mysql`` *and*
+``mysql.connector``, so dotted catalog patterns apply. A bare boundary target
+("payments") that names an existing repository directory is that directory,
+unless a package of that name is actually used, in which case both are
+evaluated.
+
 Commit and WORKTREE snapshots select files the same way (by name, symlinks never
 followed) and decode them like the verifiers (``text.decode_text``), so UTF-16
 manifests are citable and both modes see the same evidence.
@@ -499,7 +505,11 @@ def _occurrences(snap: Snapshot) -> list[_Occurrence]:
         ns = catalog.LANGUAGE_NAMESPACE.get(e.language)
         if ns is None:
             continue
-        names = tuple(n for n in (e.package, e.module.lstrip(".")) if n)
+        module = e.module.lstrip(".")
+        # "from mysql import connector" is mysql.connector: pass module + "." + name
+        # too, so dotted catalog patterns (py:mysql.connector*, py:google.cloud*) match.
+        qualified = tuple(f"{module}.{n}" for n in e.names if module and n and n != "*")
+        names = tuple(dict.fromkeys(n for n in (e.package, module, *qualified) if n))
         out.append(_Occurrence("import", ns, names, e.source, edge=e))
     return out
 
@@ -767,9 +777,17 @@ _WHOLE_REPO_ACTORS = frozenset(
 )
 
 
+_ACTOR_TAILS = frozenset(
+    """layer layers module modules package packages code service services component
+    components""".split()
+)
+
+
 def _actor_variants(actor: str) -> set[str]:
     words = [w for w in re.split(r"[^a-z0-9]+", actor.lower()) if w]
     words = [w for w in words if w not in ("the", "a", "an", "all", "any", "every", "each", "our")]
+    if len(words) > 1 and words[-1] in _ACTOR_TAILS:
+        words = words[:-1]  # "domain layer" -> domain, "billing service" -> billing
     if not words:
         return set()
     out = {"-".join(words), "_".join(words), "".join(words), words[-1]}
@@ -779,6 +797,47 @@ def _actor_variants(actor: str) -> set[str]:
         else:
             out.add(v + "s")
     return out
+
+
+_GENERIC_SUBJECTS = frozenset(
+    """codebase technology chosen option communication service services microservice
+    microservices system systems team teams developer developers engineer engineers""".split()
+) | {"chosen option"}
+
+
+def subject_actor(claim: Claim) -> list[str]:
+    """The actor a claim's ``subject`` names, when it names one.
+
+    Rule-library forbid/require claims put the sentence's subject there
+    ("Handlers must not use X" -> subject "handlers"); generic subjects
+    (codebase, services, a category such as "logging") name the whole repo. Model
+    and hint claims use ``subject`` as a free label, so only an explicit
+    ``module:<name>`` / ``dir:<name>`` counts for them.
+    """
+    subj = " ".join(claim.subject.lower().split())
+    m = re.match(r"^(?:module|dir|directory|package):\s*(.+)$", subj)
+    if m:
+        return [m.group(1)]
+    if claim.origin != "rule" or claim.kind not in ("forbid", "require"):
+        return []
+    bare = re.sub(r"^(?:the|all|every|each|any|our|no)\s+", "", subj)
+    if (
+        not bare
+        or bare in _GENERIC_SUBJECTS
+        or bare in _WHOLE_REPO_ACTORS
+        or catalog.category_for(bare) is not None
+    ):
+        return []
+    # Only when the decision sentence uses it as the acting subject ("Handlers must
+    # not ...", "No handler may ..."); otherwise the subject is just a label.
+    quote = " ".join(claim.source.quote.lower().split())
+    word = re.escape(bare)
+    acting = re.search(
+        rf"(?<![\w-]){word}s?\s+(?:must|shall|should|may|can|will|are|is|do|does|need|have)\b"
+        rf"|\bno\s+{word}s?\s+(?:may|shall|can|must|should|will)\b",
+        quote,
+    )
+    return [bare] if acting else []
 
 
 def resolve_actor(actors: list[str], snap: Snapshot) -> tuple[Callable[[str], bool] | None, str]:
@@ -872,6 +931,15 @@ def _require(c: _Collector, es: EvidenceSet) -> None:
 
 def _only(c: _Collector, es: EvidenceSet) -> None:
     rule = c.claim.rule
+    if _str_list(rule.get("between")):
+        # "Services communicate only via Kafka" restricts how the named participants
+        # talk to each other. Manifests and imports do not show who talks to whom,
+        # so another queue used for internal jobs proves nothing: fail closed.
+        es.undecidable = (
+            f"communication scope (between {', '.join(_str_list(rule.get('between')))}) cannot "
+            "be established: the evidence does not show which participants talk to each other"
+        )
+        return
     res = _resolve_all(_str_list(rule.get("only")), es, allow_category=False)
     if es.unresolved or not res:
         es.undecidable = f"cannot map {', '.join(map(repr, es.unresolved))} to a technology"
@@ -925,10 +993,29 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
     for t in targets:
         # A repo directory only when spelled as one ("payments/") or when it exists;
         # otherwise a technology / package name such as "@aws-sdk/client-s3".
-        d = resolve_dir(t, c.snap) if "/" in t else None
-        if d is not None:
+        d = resolve_dir(t, c.snap)
+        if "/" in t:
+            if d is not None:
+                local_dirs.append(d)
+                es.resolved.append(f"{t} -> directory {d}/")
+            else:
+                res.extend(_resolve_all([t], es))
+            continue
+        # A bare name ("payments"): a repo directory wins if it exists and no package
+        # of that name is used; if both exist, both are evaluated.
+        r = catalog.resolve(t)
+        used = r is not None and any(
+            catalog.name_matches(tech, o.namespace, o.names)
+            for tech in r.technologies
+            for o in c.occ
+        )
+        if d is not None and (r is None or (r.kind == "literal" and not used)):
             local_dirs.append(d)
             es.resolved.append(f"{t} -> directory {d}/")
+        elif d is not None:
+            local_dirs.append(d)
+            es.resolved.append(f"{t} -> directory {d}/ and {r.label}")
+            res.extend(_resolve_all([t], es))
         else:
             res.extend(_resolve_all([t], es))
     if es.unresolved or not (res or local_dirs):
@@ -966,7 +1053,7 @@ def collect_evidence(
     es = EvidenceSet(claim_id=claim.id, commit=snap.commit)
     c = _Collector(claim, snap, max_per_relation)
     handler = _KINDS.get(claim.kind)
-    actors = _str_list(claim.rule.get("actor"))
+    actors = _str_list(claim.rule.get("actor")) or subject_actor(claim)
     if handler is None:
         es.undecidable = "free-form claim: no deterministic rule"
     else:
