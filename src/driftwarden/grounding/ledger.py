@@ -4,6 +4,10 @@ Layout under ``base_dir``::
 
     logs/grounding/<run-id>.jsonl          one GroundingResult per line
     logs/grounding/<run-id>.summary.json   counts and pass rate
+
+Cross-record checks write rows too: ``G6`` (one per voted claim, VERIFIED when
+the runs agreed; see ``judge.consistency``), so ``check_rate("G6")`` is the
+consistency rate.
 """
 
 from __future__ import annotations
@@ -58,6 +62,13 @@ class Ledger:
             "by_check": by_check,
             "ledger": self.path.as_posix(),
         }
+
+    def check_rate(self, check_id: str) -> float | None:
+        """VERIFIED share of ``check_id`` rows (e.g. ``"G6"``: the consistency rate);
+        None when there are none."""
+        ok = self._counts[(check_id, "VERIFIED")]
+        total = ok + self._counts[(check_id, "MISMATCH")]
+        return ok / total if total else None
 
     def write_summary(self) -> dict[str, Any]:
         self.dir.mkdir(parents=True, exist_ok=True)
