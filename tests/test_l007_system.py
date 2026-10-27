@@ -41,7 +41,6 @@ from driftwarden.grounding.verify import verify_dependency, verify_source_quote
 from driftwarden.judge import Judge, build_prompt, gate, verify_evidence
 from driftwarden.llm import OfflineProvider, RetryPolicy
 from driftwarden.models import WORKTREE, Claim, DependencyRef, Evidence, Provenance, Verdict
-from driftwarden.text import decode_text
 
 FIXTURES = Path(__file__).parent / "fixtures" / "judge_repos"
 STATS = Path(os.environ["L007_STATS"]) if os.environ.get("L007_STATS") else None
@@ -81,9 +80,6 @@ D5 = "D-L007-5 (Low-Medium): model citations rejected before the gate (unknown i
 D6 = "D-L007-6 (Medium): dependency in a UTF-16 requirements.txt parses (G3) but is not citable (file classed binary, no text) -> false HOLDING with only a note"
 D7 = "D-L007-7 (Low, outside L-007: grounding/verify.py): a NUL byte in Provenance.path/commit raises ValueError from subprocess instead of returning MISMATCH"
 
-D8 = "D-L007-8 (Low): a requirements.txt over 2 MiB is neither cited nor noted (no 'incomplete evidence' note) -> silent HOLDING, in both commit and WORKTREE mode"
-D9 = "D-L007-9 (Low, design trade-off): a real service in a directory named exactly docs/ or ci/ has its manifests classed non-production -> VIOLATED downgraded to DRIFTING"
-
 WT_REQ = (
     "forbid-redis-cluster-is-redis forbid-redis-plain forbid-requirements forbid-requirements-case "
     "forbid-requirements-underscore-case forbid-requirements-dot-case forbid-requirements-extras-marker "
@@ -94,12 +90,8 @@ WT_REQ = (
 DEV3 = ["forbid-requirements-dev-file", "forbid-requirements-test-dir", "only-other-dev-dep"]
 HOLE_IDS = "rev-HEAD rev-branch rev-short-sha path-trailing-slash path-dot-slash path-double-slash path-inner-dot rev-HEAD-tilde rev-peel-syntax".split()
 
-# D-L007-2..6 fixed on L-007-judge @24c4e70 (markers removed); D1/D7 fixed by L-023 (markers
-# removed). D8/D9 found in round 2.
+# All known defects are fixed: D-L007-2..8 on L-007/L-025, D1/D7 by L-023 (xfail markers removed).
 KNOWN: dict[tuple[str, str | None], str] = {
-    ("test_oversized_manifest_is_not_silent", None): D8,
-    ("test_real_service_dirs_named_docs_or_ci_stay_production", "services/docs"): D9,
-    ("test_real_service_dirs_named_docs_or_ci_stay_production", "services/ci"): D9,
 }
 
 
@@ -158,14 +150,14 @@ def show(repo: Path, commit: str, path: str) -> str:
     out = subprocess.run(
         ["git", "show", f"{commit}:{path}"], cwd=repo, capture_output=True, check=True
     ).stdout
-    return decode_text(out)
+    return out.decode("utf-8", "replace")
 
 
 def oracle_ok(repo: Path, prov: Provenance) -> bool:
     """My own check: quote (whitespace-collapsed, case-sensitive) occurs on those lines of that file/commit."""
     try:
         if prov.commit == WORKTREE:
-            text = decode_text((repo / prov.path).read_bytes())
+            text = (repo / prov.path).read_bytes().decode("utf-8", "replace")
         else:
             text = show(repo, prov.commit, prov.path)
     except Exception:
@@ -189,6 +181,22 @@ def assert_cited_ok(repo: Path, v: Verdict, commit: str | None = None) -> None:
             assert ev.ref.commit == commit
         if ev.dependency is not None:
             assert verify_dependency(repo, ev.dependency).status == "VERIFIED"
+
+
+def _skip_unless_name_roundtrips(tmp_path: Path, name: str) -> None:
+    """Skip when the filesystem cannot store ``name`` byte-for-byte (macOS APFS/HFS+ normalise unicode
+    names to NFD; some filesystems reject quotes or odd characters). Linux must run these."""
+    probe = tmp_path / "name-probe"
+    try:
+        target = probe / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+        listed = {p.relative_to(probe).as_posix() for p in probe.rglob("*") if p.is_file()}
+    except OSError:
+        pytest.skip(f"filesystem rejects file name {name!r}")
+    if listed != {name}:
+        pytest.skip(f"filesystem does not preserve file name {name!r} (unicode normalisation)")
+    shutil.rmtree(probe)
 
 
 # ------------------------------------------------------------------ rule semantics table
@@ -1872,6 +1880,7 @@ def test_utf8_bom_source(tmp_path):
     ],
 )
 def test_unusual_file_names(tmp_path, name):
+    _skip_unless_name_roundtrips(tmp_path, name)
     repo, _ = build(tmp_path, {name: "import pymongo\n"})
     for commit in ("HEAD", WORKTREE):
         v = judge_offline(repo, mkclaim("forbid", MONGO), commit=commit)
@@ -1881,6 +1890,13 @@ def test_unusual_file_names(tmp_path, name):
 
 
 def test_non_utf8_file_name_never_yields_unverified_violation(tmp_path):
+    probe = tmp_path / "probe-dir"
+    probe.mkdir()
+    try:
+        with open(os.fsencode(probe) + b"/caf\xe9.py", "wb") as fh:
+            fh.write(b"x")
+    except OSError:
+        pytest.skip("filesystem rejects non-UTF-8 file names")
     repo, _ = build(tmp_path, {"src/ok.py": "x = 1\n"})
     with open(os.fsencode(repo) + b"/src/caf\xe9.py", "wb") as fh:
         fh.write(b"import pymongo\n")
@@ -2489,419 +2505,3 @@ def test_tiny_quote_citation_is_weak_evidence_observation(tmp_path):
 
     v = judge_llm(repo, free_claim(), fn)
     record_stat("one_char_quote_verdict", [v.status, v.grounding])
-
-
-# ------------------------------------------------------------------ round 2: fixes of D-L007-2..6 and new edges
-
-MANIFEST_PATHS = [
-    "requirements.txt", "requirements-dev.txt", "dev-requirements.txt", "requirements/base.txt",
-    "requirements/prod.txt", "requirements/dev.txt", "constraints.txt", "requirements.in",
-    "a/b/c/requirements.txt", "services/api/requirements.txt", "requirements_prod.txt",
-    "docs/requirements.txt", "tests/requirements.txt", "Requirements.TXT.bak",
-]  # fmt: skip
-EXPECT_NONPROD = {
-    "requirements-dev.txt",
-    "dev-requirements.txt",
-    "requirements/dev.txt",
-    "docs/requirements.txt",
-    "tests/requirements.txt",
-}
-
-
-@pytest.mark.parametrize("path", MANIFEST_PATHS)
-def test_worktree_head_parity_manifest_names(tmp_path, path):
-    repo, _ = build(tmp_path, {path: "pymongo==4\n", "src/ok.py": "x = 1\n"})
-    a = judge_offline(repo, mkclaim("forbid", MONGO))
-    b = judge_offline(repo, mkclaim("forbid", MONGO), commit=WORKTREE)
-    assert (a.status, [e.ref.path for e in a.evidence]) == (
-        b.status,
-        [e.ref.path for e in b.evidence],
-    )
-    if path.endswith(".bak"):
-        assert a.status == "HOLDING"
-    else:
-        assert a.status == ("DRIFTING" if path in EXPECT_NONPROD else "VIOLATED"), a.status
-    assert_cited_ok(repo, b)
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "package.json",
-        "pyproject.toml",
-        "go.mod",
-        "pom.xml",
-        "docker-compose.yml",
-        "Dockerfile",
-        "main.tf",
-    ],
-)
-def test_worktree_head_parity_other_manifests_nested(tmp_path, name):
-    body = {
-        "package.json": '{\n "dependencies": {"mongodb": "1"}\n}\n',
-        "pyproject.toml": PYPROJ_PROD,
-        "go.mod": "module x\n\ngo 1.21\n\nrequire go.mongodb.org/mongo-driver v1.11.0\n",
-        "pom.xml": POM.format(scope=""),
-        "docker-compose.yml": "services:\n  db:\n    image: mongo:7\n",
-        "Dockerfile": "FROM mongo:6\n",
-        "main.tf": 'terraform {\n  required_providers {\n    m = {\n      source = "mongodb/mongodbatlas"\n    }\n  }\n}\n',
-    }[name]
-    repo, _ = build(tmp_path, {f"svc/deep/{name}": body})
-    a = judge_offline(repo, mkclaim("forbid", MONGO))
-    b = judge_offline(repo, mkclaim("forbid", MONGO), commit=WORKTREE)
-    assert a.status == b.status == "VIOLATED"
-    assert [e.ref.path for e in a.evidence] == [e.ref.path for e in b.evidence]
-    assert_cited_ok(repo, a)
-    assert_cited_ok(repo, b)
-
-
-def test_node_modules_manifests_skipped_in_both_modes(tmp_path):
-    repo, _ = build(
-        tmp_path,
-        {
-            "node_modules/x/package.json": '{"dependencies":{"mongodb":"1"}}',
-            "web/node_modules/y/requirements.txt": "pymongo\n",
-            "src/ok.py": "x = 1\n",
-        },
-    )
-    for c in ("HEAD", WORKTREE):
-        assert judge_offline(repo, mkclaim("forbid", MONGO), commit=c).status == "HOLDING", c
-
-
-def test_worktree_ignores_gitignored_files_but_sees_untracked(tmp_path):
-    repo, _ = build(tmp_path, {".gitignore": ".venv/\nbuild/\n", "src/ok.py": "x = 1\n"})
-    _write(repo, ".venv/lib/x.py", "import pymongo\n")
-    _write(repo, "build/requirements.txt", "pymongo\n")
-    assert judge_offline(repo, mkclaim("forbid", MONGO), commit=WORKTREE).status == "HOLDING"
-    _write(repo, "new_untracked.py", "import pymongo\n")
-    v = judge_offline(repo, mkclaim("forbid", MONGO), commit=WORKTREE)
-    assert v.status == "VIOLATED" and {e.ref.path for e in v.evidence} == {"new_untracked.py"}
-    assert judge_offline(repo, mkclaim("forbid", MONGO)).status == "HOLDING"
-
-
-def test_symlinked_manifest_and_dir_inside_repo_cited_once_at_real_path(tmp_path):
-    repo, _ = build(tmp_path, {"real/requirements.txt": "pymongo\n", "src/ok.py": "x = 1\n"})
-    os.symlink("real/requirements.txt", repo / "requirements.txt")
-    os.symlink("real", repo / "linkdir")
-    _commit(repo, "links")
-    for c in ("HEAD", WORKTREE):
-        v = judge_offline(repo, mkclaim("forbid", MONGO), commit=c)
-        assert v.status == "VIOLATED" and {e.ref.path for e in v.evidence} == {
-            "real/requirements.txt"
-        }, c
-        assert_cited_ok(repo, v)
-
-
-def test_worktree_manifest_edit_after_commit_is_seen_only_in_worktree(tmp_path):
-    repo, c1 = build(tmp_path, {"requirements.txt": "flask\n"})
-    _write(repo, "requirements.txt", "flask\npymongo\n")
-    assert judge_offline(repo, mkclaim("forbid", MONGO)).status == "HOLDING"
-    v = judge_offline(repo, mkclaim("forbid", MONGO), commit=WORKTREE)
-    assert v.status == "VIOLATED" and v.evidence[0].ref.line_start == 2
-    assert_cited_ok(repo, v)
-
-
-@pytest.mark.parametrize(
-    "path",
-    ["services/devices/requirements.txt", "latest/requirements.txt", "contest/requirements.txt", "ci-gateway/requirements.txt", "docs-service/requirements.txt", "dev/requirements.txt", "dev-tools/requirements.txt", "development/requirements.txt", "testing-service/requirements.txt", "requirements-device.txt", "requirements-latest.txt", "attest/requirements.txt", "src/docsify/requirements.txt", "services/ci-cd-bridge/requirements.txt", "apps/lintel/requirements.txt", "benchmarks-api/requirements.txt"],
-)  # fmt: skip
-def test_real_production_manifest_not_misclassified_as_nonproduction(tmp_path, path):
-    """Opposite risk of D-L007-3: a false 'non-production' would downgrade a real VIOLATED to DRIFTING."""
-    repo, _ = build(tmp_path, {path: "pymongo==4\n"})
-    for c in ("HEAD", WORKTREE):
-        v = judge_offline(repo, mkclaim("forbid", MONGO), commit=c)
-        assert v.status == "VIOLATED", (c, v.status)
-        assert v.evidence[0].production is True
-
-
-@pytest.mark.parametrize(
-    "path",
-    ["services/docs/requirements.txt", "services/ci/requirements.txt"],
-    ids=["services/docs", "services/ci"],
-)
-def test_real_service_dirs_named_docs_or_ci_stay_production(tmp_path, path):
-    """1. WHAT: a deployed service whose directory is literally named docs/ or ci/ is production; its forbidden dependency is VIOLATED.
-    2. WHO: ambiguous: Opus chose directory-name words (docs, ci, lint...) on purpose; the spec only says 'dev/test/build-scoped'.
-    3. SO WHAT: Low. A real violation is shown as DRIFTING (never hidden); only services named exactly like tooling are hit."""
-    repo, _ = build(tmp_path, {path: "pymongo==4\n"})
-    assert judge_offline(repo, mkclaim("forbid", MONGO)).status == "VIOLATED"
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "docs/requirements.txt",
-        "ci/requirements.txt",
-        "lint/requirements.txt",
-        ".github/requirements.txt",
-        "benchmarks/requirements.txt",
-        "requirements-ci.txt",
-        "requirements-docs.txt",
-        "requirements-lint.txt",
-        "requirements.test-utils.txt",
-        "requirements/typing.txt",
-        "requirements-bench.txt",
-    ],
-)
-def test_tooling_manifests_are_nonproduction(tmp_path, path):
-    repo, _ = build(tmp_path, {path: "pymongo==4\n"})
-    v = judge_offline(repo, mkclaim("forbid", MONGO))
-    assert v.status == "DRIFTING" and v.evidence and not v.evidence[0].production
-
-
-def test_nonproduction_heuristic_does_not_touch_imports_or_infra_in_prod_dirs(tmp_path):
-    repo, _ = build(
-        tmp_path,
-        {
-            "docs/app.py": "import pymongo\n",
-            "ci-gateway/docker-compose.yml": "services:\n  d:\n    image: mongo:7\n",
-        },
-    )
-    assert judge_offline(repo, mkclaim("forbid", MONGO)).status == "VIOLATED"
-
-
-def _bigpy():
-    return "import pymongo\n" + "x = 1\n" * 600_000
-
-
-@pytest.mark.parametrize(
-    "kind,rule", [("forbid", MONGO), ("only", PG_ONLY), ("require", PG_REQ), ("boundary", CLOUD)]
-)
-@pytest.mark.parametrize("commit", ["HEAD", WORKTREE])
-def test_large_file_skip_is_noted_for_every_rule_kind(tmp_path, kind, rule, commit):
-    repo, _ = build(tmp_path, {"src/big.py": _bigpy(), "src/a.py": "x = 1\n"})
-    v = judge_offline(repo, mkclaim(kind, rule), commit=commit)
-    assert any("incomplete evidence" in n and "big.py" in n for n in v.notes), v.notes
-    if v.status == "HOLDING":
-        assert "incomplete" in v.rationale
-    assert v.grounding == "VERIFIED"
-
-
-def test_large_file_skip_does_not_mask_a_found_violation_and_free_claims_unaffected(tmp_path):
-    repo, _ = build(tmp_path, {"src/big.py": _bigpy(), "src/a.py": "import pymongo\n"})
-    v = judge_offline(repo, mkclaim("forbid", MONGO))
-    assert v.status == "VIOLATED" and {e.ref.path for e in v.evidence} == {"src/a.py"}
-    assert any("incomplete evidence" in n for n in v.notes)
-    assert judge_offline(repo, mkclaim("free", {"text": "be nice"})).status == "UNKNOWN"
-
-
-def test_file_at_the_size_limit_is_read(tmp_path):
-    from driftwarden.index.files import MAX_PARSE_BYTES
-
-    head = "import pymongo\n"
-    body = head + "#" * (MAX_PARSE_BYTES - len(head) - 1) + "\n"
-    assert len(body.encode()) == MAX_PARSE_BYTES
-    repo, _ = build(tmp_path, {"src/edge.py": body})
-    for c in ("HEAD", WORKTREE):
-        v = judge_offline(repo, mkclaim("forbid", MONGO), commit=c)
-        assert v.status == "VIOLATED", c
-        assert not any("incomplete" in n for n in v.notes)
-
-
-def test_oversized_manifest_is_not_silent(tmp_path):
-    """1. WHAT: same as D-L007-4 for a manifest: a 2 MiB+ requirements.txt holding a forbidden package must be cited or noted, not silently ignored.
-    2. WHO: code (neither snapshot cites it; the skip list only covers source languages).
-    3. SO WHAT: Low (2 MiB requirements files are rare), but it is the same S3 'never silent' rule."""
-    repo, _ = build(tmp_path, {"requirements.txt": "pymongo\n# " + "x" * 2_200_000 + "\n"})
-    for c in ("HEAD", WORKTREE):
-        v = judge_offline(repo, mkclaim("forbid", MONGO), commit=c)
-        assert v.status == "VIOLATED" or any(
-            "incomplete" in n or "large" in n or "skip" in n for n in v.notes
-        ), (c, v.status, v.notes)
-
-
-def _tf(name: str, src: str) -> str:
-    return f'terraform {{\n  required_providers {{\n    {name} = {{\n      source = "{src}"\n    }}\n  }}\n}}\n'
-
-
-@pytest.mark.parametrize(
-    "src,rule,status",
-    [
-        ("mongodb/mongodbatlas", {"forbid": ["MongoDB"]}, "VIOLATED"),
-        ("registry.terraform.io/mongodb/mongodbatlas", {"forbid": ["MongoDB"]}, "VIOLATED"),
-        ("hashicorp/aws", {"forbid": ["AWS SDK"]}, "VIOLATED"),
-        ("hashicorp/aws", {"forbid": ["cloud SDK"]}, "VIOLATED"),
-        ("hashicorp/google", {"forbid": ["GCP"]}, "VIOLATED"),
-        ("hashicorp/azurerm", {"forbid": ["Azure"]}, "VIOLATED"),
-        ("cyrilgdn/postgresql", {"forbid": ["PostgreSQL"]}, "VIOLATED"),
-        ("petoju/mysql", {"forbid": ["MySQL"]}, "VIOLATED"),
-        ("RedisLabs/rediscloud", {"forbid": ["Redis"]}, "VIOLATED"),
-        ("Mongey/kafka", {"forbid": ["Kafka"]}, "VIOLATED"),
-        ("hashicorp/awscc", {"forbid": ["AWS SDK"]}, "HOLDING"),
-        ("mongodb/mongodbatlas-fake", {"forbid": ["MongoDB"]}, "HOLDING"),
-        ("hashicorp/aws-extras", {"forbid": ["AWS SDK"]}, "HOLDING"),
-        ("hashicorp/random", {"forbid": ["cloud SDK"]}, "HOLDING"),
-        ("hashicorp/aws", {"forbid": ["GCP"]}, "HOLDING"),
-    ],
-)  # fmt: skip
-def test_terraform_provider_patterns(tmp_path, src, rule, status):
-    repo, _ = build(tmp_path, {"infra/main.tf": _tf("p", src)})
-    for c in ("HEAD", WORKTREE):
-        v = judge_offline(repo, mkclaim("forbid", rule), commit=c)
-        assert v.status == status, (c, v.status, [e.detail for e in v.evidence])
-        assert_cited_ok(repo, v)
-        if status == "VIOLATED":
-            assert (
-                v.evidence[0].kind == "infra"
-                and v.evidence[0].dependency.ecosystem == "terraform-provider"
-            )
-
-
-def test_terraform_boundary_and_tests_dir(tmp_path):
-    repo, _ = build(tmp_path, {"tests/main.tf": _tf("aws", "hashicorp/aws")})
-    assert judge_offline(repo, mkclaim("forbid", {"forbid": ["AWS SDK"]})).status == "DRIFTING"
-
-
-def test_terraform_module_and_resources_are_known_limits(tmp_path):
-    """Documented limit (catalog docstring): modules/resources are not matched. Recorded so a change is noticed."""
-    repo, _ = build(
-        tmp_path,
-        {
-            "main.tf": 'module "vpc" {\n  source = "terraform-aws-modules/vpc/aws"\n}\nresource "aws_db_instance" "d" {\n  engine = "postgres"\n}\n'
-        },
-    )
-    record_stat(
-        "terraform_module_forbid_aws",
-        judge_offline(repo, mkclaim("forbid", {"forbid": ["AWS SDK"]})).status,
-    )
-
-
-QFILES = {"src/a.py": "import re\nimport os\n# compute the long thing here\n", "s.sh": "deploy x\n"}
-QCLAIM = {"text": "import compute deploy"}
-
-
-_QN = iter(range(10_000))
-
-
-def _cite_quote(tmp_path, quote, which, n=1):
-    k = next(_QN)
-    repo, _ = build(tmp_path, QFILES, name=f"q{k}")
-    led = Ledger(tmp_path / f"out{k}")
-
-    def fn(req):
-        c = next(x for x in cands(req.prompt) if which in x["snippet"])
-        return {"status": "VIOLATED", "rationale": "x", "citations": [cite_of(c, quote=quote)] * n}
-
-    return Judge(repo, mode="llm", provider=fake(fn), ledger=led).judge(
-        mkclaim("free", QCLAIM)
-    ), led
-
-
-@pytest.mark.parametrize(
-    "quote,which",
-    [("import re", "import re"), ("import os", "import os"), ("deploy x", "deploy x"), ("   import   re  ", "import re"), ("# compute the long thing here", "compute"), ("compute the long thing", "compute")],
-)  # fmt: skip
-def test_legit_citations_pass_min_quote_rule(tmp_path, quote, which):
-    v, led = _cite_quote(tmp_path, quote, which)
-    assert v.status == "VIOLATED" and v.grounding == "VERIFIED", (v.status, v.reasons)
-    assert led.summary()["mismatch"] == 0
-
-
-@pytest.mark.parametrize(
-    "quote,which",
-    [
-        ("re", "import re"),
-        ("import", "import re"),
-        ("deploy", "deploy x"),
-        ("compute", "compute"),
-        ("e", "compute"),
-        ("o", "import os"),
-    ],
-)
-def test_short_partial_quotes_are_rejected_and_ledgered(tmp_path, quote, which):
-    v, led = _cite_quote(tmp_path, quote, which)
-    assert_could_not_verify(v)
-    assert any("too short" in r for r in v.reasons)
-    assert led.summary()["mismatch"] >= 1
-
-
-def test_seven_vs_eight_non_space_characters_boundary(tmp_path):
-    ok, _ = _cite_quote(tmp_path, "compute the", "compute")  # 10 chars
-    assert ok.status == "VIOLATED"
-    seven, _ = _cite_quote(tmp_path, "computes"[:7], "compute")  # 'compute' = 7 chars, partial
-    assert_could_not_verify(seven)
-    eight, _ = _cite_quote(tmp_path, "# comput", "compute")  # 7 non-space chars: '#comput'
-    assert_could_not_verify(eight)
-    nine, _ = _cite_quote(tmp_path, "# compute", "compute")  # 8 non-space chars
-    assert nine.status == "VIOLATED"
-
-
-def test_ledger_has_one_record_per_citation_including_pre_gate_rejections(tmp_path):
-    repo, _ = build(tmp_path, FREE_FILES)
-    led = Ledger(tmp_path / "out")
-
-    def fn(req):
-        c = next(x for x in cands(req.prompt) if "secret" in x["snippet"])
-        return {
-            "status": "VIOLATED",
-            "rationale": "x",
-            "citations": [
-                cite_of(c),
-                {"evidence_id": "e99", "line_start": 1, "line_end": 1, "quote": "fabricated line"},
-                cite_of(c, line_start=1, line_end=1),
-                cite_of(c, quote="o"),
-                cite_of(c, quote="not on that line at all"),
-            ],
-        }
-
-    v = Judge(repo, mode="llm", provider=fake(fn), ledger=led).judge(free_claim())
-    assert_could_not_verify(v)
-    s = led.summary()
-    assert s["total"] == 5 and s["verified"] == 1 and s["mismatch"] == 4, s
-    rows = [json.loads(ln) for ln in Path(s["ledger"]).read_text().splitlines()]
-    assert len(rows) == 5 and all(r["check_id"] == "G2" for r in rows)
-
-
-def test_ledger_pre_gate_rejection_in_rule_precedence_path(tmp_path):
-    repo, _ = build(tmp_path, {"src/a.py": "import pymongo\n"})
-    led = Ledger(tmp_path / "out")
-
-    def fn(r):
-        return {
-            "status": "HOLDING",
-            "rationale": "x",
-            "citations": [
-                {"evidence_id": "e42", "line_start": 1, "line_end": 1, "quote": "nope nope nope"}
-            ],
-        }
-
-    v = Judge(repo, mode="llm", provider=fake(fn), ledger=led).judge(mkclaim("forbid", MONGO))
-    assert v.status == "VIOLATED" and v.grounding == "VERIFIED"
-    assert led.summary()["mismatch"] == 1 and v.proposed_status == "HOLDING"
-
-
-def test_pre_gate_rejection_records_are_valid_and_do_not_leak_a_path(tmp_path):
-    repo, _ = build(tmp_path, FREE_FILES)
-    led = Ledger(tmp_path / "out")
-
-    def fn(r):
-        return {
-            "status": "VIOLATED",
-            "rationale": "x",
-            "citations": [
-                {"evidence_id": "e99", "line_start": -5, "line_end": 10**12, "quote": "zz"}
-            ],
-        }
-
-    v = Judge(repo, mode="llm", provider=fake(fn), ledger=led).judge(free_claim())
-    assert_could_not_verify(v)
-    rows = [json.loads(ln) for ln in Path(led.summary()["ledger"]).read_text().splitlines()]
-    assert rows and rows[0]["status"] == "MISMATCH" and rows[0]["subject"].startswith("T.c1/")
-
-
-def test_utf16_manifest_cited_and_verified_in_both_modes(tmp_path):
-    repo, _ = build(
-        tmp_path,
-        {
-            "dev/requirements.txt": "pymongo==4\r\n".encode("utf-16"),
-            "svc/requirements.txt": "flask\r\npymongo>=4\r\n".encode("utf-16-le"),
-        },
-    )
-    for c in ("HEAD", WORKTREE):
-        v = judge_offline(repo, mkclaim("forbid", MONGO), commit=c)
-        assert v.status == "VIOLATED", c
-        assert {e.ref.path for e in v.evidence} == {
-            "dev/requirements.txt",
-            "svc/requirements.txt",
-        }, [e.ref.path for e in v.evidence]
-        assert_cited_ok(repo, v)

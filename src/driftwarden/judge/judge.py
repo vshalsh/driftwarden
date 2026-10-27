@@ -10,12 +10,20 @@ Two paths:
   =========  ===============================================================
   forbid     VIOLATED if a forbidden technology is present in production code,
              a runtime dependency or infra; DRIFTING if only in tests or
-             dev/test/build-scoped dependencies (or, for ``action: import``,
-             only declared but never imported); HOLDING if absent.
-  require    HOLDING if present (cites it); DRIFTING if present *and* another
-             member of its category is used in production; VIOLATED if absent
-             while another member is used (cites that member); UNKNOWN if
-             absent with nothing to cite (absence is not citable evidence).
+             dev/test/build-scoped dependencies; HOLDING if absent. The
+             ``action`` decides what "present" must mean:
+             use/add/install/depend on/... (or none): any dependency, image or
+             import; ``import``: VIOLATED needs a production import, a
+             declaration alone is DRIFTING; ``call``/``access``/other verbs,
+             or a manner qualifier ("directly"): UNKNOWN "qualifier not
+             decidable" when the technology is present (no call-site
+             analysis), HOLDING when it is absent.
+  require    Tracked per required term. HOLDING if every term is present
+             (cites them); DRIFTING if all present *and* another member of the
+             category is used in production; UNKNOWN if only some terms are
+             present (lists the missing ones); VIOLATED if none is present
+             while another member is used (cites it); UNKNOWN if absent with
+             nothing to cite (absence is not citable evidence).
   only       VIOLATED if another member of the category is used in production
              (cites it); DRIFTING if only in tests / dev scope; HOLDING
              otherwise (cites the allowed technology when present).
@@ -36,7 +44,9 @@ Two paths:
 
   Precedence: when the rules reach a decided verdict (not UNKNOWN), the rule
   verdict stands and the model's proposal is recorded in ``notes`` and the
-  ledger. Only claims the rules cannot decide get the model's verdict. So text
+  ledger. Only claims the rules cannot decide get the model's verdict. If the
+  rule verdict fails the gate, it is reported as *Could not verify* with its
+  failed evidence; the model's verdict never replaces a failed rule gate. So text
   in code comments, ADRs or snippets that talks the model into "HOLDING"
   cannot hide a violation the rules found, and a model that invents evidence
   gets *Could not verify*.
@@ -217,8 +227,37 @@ def _ids(evs: list[Evidence]) -> str:
     return shown + (f" (+{len(evs) - 8})" if len(evs) > 8 else "")
 
 
+def _spread(evs: list[Evidence], n: int) -> list[Evidence]:
+    """Up to ``n`` items, the first of every technology before any second one, so a
+    verdict about several technologies cites each of them."""
+    firsts, rest, seen = [], [], set()
+    for e in evs:
+        (rest if e.technology in seen else firsts).append(e)
+        seen.add(e.technology)
+    return (firsts + rest)[: max(n, len(firsts))]
+
+
 def _names(evs: list[Evidence]) -> str:
     return ", ".join(sorted({e.technology or "?" for e in evs}))
+
+
+# forbid actions that mere presence (a dependency, an image, an import) establishes.
+# "import" needs an import; anything else ("call", "access", "instantiate", or a
+# manner such as "directly") needs call-site analysis the rules do not do.
+PRESENCE_ACTIONS = frozenset(
+    {"use", "add", "introduce", "install", "adopt", "depend on", "include", "bundle",
+     "vendor", "reference", "deploy", "run"}
+)  # fmt: skip
+_MANNER = re.compile(r"\b(directly|direct)\b", re.I)
+
+
+def _manner(claim: Claim) -> str | None:
+    """A manner qualifier on the claim ("directly"), from the rule or its quote."""
+    m = claim.rule.get("manner")
+    if isinstance(m, str) and m.strip():
+        return m.strip()
+    hit = _MANNER.search(claim.source.quote)
+    return hit.group(1).lower() if hit else None
 
 
 def rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
@@ -229,7 +268,7 @@ def rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
         if status == "HOLDING" and es.skipped:
             # Policy for files too large to read: the verdict stays HOLDING (a generated
             # file must not turn every claim UNKNOWN) but says it is incomplete.
-            rationale += f"; incomplete: {len(es.skipped)} large file(s) skipped, see notes"
+            rationale += f"; incomplete: {len(es.skipped)} file(s) not read, see notes"
         return Verdict(status=status, evidence=evidence, rationale=rationale, **base)
 
     if es.undecidable:
@@ -239,7 +278,21 @@ def rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
     if kind == "forbid":
         hits = es.with_relation("forbidden")
         prod = [e for e in hits if e.production]
-        if rule.get("action") == "import":
+        action = rule.get("action") if isinstance(rule.get("action"), str) else None
+        manner = _manner(claim)
+        if action != "import" and (manner or (action and action not in PRESENCE_ACTIONS)):
+            # "must not call X", "must not use X directly": presence of X does not
+            # establish the qualified act; without call-site analysis it is undecidable.
+            if not hits:
+                return v("HOLDING", [], f"no forbidden technology found ({es.searched})")
+            what = " ".join(x for x in (action, manner) if x)
+            return v(
+                "UNKNOWN",
+                hits[:10],
+                f"qualifier not decidable: '{what}' needs call-site analysis; "
+                f"{_names(hits)} is present ({_ids(hits)})",
+            )
+        if action == "import":
             imported = [e for e in prod if e.kind == "import"]
             if imported:
                 return v(
@@ -262,15 +315,25 @@ def rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
     if kind == "require":
         req = es.with_relation("required")
         alt = [e for e in es.with_relation("alternative") if e.production]
+        missing = [
+            t for t, ids in es.required_terms.items() if not any(e.technology in ids for e in req)
+        ]
+        if req and missing:
+            return v(
+                "UNKNOWN",
+                _spread(req, 10),
+                f"required {_names(req)} present, but {', '.join(map(repr, missing))} not found "
+                f"({es.searched}); absence cannot be cited as evidence",
+            )
         if req and alt:
             return v(
                 "DRIFTING",
-                [*alt, *req[:5]],
+                [*alt, *_spread(req, 5)],
                 f"required {_names(req)} present, but {es.category} alternative "
                 f"{_names(alt)} also used ({_ids(alt)})",
             )
         if req:
-            return v("HOLDING", req[:10], f"required {_names(req)} present ({_ids(req)})")
+            return v("HOLDING", _spread(req, 10), f"required {_names(req)} present ({_ids(req)})")
         if alt:
             return v(
                 "VIOLATED",
@@ -292,7 +355,9 @@ def rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
         if alt:
             return v("DRIFTING", alt, f"other {es.category} {_names(alt)} in tests/dev scope only")
         if allowed:
-            return v("HOLDING", allowed[:10], f"only {_names(allowed)} used as {es.category}")
+            return v(
+                "HOLDING", _spread(allowed, 10), f"only {_names(allowed)} used as {es.category}"
+            )
         return v("HOLDING", [], f"no other {es.category} found ({es.searched})")
 
     if kind == "boundary":
@@ -516,7 +581,20 @@ class Judge:
         proposed = gate(Verdict.model_validate(_loose(pre)), self.root, extra_reasons=problems)
         self._record(proposed.checks)
 
-        if ruled.status != "UNKNOWN" and ruled.grounding == "VERIFIED":
+        if ruled.grounding != "VERIFIED":
+            # The rules decided, but their evidence no longer verifies (e.g. the
+            # working tree changed after the snapshot). Report that as Could not
+            # verify with the failed evidence and reasons; the model never overrides
+            # a failed rule gate.
+            data = ruled.model_dump()
+            data["notes"] = [
+                *ruled.notes,
+                f"model proposed {pre.status}; ignored because the rule evidence could not "
+                "be verified",
+            ]
+            return Verdict.model_validate(data)
+
+        if ruled.status != "UNKNOWN":
             note = f"model proposed {pre.status}"
             if proposed.grounding != "VERIFIED":
                 note += (
@@ -528,14 +606,6 @@ class Judge:
             data["proposed_status"] = pre.status
             return Verdict.model_validate(data)
 
-        if ruled.grounding != "VERIFIED":
-            # A failed rule gate is a bug or a changed repository: report it, never hide it.
-            data = proposed.model_dump()
-            data["notes"] = [
-                *proposed.notes,
-                f"rule verdict could not be verified: {ruled.reasons}",
-            ]
-            return Verdict.model_validate(data)
         return proposed
 
     def judge_all(self, claims: list[Claim]) -> list[Verdict]:
