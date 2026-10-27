@@ -9,6 +9,7 @@ Order of precedence (first found wins):
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any, Literal
@@ -24,6 +25,33 @@ Mode = Literal["auto", "offline", "llm"]
 Provider = Literal["anthropic", "openai"]
 
 LEDGER_EXCLUDE = ".driftwarden/**"
+_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+
+
+def is_env_var_name(value: object) -> bool:
+    """True for a conventional UPPER_SNAKE environment variable name.
+
+    Rejects anything shaped like a pasted secret: lowercase letters, punctuation,
+    more than 64 characters, or an underscore-separated segment that is
+
+    * 24+ characters long (``ABCDEFGHIJKLMNOPQRSTUVWXYZ``),
+    * 16+ characters with any digit (``AKIAIOSFODNN7EXAMPLE``), or
+    * 8+ characters mixing letters with 2+ digits (``A1B2C3D4``, ``AB12CD34``).
+
+    Real variable names (ANTHROPIC_API_KEY, AZURE_OPENAI_API_KEY_V2,
+    GOOGLE_APPLICATION_CREDENTIALS, LLM_KEY_20261027...) are words, short
+    version suffixes or all-digit dates.
+    """
+    if not isinstance(value, str) or not _ENV_NAME.fullmatch(value):
+        return False
+    for seg in value.split("_"):
+        digits = sum(c.isdigit() for c in seg)
+        if len(seg) >= 24 or (len(seg) >= 16 and digits):
+            return False
+        if len(seg) >= 8 and digits >= 2 and digits < len(seg):
+            return False
+    return True
+
 
 DEFAULT_EXCLUDES = [
     ".git/**",
@@ -42,7 +70,9 @@ class ConfigError(Exception):
 
 
 class Config(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors: a mistyped key field (``api_key = "sk-..."``) must never be
+    # echoed back in an error message or CI log.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     adr_paths: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=lambda: list(DEFAULT_EXCLUDES))
@@ -56,6 +86,33 @@ class Config(BaseModel):
     mode: Mode = "auto"
     provider: Provider = "anthropic"
     model: str | None = None
+    # LLM provider settings (see driftwarden.llm.get_provider). API keys are never
+    # stored in config: ``api_key_env`` names the environment variable to read.
+    base_url: str | None = None
+    api_key_env: str | None = None
+    timeout_s: float = Field(default=600.0, gt=0)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    input_cost_per_mtok: float | None = Field(default=None, ge=0)
+    output_cost_per_mtok: float | None = Field(default=None, ge=0)
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _env_var_name_only(cls, value: str | None) -> str | None:
+        if value is not None and not is_env_var_name(value):
+            # Deliberately does not echo the value: it may be a pasted secret.
+            raise ValueError(
+                "api_key_env must be the NAME of an environment variable in UPPER_SNAKE "
+                "case, at most 64 characters (e.g. ANTHROPIC_API_KEY), never the key itself"
+            )
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def _http_url(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith(("http://", "https://")):
+            raise ValueError("base_url must start with http:// or https://")
+        return value
+
     # Where the config came from; informational only.
     source: str | None = Field(default=None, exclude=True)
 
