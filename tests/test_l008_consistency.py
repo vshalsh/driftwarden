@@ -265,7 +265,10 @@ def test_a_mismatched_run_makes_the_vote_could_not_verify(judge_repo):
     assert v.display_status == "Could not verify"
     assert v.reasons and v.reasons[0].startswith("run 2: ")
     assert any("quote not" in r for r in v.reasons)
-    assert "inconsistent across runs: VIOLATED,UNKNOWN,VIOLATED" in v.reasons
+    assert (
+        "inconsistent across runs: VIOLATED,UNKNOWN,VIOLATED (proposed: VIOLATED,VIOLATED,VIOLATED)"
+        in v.reasons
+    )
     assert v.evidence and v.evidence[0].ref.quote == "def fabricated_line():"  # stays listed
     assert v.consistency.votes[1].grounding == "MISMATCH"
 
@@ -304,16 +307,68 @@ def test_all_runs_failing_is_unknown_with_every_error(judge_repo):
 def test_runs_parameter(judge_repo):
     repo, claim = _free(judge_repo)
     judge = Judge(repo, mode="llm", provider=FakeModel(sequence("HOLDING")))
-    for bad in (0, -1, True, 2.0, "3"):
+    for bad in (0, 1, -1, 26, True, 2.0, "3"):
         with pytest.raises(ValueError):
             ConsistencyRunner(judge, runs=bad)
+    assert ConsistencyRunner(judge, runs=25).runs == 25
     model = FakeModel(sequence("HOLDING", "VIOLATED"))
     v = ConsistencyRunner(Judge(repo, mode="llm", provider=model), runs=5).run(claim)
     assert v.reasons == ["inconsistent across runs: HOLDING,VIOLATED,HOLDING,VIOLATED,HOLDING"]
     assert len(model.requests) == 5
-    one = ConsistencyRunner(Judge(repo, mode="llm", provider=FakeModel(sequence("HOLDING"))), 1)
-    v1 = one.run(claim)
-    assert v1.status == "HOLDING" and v1.consistency.executed == 1
+    two = ConsistencyRunner(Judge(repo, mode="llm", provider=FakeModel(sequence("HOLDING"))), 2)
+    v2 = two.run(claim)
+    assert v2.status == "HOLDING" and v2.consistency.executed == 2
+
+
+def test_disagreeing_proposals_behind_a_shared_mismatch_are_inconsistent(judge_repo, tmp_path):
+    repo, claim = _free(judge_repo)
+    ledger = Ledger(tmp_path / "l", run_id="s1")
+    model = FakeModel(sequence("FAKE-HOLDING", "FAKE-VIOLATED", "FAKE-HOLDING"))
+    runner = ConsistencyRunner(Judge(repo, mode="llm", provider=model, ledger=ledger))
+    v = runner.run(claim)
+    assert (v.status, v.grounding) == ("UNKNOWN", "MISMATCH")
+    assert not v.consistency.agreement and v.proposed_status is None
+    assert (
+        "inconsistent across runs: UNKNOWN,UNKNOWN,UNKNOWN (proposed: HOLDING,VIOLATED,HOLDING)"
+        in v.reasons
+    )
+    assert ledger.check_rate("G6") == 0.0 and runner.summary()["consistency_rate"] == 0.0
+
+
+@pytest.mark.parametrize("exc", [RuntimeError("sdk bug"), KeyError("k"), OSError("net")])
+def test_non_llmerror_from_the_provider_is_contained_per_run(judge_repo, exc):
+    repo, claim = _free(judge_repo)
+    calls = {"n": 0}
+
+    def fn(req):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise exc
+        return sequence("HOLDING")(req)
+
+    v = ConsistencyRunner(Judge(repo, mode="llm", provider=FakeModel(fn))).run(claim)
+    assert (v.status, v.grounding) == ("UNKNOWN", "VERIFIED")
+    vt = v.consistency.votes[1]
+    assert vt.status == "UNKNOWN" and vt.error.startswith(type(exc).__name__ + ":")
+    assert any(r.startswith(f"run 2 failed: {type(exc).__name__}") for r in v.reasons)
+
+
+def test_interrupts_are_not_contained(judge_repo):
+    repo, claim = _free(judge_repo)
+
+    def fn(req):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        ConsistencyRunner(Judge(repo, mode="llm", provider=FakeModel(fn))).run(claim)
+
+
+def test_no_g6_row_without_two_executed_runs(judge_repo, tmp_path):
+    repo = judge_repo("pyshop")
+    ledger = Ledger(tmp_path / "l", run_id="n")
+    runner = ConsistencyRunner(Judge(repo, mode="offline", ledger=ledger))
+    runner.run_all(list(claims_of(repo).values()))
+    assert ledger.check_rate("G6") is None
 
 
 # ------------------------------------------------------------------ cost control
@@ -344,6 +399,7 @@ def test_rule_decided_claim_survives_a_model_error(judge_repo):
     v = ConsistencyRunner(Judge(repo, mode="llm", provider=FakeModel(sequence("ERROR")))).run(claim)
     assert v.status == "VIOLATED" and v.consistency.basis == "deterministic"
     assert v.consistency.votes[0].error  # recorded, not hidden
+    assert v.consistency.agreement is False  # same meaning as on a voted record
     assert any("LLM judge failed" in n for n in v.notes)
 
 

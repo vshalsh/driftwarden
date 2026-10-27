@@ -11,11 +11,17 @@ any run's gate says MISMATCH    ``UNKNOWN`` / ``MISMATCH`` (*Could not verify*)
                                 with every run's verifier reasons, prefixed
                                 ``run k:``; the unverified evidence stays
                                 listed. Never a violation.
-any run raised an LLMError      ``UNKNOWN`` (that run counts as UNKNOWN), with
-                                ``run k failed: <error>`` and the
+any run's provider call failed  ``UNKNOWN`` (that run counts as UNKNOWN), with
+                                ``run k failed: <ExcType>: <message>`` and the
                                 ``inconsistent across runs: ...`` reason.
 statuses differ                 ``UNKNOWN`` with the reason
                                 ``inconsistent across runs: HOLDING,VIOLATED,HOLDING``.
+                                A run whose gate said MISMATCH votes with what
+                                the model *proposed* (L008-S1): HOLDING / VIOLATED
+                                / HOLDING proposals that all fail the gate are a
+                                disagreement, reported as ``inconsistent across
+                                runs: UNKNOWN,UNKNOWN,UNKNOWN (proposed:
+                                HOLDING,VIOLATED,HOLDING)``.
 all runs agree                  that status. Evidence = the agreeing runs'
                                 evidence (deduplicated), re-verified by the
                                 same L-007 ``gate`` (G2/G3); a failure there
@@ -24,6 +30,19 @@ all runs agree                  that status. Evidence = the agreeing runs'
 
 Every voted verdict carries ``Verdict.consistency``: runs requested, runs made,
 each run's status / grounding / error / citations, and whether they agreed.
+``agreement`` means the same thing on both bases: every executed run has the
+same status, grounding and (for MISMATCH runs) proposal, and no run errored.
+
+``runs`` must be 2..25 (L008-S4 decision): one run cross-checks nothing, and
+more than 25 is a cost accident, not a vote.
+
+Provider failures are contained per run (L008-S2). An LLMError is handled by
+the judge as in L-007. Any other ``Exception`` from the provider call (an SDK
+bug, an OSError...) is recorded on that run's vote and re-raised to the judge as
+:class:`ProviderFailure` (an LLMError), so the judge treats it the same way and
+``run_all`` never aborts on one claim. ``KeyboardInterrupt`` / ``SystemExit``
+are not Exceptions and still stop the run. Exceptions from deterministic code
+(evidence, gate) are bugs and are not swallowed.
 
 Cost control (decision). The result cannot change between runs when
 deterministic code decides it, so those claims are judged **once**:
@@ -41,17 +60,18 @@ the judge falls back to the model, so the claim is voted like any other.
 
 Independence. The runner never reuses a reply: each run calls
 ``provider.complete_json`` itself, through a per-run wrapper that labels the
-cost-log purpose ``judge:<claim>#run<k>/<N>`` and records the run's LLMError.
+cost-log purpose ``judge:<claim>#run<k>/<N>`` and records the run's error.
 The L-005 providers keep no response cache and send no temperature or seed, so
 each call is an independent sample at the provider's default sampling.
 
 Ledger (G6). Each voted claim (``basis="vote"``) adds one ``G6`` row via
-``grounding.ledger``: VERIFIED when all runs agreed (same status and grounding,
-no errors), MISMATCH otherwise, with the claim's G1 provenance as the record it
-is about. ``Ledger.check_rate("G6")`` / ``ConsistencyRunner.summary()`` give the
-consistency rate. Deterministic claims add no G6 row (nothing was voted), and
-the re-verification of a voted verdict's evidence is not logged again (each run
-already logged its own G2/G3 results).
+``grounding.ledger``: VERIFIED when all runs agreed (``runs_agree``), MISMATCH
+otherwise, with the claim's G1 provenance as the record it is about. A G6 row
+needs at least 2 executed runs. ``Ledger.check_rate("G6")`` /
+``ConsistencyRunner.summary()`` give the consistency rate. Deterministic
+claims add no G6 row (nothing was voted), and the re-verification of a voted
+verdict's evidence is not logged again (each run already logged its own G2/G3
+results).
 """
 
 from __future__ import annotations
@@ -74,12 +94,20 @@ from driftwarden.models import (
 )
 
 DEFAULT_RUNS = 3
+MIN_RUNS = 2
+MAX_RUNS = 25
+
+
+class ProviderFailure(LLMError):
+    """A non-LLMError raised by the provider during one consistency run, re-raised as
+    an LLMError so the judge contains it like any other model failure."""
 
 
 class _RunProvider:
     """The judge's provider for one run: passes every call straight through (no
-    caching), labels the purpose with the run number, and records an LLMError
-    before re-raising it so the judge handles it exactly as it always does."""
+    caching), labels the purpose with the run number, and records any failure.
+    An LLMError is re-raised as is; any other Exception is re-raised as a
+    ProviderFailure, so the judge handles both exactly as it handles LLMErrors."""
 
     def __init__(self, inner: Provider, run: int, runs: int) -> None:
         self.inner = inner
@@ -89,7 +117,13 @@ class _RunProvider:
         self.run = run
         self.runs = runs
         self.calls = 0
-        self.error: LLMError | None = None
+        self.error: Exception | None = None
+
+    def _fail(self, exc: Exception) -> ProviderFailure | None:
+        self.error = exc
+        if isinstance(exc, LLMError):
+            return None
+        return ProviderFailure(f"{type(exc).__name__}: {exc}")
 
     def _label(self, purpose: str | None) -> str:
         return f"{purpose or 'judge'}#run{self.run}/{self.runs}"
@@ -107,9 +141,11 @@ class _RunProvider:
             return self.inner.complete(
                 prompt, system=system, max_tokens=max_tokens, purpose=self._label(purpose)
             )
-        except LLMError as exc:
-            self.error = exc
-            raise
+        except Exception as exc:  # noqa: BLE001 - contained per run (L008-S2)
+            wrapped = self._fail(exc)
+            if wrapped is None:
+                raise
+            raise wrapped from exc
 
     def complete_json(
         self,
@@ -125,9 +161,11 @@ class _RunProvider:
             return self.inner.complete_json(
                 prompt, schema, system=system, max_tokens=max_tokens, purpose=self._label(purpose)
             )
-        except LLMError as exc:
-            self.error = exc
-            raise
+        except Exception as exc:  # noqa: BLE001 - contained per run (L008-S2)
+            wrapped = self._fail(exc)
+            if wrapped is None:
+                raise
+            raise wrapped from exc
 
 
 def _unique(items: list[Any]) -> list[Any]:
@@ -142,8 +180,31 @@ def _unique(items: list[Any]) -> list[Any]:
     return out
 
 
+def _proposal(vt: RunVote) -> str:
+    """What a run votes with: its status, or for a gate MISMATCH what the model proposed."""
+    if vt.grounding != "VERIFIED" and vt.proposed_status is not None:
+        return vt.proposed_status
+    return vt.status
+
+
+def _vote_key(vt: RunVote) -> tuple[str, str, str]:
+    return (vt.status, vt.grounding, _proposal(vt))
+
+
+def runs_agree(votes: list[RunVote]) -> bool:
+    """Same status, grounding and proposal in every run, and no run errored."""
+    return not any(vt.error for vt in votes) and len({_vote_key(vt) for vt in votes}) == 1
+
+
+def _statuses(votes: list[RunVote]) -> str:
+    text = ",".join(vt.status for vt in votes)
+    if any(vt.grounding != "VERIFIED" for vt in votes):
+        text += " (proposed: " + ",".join(_proposal(vt) for vt in votes) + ")"
+    return text
+
+
 def inconsistency_reason(votes: list[RunVote]) -> str:
-    return "inconsistent across runs: " + ",".join(v.status for v in votes)
+    return "inconsistent across runs: " + _statuses(votes)
 
 
 class ConsistencyRunner:
@@ -161,8 +222,10 @@ class ConsistencyRunner:
         ledger: Ledger | None = None,
         dedupe_deterministic: bool = True,
     ) -> None:
-        if isinstance(runs, bool) or not isinstance(runs, int) or runs < 1:
-            raise ValueError(f"runs must be a positive integer, got {runs!r}")
+        if isinstance(runs, bool) or not isinstance(runs, int):
+            raise ValueError(f"runs must be an integer, got {runs!r}")
+        if not MIN_RUNS <= runs <= MAX_RUNS:
+            raise ValueError(f"runs must be between {MIN_RUNS} and {MAX_RUNS}, got {runs}")
         self.judge = judge
         self.runs = runs
         self.ledger = ledger if ledger is not None else judge.ledger
@@ -247,7 +310,11 @@ class ConsistencyRunner:
     def _deterministic(self, v: Verdict, vote: RunVote, why: str) -> Verdict:
         self.stats["deterministic"] += 1
         record = Consistency(
-            runs=self.runs, executed=1, basis="deterministic", agreement=True, votes=[vote]
+            runs=self.runs,
+            executed=1,
+            basis="deterministic",
+            agreement=runs_agree([vote]),  # False if the run errored, as on a voted record
+            votes=[vote],
         )
         note = f"deterministic ({why}): 1 run stands for {self.runs}; further runs skipped"
         return v.model_copy(update={"consistency": record, "notes": [*v.notes, note]})
@@ -256,7 +323,7 @@ class ConsistencyRunner:
         n = len(votes)
         self.stats["voted"] += 1
         errors = [vt for vt in votes if vt.error]
-        agreement = not errors and len({(vt.status, vt.grounding) for vt in votes}) == 1
+        agreement = runs_agree(votes)
         if agreement:
             self.stats["agreed"] += 1
         record = Consistency(
@@ -284,7 +351,8 @@ class ConsistencyRunner:
                 reasons=[*reasons, *inconsistent, *failed],
                 rationale=f"grounding MISMATCH in {len(mismatched)} of {n} run(s)",
                 origin=mismatched[0][0].origin,
-                proposed_status=mismatched[0][0].proposed_status,
+                # One proposal only when the runs agreed on it; otherwise see the votes.
+                proposed_status=mismatched[0][0].proposed_status if agreement else None,
                 notes=notes,
                 checks=_unique([c for v, _vt in mismatched for c in v.checks]),
                 **base,
@@ -315,12 +383,11 @@ class ConsistencyRunner:
         return gate(Verdict.model_validate(data), self.judge.root)
 
     def _record_g6(self, claim: Claim, voted: Verdict) -> None:
-        if self.ledger is None or voted.consistency is None:
-            return
         c = voted.consistency
-        statuses = ",".join(vt.status for vt in c.votes)
+        if self.ledger is None or c is None or c.basis != "vote" or c.executed < MIN_RUNS:
+            return  # nothing was cross-checked: no G6 row (L008-S4)
         if c.agreement:
-            reason = f"{c.executed}/{c.executed} runs agree: {statuses}"
+            reason = f"{c.executed}/{c.executed} runs agree: {_statuses(c.votes)}"
         else:
             reason = inconsistency_reason(c.votes)
             errs = [f"run {vt.run} failed" for vt in c.votes if vt.error]

@@ -246,7 +246,23 @@ def test_in_process_repeat_is_identical(repo):
     assert len(set(dumps)) == 1
 
 
-@pytest.mark.parametrize("runs", [1, 2, 3, 5, 8])
+@pytest.mark.parametrize(
+    "runs",
+    [
+        pytest.param(
+            1,
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=ValueError,
+                reason="superseded by the L008-S4 decision: runs must be 2..25",
+            ),
+        ),
+        2,
+        3,
+        5,
+        8,
+    ],
+)
 def test_offline_verdict_does_not_depend_on_n(repo, runs):
     claims = list(claims_of(repo).values())
     base = [
@@ -293,7 +309,16 @@ def test_any_disagreement_is_unknown_never_violated(repo, seq):
 @pytest.mark.parametrize(
     ("runs", "seq", "expect"),
     [
-        (1, ("VIOLATED",), "VIOLATED"),
+        pytest.param(
+            1,
+            ("VIOLATED",),
+            "VIOLATED",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=ValueError,
+                reason="superseded by the L008-S4 decision: runs must be 2..25",
+            ),
+        ),
         (2, ("VIOLATED", "VIOLATED"), "VIOLATED"),
         (2, ("VIOLATED", "HOLDING"), "UNKNOWN"),  # a tie
         (4, ("HOLDING", "HOLDING", "VIOLATED", "VIOLATED"), "UNKNOWN"),  # 2-2
@@ -323,6 +348,9 @@ def test_invalid_n_is_rejected(repo, bad):
         ConsistencyRunner(Judge(repo, mode="offline"), runs=bad)
 
 
+@pytest.mark.xfail(
+    strict=True, raises=ValueError, reason="superseded by the L008-S4 decision: runs must be 2..25"
+)
 def test_large_n_stays_linear_and_correct(repo):
     t = time.perf_counter()
     v, model, _ = run_one(repo, per_run("HOLDING"), runs=150)
@@ -380,7 +408,6 @@ def test_all_runs_ungrounded_identically_is_consistent_but_could_not_verify(repo
     assert runner.summary()["consistency_rate"] == 1.0
 
 
-@pytest.mark.xfail(strict=True, reason="L008-S1: disagreement hidden behind a shared gate MISMATCH")
 def test_s1_disagreeing_proposals_all_ungrounded_are_not_reported_as_agreement(repo, tmp_path):
     """HOLDING / VIOLATED / HOLDING proposed, every run's citations fabricated.
 
@@ -497,15 +524,13 @@ def test_cost_log_labels_every_run(repo):
 @pytest.mark.parametrize(
     "exc", [RuntimeError("sdk bug"), KeyError("x"), ValueError("v"), OSError("net")]
 )
+@pytest.mark.xfail(strict=True, reason="superseded by the L008-S2 fix: contained per run now")
 def test_non_llmerror_inside_a_run_today_propagates_from_run(repo, exc):
     """Documents current behaviour (and what S2 asks to change): the exception escapes run()."""
     with pytest.raises(type(exc)):
         run_one(repo, _raise(exc))
 
 
-@pytest.mark.xfail(
-    strict=True, reason="L008-S2: one non-LLMError aborts run_all and discards the batch"
-)
 def test_s2_run_all_contains_a_non_llmerror_from_one_claim(repo, tmp_path):
     """Claim 2's provider call raises RuntimeError. Expected: 3 verdicts, claim 2 UNKNOWN with
     the error on record, claims 1 and 3 judged and their G6 rows written. Actual: RuntimeError
@@ -610,9 +635,6 @@ def test_rule_decided_claim_with_flaky_model_is_stable_and_records_the_proposal(
     assert len(set(map(repr, verdicts))) == 1 and verdicts[0][:2] == ("VIOLATED", "VERIFIED")
 
 
-@pytest.mark.xfail(
-    strict=True, reason="L008-S3: deterministic record says agreement=True despite an error"
-)
 def test_s3_deterministic_record_does_not_claim_agreement_over_an_errored_run(repo):
     """Voted records set agreement=False when any run errored; the deterministic path hard-codes
     agreement=True while votes[0].error is set. Same field, two meanings."""
@@ -621,7 +643,11 @@ def test_s3_deterministic_record_does_not_claim_agreement_over_an_errored_run(re
     assert v.consistency.agreement is False
 
 
-@pytest.mark.xfail(strict=True, reason="L008-S4: runs=1 writes a vacuous G6 VERIFIED row")
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason="L008-S4 decision: runs=1 is rejected (runs 2..25), so no runs=1 G6 row can exist",
+)
 def test_s4_single_run_does_not_inflate_the_consistency_rate(repo, tmp_path):
     led = Ledger(tmp_path / "lg", run_id="n1")
     v, _, runner = run_one(repo, per_run("VIOLATED"), runs=1, ledger=led)
