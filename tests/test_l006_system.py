@@ -522,11 +522,15 @@ def test_D12_dedup_does_not_merge_claims_that_differ_in_scope_for_category_subje
         "All HTTP traffic goes through the gateway.",
         "We will use “Postgres” as the datastore.",
         "We will use «Zürich-DB» as the datastore.",
-        "Avoid MongoDB.",
     ],
 )
 def test_recall_observations(sentence):
     assert match_sentence(sentence)
+
+
+def test_recall_avoid_x_is_now_a_forbid():
+    """Was a recall observation above; L-006 added the 'Avoid X' forbid pattern."""
+    assert match_sentence("Avoid MongoDB.")
 
 
 # ================================================================== 2. whole-ADR behaviour
@@ -670,7 +674,6 @@ def test_code_fences_quotes_tables_and_comments(make_repo):
     assert_all_verified(repo, cs)
 
 
-@pytest.mark.xfail(strict=False, reason="HTML comment text is treated as prose (low); see report")
 def test_html_comment_is_not_prose(make_repo):
     _, _, cs = offline(make_repo, adr("<!-- Never use Redis. -->\n\nNo SQL outside `repo/`."))
     assert [c.kind for c in cs.claims] == ["boundary"]
