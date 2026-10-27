@@ -304,7 +304,7 @@ def test_base_url_userinfo_never_in_repr_error_or_log(url, secrets, tmp_path, mo
     def echoing_urlopen(req, timeout=None):
         raise urllib.error.URLError(f"failed to open {req.full_url}")
 
-    monkeypatch.setattr("urllib.request.urlopen", echoing_urlopen)
+    monkeypatch.setattr("driftwarden.llm.transport._open", echoing_urlopen)
     for cls in (AnthropicProvider, OpenAICompatProvider):
         kw = {"api_key": KEY, "base_url": url, "transport": urllib_transport,
               "cost_log": CostLog(tmp_path), "retry": RetryPolicy(max_attempts=2, sleep=lambda s: None)}  # fmt: skip
@@ -329,7 +329,7 @@ def test_base_url_userinfo_scrubbed_in_http_error_body(monkeypatch):
             req.full_url, 502, "bad", {}, io.BytesIO(f"proxy {url}".encode())
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr("driftwarden.llm.transport._open", fake)
     with pytest.raises(TransportError) as ei:
         urllib_transport(url + "/chat/completions", {}, {}, 1)
     assert "hunter2pw" not in str(ei.value)
@@ -348,7 +348,7 @@ def _http_error(monkeypatch, body, code=401):
             io.BytesIO(body if isinstance(body, bytes) else body.encode()),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr("driftwarden.llm.transport._open", fake)
 
 
 @pytest.mark.parametrize(

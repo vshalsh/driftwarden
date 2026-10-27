@@ -6,16 +6,25 @@ of JSON Schema that structured-output prompts use, including what Pydantic's
 ``model_json_schema()`` emits:
 
     type (string or list), enum, const, properties, required,
-    additionalProperties (bool or schema), items (schema), minItems, maxItems,
-    uniqueItems, minLength, maxLength, pattern, minimum, maximum,
+    additionalProperties (bool or schema), items (bool or schema), minItems,
+    maxItems, uniqueItems, minLength, maxLength, pattern, minimum, maximum,
     exclusiveMinimum, exclusiveMaximum, anyOf, oneOf, allOf, $ref (local "#/...").
 
 Unknown keywords (``format``, ``title``, ``description``, ``default``...) are ignored.
+``enum``/``const`` use JSON equality recursively (``[1]`` != ``[true]``, ``1`` == ``1.0``).
+Replies containing ``NaN``/``Infinity`` or numbers that overflow a float are invalid JSON.
+
+Known limits: ``uniqueItems`` compares items by their serialisation, so ``1`` and
+``1.0`` count as different; tuple-form ``items`` (a list), ``prefixItems``, ``not``,
+``if``/``then``/``else``, ``patternProperties`` and ``contains`` are not enforced (they
+are still checked for bad patterns and $refs by ``check_schema``); see also the
+ReDoS guard below.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 from functools import lru_cache
 from typing import Any, Literal, NamedTuple, Union
@@ -64,6 +73,21 @@ def schema_text(schema: dict[str, Any]) -> str:
     return json.dumps(schema, indent=2, sort_keys=True)
 
 
+class _NonFiniteNumber(ValueError):
+    pass
+
+
+def _reject_constant(name: str) -> Any:
+    raise _NonFiniteNumber(f"non-finite number {name}")
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):  # e.g. 1e999
+        raise _NonFiniteNumber(f"number out of range {text[:20]}")
+    return value
+
+
 def parse_json_reply(text: str) -> Any:
     """Parse ``text`` as JSON. One surrounding Markdown code fence is tolerated."""
     body = text.strip()
@@ -73,7 +97,13 @@ def parse_json_reply(text: str) -> Any:
     if not body:
         raise JsonSchemaError("json", ["reply was empty"], ["empty reply"])
     try:
-        return json.loads(body)
+        return json.loads(body, parse_constant=_reject_constant, parse_float=_finite_float)
+    except _NonFiniteNumber as exc:
+        raise JsonSchemaError(
+            "json",
+            [f"reply is not valid JSON: {exc} (NaN/Infinity are not JSON)"],
+            ["not valid JSON (non-finite number)"],
+        ) from exc
     except json.JSONDecodeError as exc:
         raise JsonSchemaError(
             "json", [f"reply is not valid JSON: {exc}"], [f"not valid JSON ({exc.msg})"]
@@ -253,10 +283,36 @@ def _pattern_mismatch(pattern: str, value: str) -> str | None:
 
 
 def _equal(a: Any, b: Any) -> bool:
-    # JSON equality: True != 1, 1 == 1.0
+    """JSON equality, recursively: True != 1, 1 == 1.0, [True] != [1]."""
     if isinstance(a, bool) or isinstance(b, bool):
         return type(a) is type(b) and a == b
-    return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_equal(x, y) for x, y in zip(a, b, strict=True))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_equal(a[k], b[k]) for k in a)
+    return type(a) is type(b) and a == b
+
+
+# Keywords whose value is a schema / a list of schemas / a name -> schema map.
+# Everything else (enum, const, default, examples, required, the *names* in
+# ``properties``...) is data, never traversed as a schema.
+_SCHEMA_KEYS = (
+    "items",
+    "additionalProperties",
+    "not",
+    "if",
+    "then",
+    "else",
+    "contains",
+    "propertyNames",
+    "additionalItems",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+)
+_SCHEMA_LIST_KEYS = ("allOf", "anyOf", "oneOf", "prefixItems")
+_SCHEMA_MAP_KEYS = ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas")
 
 
 def _walk(schema: Any):
@@ -265,18 +321,20 @@ def _walk(schema: Any):
     seen: set[int] = set()
     while stack:
         node = stack.pop()
-        if isinstance(node, list):
-            stack.extend(node)
-            continue
         if not isinstance(node, dict) or id(node) in seen:
             continue
         seen.add(id(node))
         yield node
-        for key, sub in node.items():
-            if key not in ("enum", "const", "default", "examples") and isinstance(
-                sub, (dict, list)
-            ):
-                stack.append(sub)
+        for key in _SCHEMA_KEYS:
+            stack.append(node.get(key))
+        for key in _SCHEMA_LIST_KEYS:
+            if isinstance(node.get(key), list):
+                stack.extend(node[key])
+        for key in _SCHEMA_MAP_KEYS:
+            if isinstance(node.get(key), dict):
+                stack.extend(node[key].values())
+        if isinstance(node.get("items"), list):  # draft-07 tuple form
+            stack.extend(node["items"])
 
 
 def check_schema(schema: Any) -> list[str]:
@@ -378,7 +436,7 @@ def _validate(
         _validate_object(value, schema, path, spath, sub, add, issues)
     elif isinstance(value, list):
         items = schema.get("items")
-        if isinstance(items, dict):
+        if isinstance(items, (dict, bool)):  # ``items: false`` forbids any item
             for i, v in enumerate(value):
                 issues += sub(v, items, f"{path}[{i}]", f"{spath}/items")
         if "minItems" in schema and len(value) < schema["minItems"]:

@@ -7,8 +7,12 @@ transport proves it fails cleanly instead of reaching the network.
 
 from __future__ import annotations
 
+import email.message
+import io
 import json
 import socket
+import urllib.request
+import urllib.response
 from pathlib import Path
 from typing import Literal
 
@@ -608,3 +612,116 @@ def test_redos_prone_pattern_is_bounded_not_run_on_long_text():
     assert validate_json("a" * 10, schema) == []
     (err,) = validate_json("a" * 40 + "!", schema)
     assert "ReDoS guard" in err
+
+
+# ------------------------------------------------------------------ Codex review (PR #12)
+
+
+class _Redirecting(urllib.request.BaseHandler):
+    """Fake http(s) handler: every request is answered with a 302 to ``target``."""
+
+    handler_order = 200  # before urllib's real HTTP(S)Handler (500)
+
+    def __init__(self, target: str) -> None:
+        self.target = target
+        self.requests: list[urllib.request.Request] = []
+
+    def _answer(self, req):
+        self.requests.append(req)
+        hdrs = email.message.Message()
+        hdrs["Location"] = self.target
+        resp = urllib.response.addinfourl(io.BytesIO(b""), hdrs, req.full_url, 302)
+        resp.msg = "Found"
+        return resp
+
+    https_open = http_open = _answer
+
+
+@pytest.mark.parametrize(
+    "target", ["http://api.example.com/v1/x", "https://evil.example.net/steal", "/same/origin"]
+)
+def test_redirects_are_refused_and_credentials_never_resent(monkeypatch, target):
+    import driftwarden.llm.transport as tr
+
+    fake = _Redirecting(target)
+    monkeypatch.setattr(tr, "_OPENER", urllib.request.build_opener(tr._RefuseRedirects, fake))
+    with pytest.raises(TransportError) as ei:
+        urllib_transport("https://api.example.com/v1/x", {"x-api-key": FAKE_KEY}, {}, 1)
+    assert ei.value.status == 302 and not ei.value.retryable
+    assert "redirect" in str(ei.value) and FAKE_KEY not in str(ei.value)
+    assert len(fake.requests) == 1  # the redirect target was never contacted
+
+
+def test_default_opener_refuses_redirects():
+    import driftwarden.llm.transport as tr
+
+    handlers = [type(h) for h in tr._OPENER.handlers]
+    assert tr._RefuseRedirects in handlers
+    assert urllib.request.HTTPRedirectHandler not in handlers
+
+
+@pytest.mark.parametrize(
+    "props",
+    [
+        {"pattern": {"type": "string"}, "$ref": {"type": "integer"}},
+        {"pattern": {"type": "string", "pattern": "^[a-z]+$"}},
+    ],
+)
+def test_property_names_that_are_keywords_are_not_schemas(props):
+    from driftwarden.llm.schema import check_schema
+
+    schema = {"type": "object", "properties": props, "required": list(props)}
+    assert check_schema(schema) == []
+    assert validate_json({k: ("abc" if k == "pattern" else 1) for k in props}, schema) == []
+
+
+def test_pydantic_field_named_pattern():
+    class Rule(BaseModel):
+        pattern: str
+        ref: int
+
+    t = FakeTransport(anthropic_reply('{"pattern": "a.*", "ref": 1}'))
+    p, _ = anthropic(t)
+    assert p.complete_json("x", Rule).value.pattern == "a.*"
+
+
+def test_nested_schemas_still_checked():
+    from driftwarden.llm.schema import check_schema
+
+    bad = {"type": "string", "pattern": "("}
+    for schema in (
+        {"properties": {"a": bad}},
+        {"items": bad},
+        {"anyOf": [bad]},
+        {"$defs": {"X": bad}},
+        {"not": bad},
+        {"prefixItems": [bad]},
+    ):
+        assert check_schema(schema), schema
+
+
+@pytest.mark.parametrize("text", ["NaN", "[Infinity]", '{"n": -Infinity}', "1e999", "[-1e400]"])
+def test_non_finite_numbers_are_invalid_json_and_retried(text):
+    with pytest.raises(ValueError, match="non-finite|out of range"):
+        parse_json_reply(text)
+    t = FakeTransport(anthropic_reply(text), anthropic_reply('{"n": 1}'))
+    p, _ = anthropic(t)
+    res = p.complete_json("x", {"type": "object"})
+    assert res.attempts == 2 and res.value == {"n": 1}
+
+
+@pytest.mark.parametrize(
+    ("value", "schema", "ok"),
+    [
+        ([1], {"enum": [[True]]}, False),
+        ([True], {"const": [True]}, True),
+        ({"a": 1}, {"const": {"a": True}}, False),
+        ({"a": 1.0}, {"const": {"a": 1}}, True),
+        ([1, 2], {"enum": [[1]]}, False),
+        ([], {"type": "array", "items": False}, True),
+        ([1], {"type": "array", "items": False}, False),
+        ([1], {"type": "array", "items": True}, True),
+    ],
+)
+def test_nested_json_equality_and_boolean_items(value, schema, ok):
+    assert (validate_json(value, schema) == []) is ok

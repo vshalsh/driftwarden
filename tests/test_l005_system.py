@@ -133,7 +133,7 @@ def test_http_status_retry_classification(monkeypatch, status, retryable):
     def fake_urlopen(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, status, "x", {}, None)
 
-    monkeypatch.setattr(tr.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(tr, "_open", fake_urlopen)
     with pytest.raises(TransportError) as ei:
         urllib_transport("https://api.example/v1", {"x-api-key": KEY}, {}, 5)
     assert ei.value.retryable is retryable
@@ -549,7 +549,7 @@ def test_base_url_credentials_not_in_transport_errors(monkeypatch):
     def boom(req, timeout=None):
         raise urllib.error.URLError("refused")
 
-    monkeypatch.setattr(tr.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(tr, "_open", boom)
     with pytest.raises(TransportError) as ei:
         urllib_transport("https://user:hunter2pw@host.example/v1", {}, {}, 1)
     assert "hunter2pw" not in str(ei.value)
