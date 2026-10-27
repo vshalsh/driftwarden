@@ -584,3 +584,27 @@ def test_key_shaped_env_names_rejected(pasted):
 
 def test_backoff_huge_attempt_is_capped():
     assert RetryPolicy(max_delay=7.0).delay(10**6) == 7.0
+
+
+@pytest.mark.parametrize(
+    ("pattern", "nested"),
+    [
+        ("^(a+)+$", True),
+        ("(a?)+", True),
+        ("(x|y+)*", True),
+        ("^[a-z]+-[0-9]{2}$", False),
+        ("^(ab)+$", False),
+        ("([a-z]{3})+", False),
+    ],
+)
+def test_nested_repeat_detection(pattern, nested):
+    from driftwarden.llm.schema import has_nested_repeat
+
+    assert has_nested_repeat(pattern) is nested
+
+
+def test_redos_prone_pattern_is_bounded_not_run_on_long_text():
+    schema = {"type": "string", "pattern": "^(a+)+$"}
+    assert validate_json("a" * 10, schema) == []
+    (err,) = validate_json("a" * 40 + "!", schema)
+    assert "ReDoS guard" in err

@@ -8,6 +8,8 @@ the requested schema. Callers must still verify every fact it asserts.
 from __future__ import annotations
 
 import itertools
+import math
+import re
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -87,16 +89,31 @@ class Usage(BaseModel):
     output_tokens: int = 0
 
 
+MAX_TOKEN_COUNT = 10**12
+"""Larger reported counts are treated as garbage (and as 0), keeping cost maths finite."""
+
+_ASCII_COUNT = re.compile(r"[0-9]{1,13}")
+
+
 def token_count(value: Any) -> int:
-    """A provider-reported token count; missing, non-numeric or negative counts as 0."""
+    """A provider-reported token count, always a sane non-negative int.
+
+    Missing, non-numeric, negative, non-finite or absurdly large (> 10**12) values
+    count as 0. Strings count only when they are plain ASCII digits.
+    """
     if isinstance(value, bool):
         return 0
-    if isinstance(value, int):
-        return max(value, 0)
-    if isinstance(value, float) and value == value and abs(value) != float("inf"):
-        return max(int(value), 0)
-    if isinstance(value, str) and value.strip().isdigit():
-        return int(value.strip())
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return 0
+        value = int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not _ASCII_COUNT.fullmatch(text):
+            return 0
+        value = int(text)
+    if isinstance(value, int) and 0 <= value <= MAX_TOKEN_COUNT:
+        return value
     return 0
 
 

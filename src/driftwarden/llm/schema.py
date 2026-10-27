@@ -155,8 +155,101 @@ def _resolve(ref: Any, root: Any) -> Any:
 def _regex(pattern: str) -> re.Pattern[str]:
     try:
         return re.compile(pattern)
-    except re.error as exc:
-        raise InvalidSchemaError(f"invalid pattern {pattern!r}: {exc}") from None
+    except Exception as exc:  # noqa: BLE001 - re.error, OverflowError, RecursionError...
+        shown = pattern if len(pattern) <= 80 else pattern[:77] + "..."
+        raise InvalidSchemaError(
+            f"invalid pattern {shown!r}: {type(exc).__name__}: {str(exc)[:120]}"
+        ) from None
+
+
+# ReDoS guard (D15). Python's ``re`` backtracks and has no timeout, and the text
+# matched against a caller's ``pattern`` is model output. Patterns with a repeat
+# nested inside another repeat (``(a+)+``, ``(\w+\s?)*``) can take exponential
+# time; they are only run on strings up to NESTED_REPEAT_MAX_LEN characters, and
+# every pattern is only run on strings up to PATTERN_MAX_LEN characters. Longer
+# strings fail the pattern with an explicit message (and are retried as usual).
+# Residual risk: overlapping alternations (``(a|a)*``) are not detected.
+PATTERN_MAX_LEN = 4096
+NESTED_REPEAT_MAX_LEN = 20
+
+
+def _sre_parser():
+    try:
+        import re._parser as parser  # Python >= 3.11
+
+        return parser
+    except ImportError:  # pragma: no cover - Python 3.10
+        import sre_parse as parser
+
+        return parser
+
+
+def _children(av: Any):
+    """Sub-sequences of ``(op, av)`` items inside a parsed-regex argument."""
+    items = av if isinstance(av, (tuple, list)) else (av,)
+    for item in items:
+        if hasattr(item, "data"):  # SubPattern
+            yield item
+        elif isinstance(item, list):
+            if item and all(hasattr(x, "data") for x in item):  # BRANCH alternatives
+                yield from item
+            elif all(isinstance(x, tuple) and len(x) == 2 for x in item):  # IN items
+                yield item
+
+
+def _repeat_ops() -> set[Any]:
+    c = _sre_parser()
+    return {
+        getattr(c, n) for n in ("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT") if hasattr(c, n)
+    }
+
+
+def _contains_repeat(items: Any, repeats: set[Any]) -> bool:
+    for op, av in items:
+        if op in repeats and av[0] != av[1]:  # variable-length repeat
+            return True
+        if any(_contains_repeat(ch, repeats) for ch in _children(av)):
+            return True
+    return False
+
+
+def _nested_repeat(items: Any, repeats: set[Any]) -> bool:
+    for op, av in items:
+        if op in repeats:
+            if av[1] > 1 and _contains_repeat(av[2], repeats):
+                return True
+            if _nested_repeat(av[2], repeats):
+                return True
+        elif any(_nested_repeat(ch, repeats) for ch in _children(av)):
+            return True
+    return False
+
+
+@lru_cache(maxsize=256)
+def has_nested_repeat(pattern: str) -> bool:
+    """True when ``pattern`` repeats something that itself repeats (ReDoS-prone).
+
+    Anything that cannot be analysed counts as nested (the safe answer).
+    """
+    try:
+        parsed = _sre_parser().parse(pattern)
+        return _nested_repeat(parsed.data if hasattr(parsed, "data") else parsed, _repeat_ops())
+    except Exception:  # noqa: BLE001 - unknown shapes are treated as risky
+        return True
+
+
+def _pattern_mismatch(pattern: str, value: str) -> str | None:
+    """Why ``value`` fails ``pattern`` (None when it matches). Raises InvalidSchemaError."""
+    compiled = _regex(pattern)
+    limit = NESTED_REPEAT_MAX_LEN if has_nested_repeat(pattern) else PATTERN_MAX_LEN
+    if len(value) > limit:
+        return (
+            f"is longer than {limit} characters, the most this pattern is checked "
+            f"against (ReDoS guard): {pattern!r}"
+        )
+    if compiled.search(value) is None:
+        return f"does not match pattern {pattern!r}"
+    return None
 
 
 def _equal(a: Any, b: Any) -> bool:
@@ -303,10 +396,11 @@ def _validate(
             add("maxLength", f"longer than {schema['maxLength']} characters")
         if "pattern" in schema:
             try:
-                if _regex(str(schema["pattern"])).search(value) is None:
-                    add("pattern", f"does not match pattern {schema['pattern']!r}")
+                why = _pattern_mismatch(str(schema["pattern"]), value)
             except InvalidSchemaError as exc:
-                add("pattern", str(exc))
+                why = str(exc)
+            if why is not None:
+                add("pattern", why)
     elif isinstance(value, (int, float)) and not isinstance(value, bool):
         for key, words in (
             ("minimum", "less than minimum"),

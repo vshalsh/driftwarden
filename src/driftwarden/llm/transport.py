@@ -1,4 +1,15 @@
-"""Default transport: JSON over HTTP(S) with the standard library (no SDK needed)."""
+"""Default transport: JSON over HTTP(S) with the standard library (no SDK needed).
+
+Secret handling: error messages never include request headers. Any response text
+that does appear in an error (an HTTP error body, a connection-error reason) is
+first scrubbed of every request header value (the API key, including the token
+after ``Bearer``) and of URL ``user:password@`` userinfo, and only then truncated,
+so a secret can never survive as a cut-off prefix.
+
+Known limit (D17): redaction matches the exact secret strings only. A server
+that echoes the key re-cased, URL-encoded or JSON-unicode-escaped is not
+redacted. Neither Anthropic nor OpenAI is known to do this.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +24,7 @@ from driftwarden.llm.base import TransportError
 
 RETRYABLE_STATUS = frozenset({408, 409, 425, 429})
 _MAX_ERROR_BODY = 300
+_MAX_ERROR_READ = 64 * 1024  # bytes of an error body read (then scrubbed, then truncated)
 
 
 def is_retryable_status(status: int) -> bool:
@@ -40,19 +52,19 @@ def urllib_transport(
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
-            detail = exc.read().decode("utf-8", "replace")[:_MAX_ERROR_BODY]
+            detail = exc.read(_MAX_ERROR_READ).decode("utf-8", "replace")
         except Exception:  # noqa: BLE001 - best effort only
             pass
+        # Scrub BEFORE truncating: a key straddling the cut must not leave a prefix.
+        detail = _scrub(detail, url, headers)[:_MAX_ERROR_BODY]
         raise TransportError(
-            _scrub(f"HTTP {exc.code} from {_host(url)}: {detail}".rstrip(": "), url, headers),
+            f"HTTP {exc.code} from {_host(url)}: {detail}".rstrip(": "),
             status=exc.code,
             retryable=is_retryable_status(exc.code),
         ) from None
     except (urllib.error.URLError, http.client.HTTPException, OSError) as exc:
-        reason = getattr(exc, "reason", exc)
-        raise TransportError(
-            _scrub(f"cannot reach {_host(url)}: {reason}", url, headers), retryable=True
-        ) from None
+        reason = _scrub(str(getattr(exc, "reason", exc)), url, headers)[:_MAX_ERROR_BODY]
+        raise TransportError(f"cannot reach {_host(url)}: {reason}", retryable=True) from None
     try:
         parsed = json.loads(raw)
     except (ValueError, UnicodeDecodeError) as exc:

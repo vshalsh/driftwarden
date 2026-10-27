@@ -274,11 +274,6 @@ SEGMENTED_SECRETS = [
 
 
 @pytest.mark.parametrize("shape", SEGMENTED_SECRETS)
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D16 (low, residual D1): segmented UPPER_CASE key-shaped values (groups < 16 chars) "
-    "pass is_env_var_name, so Config accepts them AND get_provider echoes them in the offline reason",
-)
 def test_segmented_uppercase_secret_not_accepted_or_echoed(shape):
     """Strengthened D1 invariant: a value is either rejected by Config, or never echoed.
     (The rewritten round-1 test cannot see this: it only tried one shape.)"""
@@ -394,11 +389,6 @@ def test_openai_bearer_echo_redacted_end_to_end(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("offset", [265, 275, 285])
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D12 (medium): urllib_transport truncates the error body to 300 chars BEFORE "
-    "scrubbing, so a key straddling the cut survives as an unredacted prefix (15-35 chars) in the exception",
-)
 def test_key_straddling_the_300_char_cut_not_leaked(monkeypatch, tmp_path, offset):
     _http_error(monkeypatch, "x" * offset + KEY)
     p = AnthropicProvider(
@@ -422,7 +412,8 @@ def test_key_straddling_the_300_char_cut_not_leaked(monkeypatch, tmp_path, offse
 @pytest.mark.xfail(
     strict=True,
     reason="D17 (INFO / accepted residual risk): redaction is exact-match only; a server that echoes the key "
-    "re-cased or re-encoded is not redacted. Not known to happen with Anthropic/OpenAI; recommend documenting.",
+    "re-cased or re-encoded is not redacted. Not known to happen with Anthropic/OpenAI. Known limit, "
+    "documented in the driftwarden.llm.transport module docstring; deliberately not fixed in L-005.",
 )
 def test_transformed_key_echo_is_redacted(monkeypatch, variant):
     _http_error(monkeypatch, f"bad key {variant}")
@@ -475,30 +466,9 @@ def test_retryable_exhaustion_redacts_final_error(tmp_path):
         pytest.param(-5, id="negative"),
         pytest.param(True, id="bool"),
         pytest.param("١٢٣", id="arabic-indic-digits"),
-        pytest.param(
-            "²",
-            id="superscript-two",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="DEFECT D13 (low): str.isdigit() is True for '²' but int() raises ValueError: D5 fix incomplete",
-            ),
-        ),
-        pytest.param(
-            "①",
-            id="circled-one",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="DEFECT D13 (low): same as superscript: isdigit() != int()-parsable",
-            ),
-        ),
-        pytest.param(
-            "9" * 5000,
-            id="5000-digit-string",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="DEFECT D13 (low): int() digit limit (4300) raises ValueError out of the provider",
-            ),
-        ),
+        pytest.param("²", id="superscript-two"),
+        pytest.param("①", id="circled-one"),
+        pytest.param("9" * 5000, id="5000-digit-string"),
     ],
 )
 def test_token_count_hostile_usage_never_escapes(bad):
@@ -522,10 +492,6 @@ def test_hostile_usage_end_to_end_logs_clean_record(tmp_path, field, bad):
         pytest.param({"input_tokens": "²", "output_tokens": 1}, id="superscript-str"),
         pytest.param({"input_tokens": 10**400, "output_tokens": 1}, id="int-beyond-float"),
     ],
-)
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D13 (low): non-numeric / astronomically large provider usage leaks bare ValueError / OverflowError out of complete()",
 )
 def test_pathological_usage_raises_no_bare_exception(tmp_path, usage):
     p = anth(Fake(a_reply("hello", usage=usage)), tmp_path)
@@ -664,29 +630,9 @@ def test_legit_recursive_schema_has_no_false_cycle_positive(tmp_path):
         pytest.param("(?<=a+)b", id="variable-lookbehind"),
         pytest.param(5, id="non-string"),
         pytest.param(None, id="none"),
-        pytest.param(
-            "a{99999999999}",
-            id="overflow-repeat",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="DEFECT D14 (low): re.compile raises OverflowError (not re.error) for huge repeat counts; leaks out of complete_json/validate_json",
-            ),
-        ),
-        pytest.param(
-            "a{1,99999999999}",
-            id="overflow-range",
-            marks=pytest.mark.xfail(
-                strict=True, reason="DEFECT D14 (low): same OverflowError leak"
-            ),
-        ),
-        pytest.param(
-            "(" * 3000 + ")" * 3000,
-            id="deeply-nested-groups",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="DEFECT D14 (low): re.compile raises RecursionError for deeply nested groups; leaks out",
-            ),
-        ),
+        pytest.param("a{99999999999}", id="overflow-repeat"),
+        pytest.param("a{1,99999999999}", id="overflow-range"),
+        pytest.param("(" * 3000 + ")" * 3000, id="deeply-nested-groups"),
     ],
 )
 def test_bad_pattern_gives_typed_error_and_validate_json_never_raises(tmp_path, pattern):
@@ -744,11 +690,6 @@ def test_ordinary_pattern_on_long_reply_is_fast():
     assert _run_redos("^[a-z]+$", 30) == "rejected"  # '!' fails the match: normal path
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D15 (medium): a caller schema 'pattern' with nested quantifiers is run unbounded against "
-    "model-controlled text; a 34-char reply pins a CPU for minutes (catastrophic backtracking), no timeout",
-)
 def test_catastrophic_backtracking_pattern_is_bounded():
     assert _run_redos("^(a+)+$", 6) == "rejected"
 

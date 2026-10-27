@@ -32,14 +32,25 @@ def is_env_var_name(value: object) -> bool:
     """True for a conventional UPPER_SNAKE environment variable name.
 
     Rejects anything shaped like a pasted secret: lowercase letters, punctuation,
-    more than 64 characters, or a long digit-bearing run (``AKIA...7EXAMPLE``).
+    more than 64 characters, or an underscore-separated segment that is
+
+    * 24+ characters long (``ABCDEFGHIJKLMNOPQRSTUVWXYZ``),
+    * 16+ characters with any digit (``AKIAIOSFODNN7EXAMPLE``), or
+    * 8+ characters mixing letters with 2+ digits (``A1B2C3D4``, ``AB12CD34``).
+
+    Real variable names (ANTHROPIC_API_KEY, AZURE_OPENAI_API_KEY_V2,
+    GOOGLE_APPLICATION_CREDENTIALS, LLM_KEY_20261027...) are words, short
+    version suffixes or all-digit dates.
     """
     if not isinstance(value, str) or not _ENV_NAME.fullmatch(value):
         return False
-    return not any(
-        len(seg) >= 24 or (len(seg) >= 16 and any(c.isdigit() for c in seg))
-        for seg in value.split("_")
-    )
+    for seg in value.split("_"):
+        digits = sum(c.isdigit() for c in seg)
+        if len(seg) >= 24 or (len(seg) >= 16 and digits):
+            return False
+        if len(seg) >= 8 and digits >= 2 and digits < len(seg):
+            return False
+    return True
 
 
 DEFAULT_EXCLUDES = [
