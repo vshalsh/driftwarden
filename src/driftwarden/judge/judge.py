@@ -227,6 +227,16 @@ def _ids(evs: list[Evidence]) -> str:
     return shown + (f" (+{len(evs) - 8})" if len(evs) > 8 else "")
 
 
+def _spread(evs: list[Evidence], n: int) -> list[Evidence]:
+    """Up to ``n`` items, the first of every technology before any second one, so a
+    verdict about several technologies cites each of them."""
+    firsts, rest, seen = [], [], set()
+    for e in evs:
+        (rest if e.technology in seen else firsts).append(e)
+        seen.add(e.technology)
+    return (firsts + rest)[: max(n, len(firsts))]
+
+
 def _names(evs: list[Evidence]) -> str:
     return ", ".join(sorted({e.technology or "?" for e in evs}))
 
@@ -311,19 +321,19 @@ def rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
         if req and missing:
             return v(
                 "UNKNOWN",
-                req[:10],
+                _spread(req, 10),
                 f"required {_names(req)} present, but {', '.join(map(repr, missing))} not found "
                 f"({es.searched}); absence cannot be cited as evidence",
             )
         if req and alt:
             return v(
                 "DRIFTING",
-                [*alt, *req[:5]],
+                [*alt, *_spread(req, 5)],
                 f"required {_names(req)} present, but {es.category} alternative "
                 f"{_names(alt)} also used ({_ids(alt)})",
             )
         if req:
-            return v("HOLDING", req[:10], f"required {_names(req)} present ({_ids(req)})")
+            return v("HOLDING", _spread(req, 10), f"required {_names(req)} present ({_ids(req)})")
         if alt:
             return v(
                 "VIOLATED",
@@ -345,7 +355,9 @@ def rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
         if alt:
             return v("DRIFTING", alt, f"other {es.category} {_names(alt)} in tests/dev scope only")
         if allowed:
-            return v("HOLDING", allowed[:10], f"only {_names(allowed)} used as {es.category}")
+            return v(
+                "HOLDING", _spread(allowed, 10), f"only {_names(allowed)} used as {es.category}"
+            )
         return v("HOLDING", [], f"no other {es.category} found ({es.searched})")
 
     if kind == "boundary":

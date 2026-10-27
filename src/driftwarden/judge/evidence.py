@@ -46,6 +46,17 @@ non-shipping (``requirements-dev.txt``, ``requirements/test.txt``,
 ``is_nonproduction_manifest``); the rules then call the claim DRIFTING rather
 than VIOLATED.
 
+A claim with an ``actor`` ("Handlers must not import boto3 outside adapters/")
+counts only occurrences in the actor's code: directories or modules named like
+it (``handlers/``, ``handler.py``; see ``resolve_actor``). Whole-codebase actors
+("code", "modules") need no filter; an actor that names nothing in the
+repository makes the claim UNKNOWN ("actor scope not resolvable"), never
+VIOLATED. "Alternative" evidence never includes an occurrence that also matches
+the allowed/required technology (``ioredis`` is not a second cache next to
+itself). The per-claim cap keeps up to ``max_per_relation`` items per
+(relation, kind, production, technology) group, so a flood of one package can
+never hide another technology the verdict depends on; truncation is noted.
+
 Commit and WORKTREE snapshots select files the same way (by name, symlinks never
 followed) and decode them like the verifiers (``text.decode_text``), so UTF-16
 manifests are citable and both modes see the same evidence.
@@ -67,7 +78,7 @@ from __future__ import annotations
 import posixpath
 import re
 import tempfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -374,12 +385,48 @@ def is_nonproduction_manifest(path: str) -> bool:
     return any(w in _NONPROD_NAME_WORDS for w in words)
 
 
+# Whole words in a scope's name that mark it as non-shipping. "staging" is NOT in the
+# list: a staging deployment still runs the technology, so a claim about it applies.
+_NONPROD_SCOPE_WORDS = frozenset(
+    {"dev", "devel", "development", "test", "tests", "testing", "e2e", "ci", "docs", "doc",
+     "lint", "linting", "mock", "mocks", "fixture", "fixtures", "bench", "benchmark"}
+)  # fmt: skip
+
+
+def _words(name: str) -> list[str]:
+    """``testImplementation`` -> [test, implementation]; ``test-db`` -> [test, db]."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name)
+    return [w for w in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if w]
+
+
 def is_weak_scope(scope: str | None) -> bool:
-    """True for dependency scopes that do not ship: dev, test, build, optional, groups."""
+    """True for dependency scopes that do not ship.
+
+    The scope is read structurally, never by substring:
+
+    * a bare scope (``dev``, ``test``, ``build``, ``plugin``, ``parent``,
+      ``indirect``, ``peer``) is weak when it is one of those words or its words
+      include a non-shipping word (``testImplementation``, ``androidTestApi``);
+    * ``optional:<extra>`` and ``group:<name>`` (Python extras and dependency
+      groups) are always weak;
+    * ``<kind>:<name>`` / ``<Kind>/<name>`` (``service:web``, ``Deployment/api``,
+      ``module:vpc``) is weak only if a whole word of the *name* is a
+      non-shipping word: ``service:test-db`` and ``Deployment/e2e-runner`` are,
+      ``service:contest``, ``Deployment/attestation``, ``service:latest`` and
+      ``CronJob/protest`` are not. ``staging`` counts as shipping.
+    """
     if not scope:
         return False
-    s = scope.lower()
-    return s in _WEAK_SCOPES or s.startswith(("optional:", "group:")) or "test" in s
+    s = scope.strip()
+    low = s.lower()
+    if low.startswith(("optional:", "group:")):
+        return True
+    m = re.match(r"^([A-Za-z][\w.-]*)[:/](.+)$", s)
+    if m:
+        return any(w in _NONPROD_SCOPE_WORDS for w in _words(m.group(2)))
+    if low in _WEAK_SCOPES:
+        return True
+    return any(w in _NONPROD_SCOPE_WORDS for w in _words(s))
 
 
 def in_dir(path: str, directory: str) -> bool:
@@ -503,6 +550,8 @@ class _Collector:
         self.seen: set[tuple] = set()
         self.counts: dict[str, int] = {}
         self.notes: list[str] = []
+        self.actor: Callable[[str], bool] | None = None
+        """Only occurrences in files of the claim's actor count (None: whole repo)."""
 
     def add_occurrence(self, o: _Occurrence, relation: EvidenceRelation, tech: Technology) -> None:
         if o.edge is not None:
@@ -568,6 +617,8 @@ class _Collector:
                     continue
                 if where is not None and not where(o):
                     continue
+                if self.actor is not None and not self.actor(o.path):
+                    continue
                 if catalog.name_matches(tech, o.namespace, o.names):
                     rel = relation(o) if callable(relation) else relation
                     if rel is None:
@@ -616,7 +667,7 @@ class _Collector:
             # The cap is per (relation, kind, production) group, so many manifest
             # declarations can never crowd out the one decisive production import:
             # every group the verdict depends on keeps at least its first items.
-            g = (d["relation"], d["kind"], d["production"])
+            g = (d["relation"], d["kind"], d["production"], d.get("technology"))
             if d["relation"] != "keyword" and per.get(g, 0) >= self.max:
                 dropped += 1
                 continue
@@ -698,6 +749,73 @@ def _techs(resolutions: Iterable[Resolution]) -> list[Technology]:
     return list(seen.values())
 
 
+def _not_matching(techs: list[Technology]):
+    """Occurrence filter: drop occurrences that match any of ``techs``, so one package
+    (``ioredis``) is never both the allowed technology and an "alternative" (redis)."""
+
+    def where(o: _Occurrence) -> bool:
+        return not any(catalog.name_matches(t, o.namespace, o.names) for t in techs)
+
+    return where
+
+
+# Actors that name the whole codebase rather than a part of it.
+_WHOLE_REPO_ACTORS = frozenset(
+    """code codebase module modules package packages file files component components
+    anyone anything nobody everyone project repository repo application app we they
+    everything""".split()
+)
+
+
+def _actor_variants(actor: str) -> set[str]:
+    words = [w for w in re.split(r"[^a-z0-9]+", actor.lower()) if w]
+    words = [w for w in words if w not in ("the", "a", "an", "all", "any", "every", "each", "our")]
+    if not words:
+        return set()
+    out = {"-".join(words), "_".join(words), "".join(words), words[-1]}
+    for v in list(out):
+        if v.endswith("s") and len(v) > 3:
+            out.add(v[:-1])
+        else:
+            out.add(v + "s")
+    return out
+
+
+def resolve_actor(actors: list[str], snap: Snapshot) -> tuple[Callable[[str], bool] | None, str]:
+    """A path filter for the claim's actor(s), and a reason when one cannot be built.
+
+    An actor maps to the repository directories (or file stems) named like it:
+    "Handlers" -> ``handlers/`` or ``handler.py``, "request handlers" ->
+    ``request_handlers/``. Whole-codebase actors ("code", "modules") need no filter.
+    Returns ``(None, "")`` for the whole repo, ``(None, reason)`` if unresolvable.
+    """
+    names: set[str] = set()
+    for a in actors:
+        clean = " ".join(a.lower().split())
+        if clean in _WHOLE_REPO_ACTORS or clean.removeprefix("the ") in _WHOLE_REPO_ACTORS:
+            return None, ""
+        variants = _actor_variants(a)
+        if not variants:
+            return None, f"actor scope not resolvable: {a!r}"
+        names |= variants
+    dirs = {d for d in snap.directories() if posixpath.basename(d).lower() in names}
+    stems = {
+        f.path
+        for f in snap.files
+        if posixpath.splitext(posixpath.basename(f.path))[0].lower() in names
+    }
+    if not dirs and not stems:
+        return None, (
+            f"actor scope not resolvable: no directory or module named like "
+            f"{', '.join(map(repr, actors))}"
+        )
+
+    def where(path: str) -> bool:
+        return path in stems or any(path.startswith(d + "/") for d in dirs)
+
+    return where, ""
+
+
 def _scope_filter(paths: list[str]):
     def where(o: _Occurrence) -> bool:
         return any(in_dir(o.path, d) for d in paths)
@@ -745,7 +863,11 @@ def _require(c: _Collector, es: EvidenceSet) -> None:
     es.category = cat
     if cat is not None:
         ids = {t.id for t in required}
-        c.scan([t for t in catalog.members(cat) if t.id not in ids], "alternative")
+        c.scan(
+            [t for t in catalog.members(cat) if t.id not in ids],
+            "alternative",
+            where=_not_matching(required),
+        )
 
 
 def _only(c: _Collector, es: EvidenceSet) -> None:
@@ -769,7 +891,11 @@ def _only(c: _Collector, es: EvidenceSet) -> None:
     allowed = _techs(res)
     c.scan(allowed, "allowed")
     ids = {t.id for t in allowed}
-    c.scan([t for t in catalog.members(cat) if t.id not in ids], "alternative")
+    c.scan(
+        [t for t in catalog.members(cat) if t.id not in ids],
+        "alternative",
+        where=_not_matching(allowed),
+    )
 
 
 def _boundary(c: _Collector, es: EvidenceSet) -> None:
@@ -815,6 +941,8 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
                 continue
             if in_dir(e.source, d):
                 continue  # a module importing its own package
+            if c.actor is not None and not c.actor(e.source):
+                continue
             o = _Occurrence("import", "local", (e.target,), e.source, edge=e)
             c.add_occurrence(o, side(o), Technology(id=f"{d}/", category=None))
 
@@ -838,10 +966,18 @@ def collect_evidence(
     es = EvidenceSet(claim_id=claim.id, commit=snap.commit)
     c = _Collector(claim, snap, max_per_relation)
     handler = _KINDS.get(claim.kind)
+    actors = _str_list(claim.rule.get("actor"))
     if handler is None:
         es.undecidable = "free-form claim: no deterministic rule"
     else:
-        handler(c, es)
+        if actors:
+            c.actor, why = resolve_actor(actors, snap)
+            if why:
+                es.undecidable = why
+            elif c.actor is not None:
+                es.notes.append(f"restricted to the code of {', '.join(actors)}")
+        if not es.undecidable:
+            handler(c, es)
     n_manifests = sum(1 for _ in snap.manifests)
     es.searched = (
         f"{n_manifests} manifest(s), {len(snap.imports)} import edge(s) in "

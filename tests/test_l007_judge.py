@@ -1212,3 +1212,118 @@ def test_d8_unreadable_large_manifest_is_noted(tmp_path):
         v = Judge(repo, mode="offline", commit=commit).judge(_claim("forbid", MONGO_FORBID))
         assert v.status == "HOLDING" and "incomplete" in v.rationale
         assert any("requirements.txt" in n and "manifest not read" in n for n in v.notes)
+
+
+# ------------------------------------------------------------------ scopes read structurally
+
+
+@pytest.mark.parametrize(
+    "scope,weak",
+    [
+        ("service:contest", False),
+        ("Deployment/attestation", False),
+        ("service:latest", False),
+        ("CronJob/protest", False),
+        ("service:staging", False),
+        ("service:web", False),
+        ("Deployment/api", False),
+        ("catalog:testcontainers-bom", False),
+        ("runtime", False),
+        ("base", False),
+        ("service:test-db", True),
+        ("Deployment/e2e-runner", True),
+        ("service:ci", True),
+        ("test", True),
+        ("dev", True),
+        ("testImplementation", True),
+        ("androidTestImplementation", True),
+        ("optional:docs", True),
+        ("optional:postgres", True),
+        ("group:lint", True),
+        ("indirect", True),
+        (None, False),
+    ],
+)
+def test_scope_is_matched_by_whole_words(scope, weak):
+    assert is_weak_scope(scope) is weak
+
+
+def test_compose_service_named_contest_is_production(tmp_path):
+    compose = "services:\n  contest:\n    image: mongo:7\n  test-db:\n    image: mongo:7\n"
+    repo = _repo_with(tmp_path, {"docker-compose.yml": compose})
+    v = Judge(repo, mode="offline").judge(_claim("forbid", MONGO_FORBID))
+    assert v.status == "VIOLATED"
+    assert [(e.dependency.scope, e.production) for e in v.evidence] == [("service:contest", True)]
+
+
+# ------------------------------------------------------------------ Codex review of 616c085
+
+
+def test_codex_cap_keeps_every_required_technology(tmp_path):
+    files = {f"src/f{i:02d}.py": "import httpx\n" for i in range(60)}
+    files["src/zz.py"] = "import structlog\n"
+    repo = _repo_with(tmp_path, files)
+    c = _claim("require", {"require": ["httpx", "structlog"]})
+    es = collect_evidence(c, load_snapshot(repo))
+    assert {e.technology for e in es.with_relation("required")} == {"httpx", "structlog"}
+    assert any("not listed (cap 50)" in n for n in es.notes)
+    v = Judge(repo, mode="offline").judge(c)
+    assert v.status == "HOLDING", v.rationale
+    assert "structlog" in {e.technology for e in v.evidence}
+
+
+def _actor_repo(tmp_path, files):
+    base = {"src/adapters/s3.py": "import boto3\n", "src/jobs/nightly.py": "import boto3\n"}
+    return _repo_with(tmp_path, {**base, **files})
+
+
+def test_codex_actor_restricts_boundary_evidence(tmp_path):
+    rule = {"target": ["boto3"], "allowed_in": ["adapters/"], "actor": ["Handlers"]}
+    # No handlers in the repo: the actor names nothing -> UNKNOWN, never VIOLATED.
+    repo = _actor_repo(tmp_path / "a", {})
+    v = Judge(repo, mode="offline").judge(_claim("boundary", rule))
+    assert v.status == "UNKNOWN" and "actor scope not resolvable" in v.rationale
+    # Handlers exist and are clean; the unrelated job is not the handlers' code.
+    repo = _actor_repo(tmp_path / "b", {"src/handlers/api.py": "import json\n"})
+    v = Judge(repo, mode="offline").judge(_claim("boundary", rule))
+    assert v.status == "HOLDING", v.rationale
+    # A handler importing boto3 outside adapters/ is the violation.
+    repo = _actor_repo(tmp_path / "c", {"src/handlers/api.py": "import boto3\n"})
+    v = Judge(repo, mode="offline").judge(_claim("boundary", rule))
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["src/handlers/api.py"]
+    # A single-module actor (handler.py) resolves too.
+    repo = _actor_repo(tmp_path / "d", {"src/handler.py": "import boto3\n"})
+    v = Judge(repo, mode="offline").judge(_claim("boundary", rule))
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["src/handler.py"]
+    # A whole-codebase actor keeps the whole repository in scope.
+    whole = {**rule, "actor": ["code"]}
+    repo = _actor_repo(tmp_path / "e", {})
+    v = Judge(repo, mode="offline").judge(_claim("boundary", whole))
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["src/jobs/nightly.py"]
+
+
+def test_codex_actor_applies_to_forbid_too(tmp_path):
+    repo = _actor_repo(tmp_path, {"src/handlers/api.py": "import json\n"})
+    rule = {"forbid": ["boto3"], "actor": ["handlers"]}
+    v = Judge(repo, mode="offline").judge(_claim("forbid", rule))
+    assert v.status == "HOLDING"
+    v = Judge(repo, mode="offline").judge(_claim("forbid", {**rule, "actor": ["workers"]}))
+    assert v.status == "UNKNOWN" and "actor scope not resolvable" in v.rationale
+
+
+def test_codex_allowed_package_is_never_its_own_alternative(tmp_path):
+    pkg = '{"name": "x", "dependencies": {"ioredis": "^5.0.0"}}\n'
+    repo = _repo_with(tmp_path, {"package.json": pkg, "src/c.js": 'import Redis from "ioredis";\n'})
+    judge = Judge(repo, mode="offline")
+    only = judge.judge(_claim("only", {"only": ["ioredis"], "category": "cache"}))
+    assert only.status == "HOLDING", only.rationale
+    assert {e.relation for e in only.evidence} == {"allowed"}
+    req = judge.judge(_claim("require", {"require": ["ioredis"], "for": "cache"}))
+    assert req.status == "HOLDING", req.rationale
+    # A genuinely different cache is still an alternative.
+    pkg2 = '{"name": "x", "dependencies": {"ioredis": "^5.0.0", "memjs": "^1.0.0"}}\n'
+    repo2 = _repo_with(tmp_path / "b", {"package.json": pkg2})
+    v = Judge(repo2, mode="offline").judge(
+        _claim("only", {"only": ["ioredis"], "category": "cache"})
+    )
+    assert v.status == "VIOLATED" and {e.technology for e in v.evidence} == {"memcached"}
