@@ -9,6 +9,7 @@ to price any OpenAI-compatible model. An unknown model is logged with
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -45,4 +46,8 @@ def cost_usd(
     if price is None:
         return None
     pin, pout = price
-    return round((usage.input_tokens * pin + usage.output_tokens * pout) / 1_000_000, 8)
+    try:
+        cost = (usage.input_tokens * pin + usage.output_tokens * pout) / 1_000_000
+    except (OverflowError, TypeError):
+        return None
+    return round(cost, 8) if math.isfinite(cost) else None

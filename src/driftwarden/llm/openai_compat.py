@@ -91,23 +91,29 @@ def parse_response(data: dict[str, Any], model: str) -> LLMResponse:
     choice = choices[0]
     message = choice.get("message")
     message = message if isinstance(message, dict) else {}
+    raw_usage = data.get("usage")
+    raw_usage = raw_usage if isinstance(raw_usage, dict) else {}
+    usage = Usage(
+        input_tokens=token_count(raw_usage.get("prompt_tokens")),
+        output_tokens=token_count(raw_usage.get("completion_tokens")),
+    )
+    served_by = str(data.get("model") or model)
     if message.get("refusal"):
         # The refusal text is model output: kept on the exception for the caller,
-        # never written to the cost log (which records only the outcome).
-        raise RefusalError(f"model declined the request: {str(message['refusal'])[:200]}")
+        # never written to the cost log (which records only the outcome and usage).
+        raise RefusalError(
+            f"model declined the request: {str(message['refusal'])[:200]}",
+            usage=usage,
+            model=served_by,
+        )
     content = message.get("content")
     if isinstance(content, list):  # some servers return content parts
         content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
-    usage = data.get("usage")
-    usage = usage if isinstance(usage, dict) else {}
     return LLMResponse(
         text=content or "",
-        model=str(data.get("model") or model),
+        model=served_by,
         provider="openai",
-        usage=Usage(
-            input_tokens=token_count(usage.get("prompt_tokens")),
-            output_tokens=token_count(usage.get("completion_tokens")),
-        ),
+        usage=usage,
         stop_reason=choice.get("finish_reason"),
         response_id=data.get("id"),
     )

@@ -85,26 +85,33 @@ def parse_response(data: dict[str, Any], model: str) -> LLMResponse:
     if not isinstance(content, list):
         raise TransportError("anthropic response has no content list", retryable=True)
     stop = data.get("stop_reason")
+    raw_usage = data.get("usage")
+    raw_usage = raw_usage if isinstance(raw_usage, dict) else {}
+    usage = Usage(
+        input_tokens=token_count(raw_usage.get("input_tokens"))
+        + token_count(raw_usage.get("cache_creation_input_tokens"))
+        + token_count(raw_usage.get("cache_read_input_tokens")),
+        output_tokens=token_count(raw_usage.get("output_tokens")),
+    )
+    served_by = str(data.get("model") or model)
     if stop == "refusal":
         details = data.get("stop_details")
         category = details.get("category") if isinstance(details, dict) else None
         category = category if isinstance(category, str) and category.isidentifier() else None
-        raise RefusalError(f"model declined the request (category={category})", category=category)
+        raise RefusalError(
+            f"model declined the request (category={category})",
+            category=category,
+            usage=usage,
+            model=served_by,
+        )
     text = "".join(
         b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
     )
-    usage = data.get("usage")
-    usage = usage if isinstance(usage, dict) else {}
     return LLMResponse(
         text=text,
-        model=str(data.get("model") or model),
+        model=served_by,
         provider="anthropic",
-        usage=Usage(
-            input_tokens=token_count(usage.get("input_tokens"))
-            + token_count(usage.get("cache_creation_input_tokens"))
-            + token_count(usage.get("cache_read_input_tokens")),
-            output_tokens=token_count(usage.get("output_tokens")),
-        ),
+        usage=usage,
         stop_reason=stop,
         response_id=data.get("id"),
     )

@@ -6,19 +6,29 @@ of JSON Schema that structured-output prompts use, including what Pydantic's
 ``model_json_schema()`` emits:
 
     type (string or list), enum, const, properties, required,
-    additionalProperties (bool or schema), items (schema), minItems, maxItems,
-    uniqueItems, minLength, maxLength, pattern, minimum, maximum,
+    additionalProperties (bool or schema), items (bool or schema), minItems,
+    maxItems, uniqueItems, minLength, maxLength, pattern, minimum, maximum,
     exclusiveMinimum, exclusiveMaximum, anyOf, oneOf, allOf, $ref (local "#/...").
 
 Unknown keywords (``format``, ``title``, ``description``, ``default``...) are ignored.
+``enum``/``const`` use JSON equality recursively (``[1]`` != ``[true]``, ``1`` == ``1.0``).
+Replies containing ``NaN``/``Infinity`` or numbers that overflow a float are invalid JSON.
+
+Known limits: ``uniqueItems`` compares items by their serialisation, so ``1`` and
+``1.0`` count as different; tuple-form ``items`` (a list), ``prefixItems``, ``not``,
+``if``/``then``/``else``, ``patternProperties`` and ``contains`` are not enforced (they
+are still checked for bad patterns and $refs by ``check_schema``); see also the
+ReDoS guard below.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 from functools import lru_cache
 from typing import Any, Literal, NamedTuple, Union
+from urllib.parse import unquote
 
 from pydantic import BaseModel, ValidationError
 
@@ -64,6 +74,21 @@ def schema_text(schema: dict[str, Any]) -> str:
     return json.dumps(schema, indent=2, sort_keys=True)
 
 
+class _NonFiniteNumber(ValueError):
+    pass
+
+
+def _reject_constant(name: str) -> Any:
+    raise _NonFiniteNumber(f"non-finite number {name}")
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):  # e.g. 1e999
+        raise _NonFiniteNumber(f"number out of range {text[:20]}")
+    return value
+
+
 def parse_json_reply(text: str) -> Any:
     """Parse ``text`` as JSON. One surrounding Markdown code fence is tolerated."""
     body = text.strip()
@@ -73,13 +98,25 @@ def parse_json_reply(text: str) -> Any:
     if not body:
         raise JsonSchemaError("json", ["reply was empty"], ["empty reply"])
     try:
-        return json.loads(body)
+        return json.loads(body, parse_constant=_reject_constant, parse_float=_finite_float)
+    except _NonFiniteNumber as exc:
+        raise JsonSchemaError(
+            "json",
+            [f"reply is not valid JSON: {exc} (NaN/Infinity are not JSON)"],
+            ["not valid JSON (non-finite number)"],
+        ) from exc
     except json.JSONDecodeError as exc:
         raise JsonSchemaError(
             "json", [f"reply is not valid JSON: {exc}"], [f"not valid JSON ({exc.msg})"]
         ) from exc
-    except RecursionError as exc:
+    except (RecursionError, MemoryError) as exc:
         raise JsonSchemaError("json", [f"reply is {_TOO_DEEP}"], [_TOO_DEEP]) from exc
+    except ValueError as exc:  # e.g. an integer longer than sys.get_int_max_str_digits()
+        raise JsonSchemaError(
+            "json",
+            [f"reply is not valid JSON: {str(exc)[:200]}"],
+            ["not valid JSON (unparseable value)"],
+        ) from exc
 
 
 def validate_reply(data: Any, schema: Schema) -> Any:
@@ -136,16 +173,29 @@ def _is_type(value: Any, name: str) -> bool:
 
 
 def _resolve(ref: Any, root: Any) -> Any:
+    """Resolve a local ``$ref`` (a URI fragment holding an RFC 6901 JSON pointer).
+
+    ``#`` is the root. Every ``/``-separated token counts, empty ones included
+    (``#/$defs/`` is the member named "" of ``$defs``); ``~1`` -> ``/`` and
+    ``~0`` -> ``~``, after percent-decoding the fragment. Array members are
+    addressed by decimal index (``#/allOf/0``).
+    """
     if not isinstance(ref, str) or not ref.startswith("#"):
         raise InvalidSchemaError(f"only local $ref is supported: {ref!r}")
+    pointer = unquote(ref[1:])
+    if pointer and not pointer.startswith("/"):
+        raise InvalidSchemaError(f"unsupported $ref (not a JSON pointer): {ref!r}")
     node: Any = root
-    for part in ref[1:].strip("/").split("/"):
-        if not part:
-            continue
+    for part in pointer.split("/")[1:] if pointer else []:
         part = part.replace("~1", "/").replace("~0", "~")
-        if not isinstance(node, dict) or part not in node:
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        elif isinstance(node, list) and re.fullmatch(r"0|[1-9][0-9]{0,8}", part):
+            if int(part) >= len(node):
+                raise InvalidSchemaError(f"unresolvable $ref: {ref}")
+            node = node[int(part)]
+        else:
             raise InvalidSchemaError(f"unresolvable $ref: {ref}")
-        node = node[part]
     if not isinstance(node, (dict, bool)):
         raise InvalidSchemaError(f"$ref does not point at a schema: {ref}")
     return node
@@ -155,15 +205,134 @@ def _resolve(ref: Any, root: Any) -> Any:
 def _regex(pattern: str) -> re.Pattern[str]:
     try:
         return re.compile(pattern)
-    except re.error as exc:
-        raise InvalidSchemaError(f"invalid pattern {pattern!r}: {exc}") from None
+    except Exception as exc:  # noqa: BLE001 - re.error, OverflowError, RecursionError...
+        shown = pattern if len(pattern) <= 80 else pattern[:77] + "..."
+        raise InvalidSchemaError(
+            f"invalid pattern {shown!r}: {type(exc).__name__}: {str(exc)[:120]}"
+        ) from None
+
+
+# ReDoS guard (D15). Python's ``re`` backtracks and has no timeout, and the text
+# matched against a caller's ``pattern`` is model output. Patterns with a repeat
+# nested inside another repeat (``(a+)+``, ``(\w+\s?)*``) can take exponential
+# time; they are only run on strings up to NESTED_REPEAT_MAX_LEN characters, and
+# every pattern is only run on strings up to PATTERN_MAX_LEN characters. Longer
+# strings fail the pattern with an explicit message (and are retried as usual).
+# Residual risk: overlapping alternations (``(a|a)*``) are not detected.
+PATTERN_MAX_LEN = 4096
+NESTED_REPEAT_MAX_LEN = 20
+
+
+def _sre_parser():
+    try:
+        import re._parser as parser  # Python >= 3.11
+
+        return parser
+    except ImportError:  # pragma: no cover - Python 3.10
+        import sre_parse as parser
+
+        return parser
+
+
+def _children(av: Any):
+    """Sub-sequences of ``(op, av)`` items inside a parsed-regex argument."""
+    items = av if isinstance(av, (tuple, list)) else (av,)
+    for item in items:
+        if hasattr(item, "data"):  # SubPattern
+            yield item
+        elif isinstance(item, list):
+            if item and all(hasattr(x, "data") for x in item):  # BRANCH alternatives
+                yield from item
+            elif all(isinstance(x, tuple) and len(x) == 2 for x in item):  # IN items
+                yield item
+
+
+def _repeat_ops() -> set[Any]:
+    c = _sre_parser()
+    return {
+        getattr(c, n) for n in ("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT") if hasattr(c, n)
+    }
+
+
+def _contains_repeat(items: Any, repeats: set[Any]) -> bool:
+    for op, av in items:
+        if op in repeats and av[0] != av[1]:  # variable-length repeat
+            return True
+        if any(_contains_repeat(ch, repeats) for ch in _children(av)):
+            return True
+    return False
+
+
+def _nested_repeat(items: Any, repeats: set[Any]) -> bool:
+    for op, av in items:
+        if op in repeats:
+            if av[1] > 1 and _contains_repeat(av[2], repeats):
+                return True
+            if _nested_repeat(av[2], repeats):
+                return True
+        elif any(_nested_repeat(ch, repeats) for ch in _children(av)):
+            return True
+    return False
+
+
+@lru_cache(maxsize=256)
+def has_nested_repeat(pattern: str) -> bool:
+    """True when ``pattern`` repeats something that itself repeats (ReDoS-prone).
+
+    Anything that cannot be analysed counts as nested (the safe answer).
+    """
+    try:
+        parsed = _sre_parser().parse(pattern)
+        return _nested_repeat(parsed.data if hasattr(parsed, "data") else parsed, _repeat_ops())
+    except Exception:  # noqa: BLE001 - unknown shapes are treated as risky
+        return True
+
+
+def _pattern_mismatch(pattern: str, value: str) -> str | None:
+    """Why ``value`` fails ``pattern`` (None when it matches). Raises InvalidSchemaError."""
+    compiled = _regex(pattern)
+    limit = NESTED_REPEAT_MAX_LEN if has_nested_repeat(pattern) else PATTERN_MAX_LEN
+    if len(value) > limit:
+        return (
+            f"is longer than {limit} characters, the most this pattern is checked "
+            f"against (ReDoS guard): {pattern!r}"
+        )
+    if compiled.search(value) is None:
+        return f"does not match pattern {pattern!r}"
+    return None
 
 
 def _equal(a: Any, b: Any) -> bool:
-    # JSON equality: True != 1, 1 == 1.0
+    """JSON equality, recursively: True != 1, 1 == 1.0, [True] != [1]."""
     if isinstance(a, bool) or isinstance(b, bool):
         return type(a) is type(b) and a == b
-    return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_equal(x, y) for x, y in zip(a, b, strict=True))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_equal(a[k], b[k]) for k in a)
+    return type(a) is type(b) and a == b
+
+
+# Keywords whose value is a schema / a list of schemas / a name -> schema map.
+# Everything else (enum, const, default, examples, required, the *names* in
+# ``properties``...) is data, never traversed as a schema.
+_SCHEMA_KEYS = (
+    "items",
+    "additionalProperties",
+    "not",
+    "if",
+    "then",
+    "else",
+    "contains",
+    "propertyNames",
+    "additionalItems",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+)
+_SCHEMA_LIST_KEYS = ("allOf", "anyOf", "oneOf", "prefixItems")
+_SCHEMA_MAP_KEYS = ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas")
 
 
 def _walk(schema: Any):
@@ -172,18 +341,20 @@ def _walk(schema: Any):
     seen: set[int] = set()
     while stack:
         node = stack.pop()
-        if isinstance(node, list):
-            stack.extend(node)
-            continue
         if not isinstance(node, dict) or id(node) in seen:
             continue
         seen.add(id(node))
         yield node
-        for key, sub in node.items():
-            if key not in ("enum", "const", "default", "examples") and isinstance(
-                sub, (dict, list)
-            ):
-                stack.append(sub)
+        for key in _SCHEMA_KEYS:
+            stack.append(node.get(key))
+        for key in _SCHEMA_LIST_KEYS:
+            if isinstance(node.get(key), list):
+                stack.extend(node[key])
+        for key in _SCHEMA_MAP_KEYS:
+            if isinstance(node.get(key), dict):
+                stack.extend(node[key].values())
+        if isinstance(node.get("items"), list):  # draft-07 tuple form
+            stack.extend(node["items"])
 
 
 def check_schema(schema: Any) -> list[str]:
@@ -285,7 +456,7 @@ def _validate(
         _validate_object(value, schema, path, spath, sub, add, issues)
     elif isinstance(value, list):
         items = schema.get("items")
-        if isinstance(items, dict):
+        if isinstance(items, (dict, bool)):  # ``items: false`` forbids any item
             for i, v in enumerate(value):
                 issues += sub(v, items, f"{path}[{i}]", f"{spath}/items")
         if "minItems" in schema and len(value) < schema["minItems"]:
@@ -303,10 +474,11 @@ def _validate(
             add("maxLength", f"longer than {schema['maxLength']} characters")
         if "pattern" in schema:
             try:
-                if _regex(str(schema["pattern"])).search(value) is None:
-                    add("pattern", f"does not match pattern {schema['pattern']!r}")
+                why = _pattern_mismatch(str(schema["pattern"]), value)
             except InvalidSchemaError as exc:
-                add("pattern", str(exc))
+                why = str(exc)
+            if why is not None:
+                add("pattern", why)
     elif isinstance(value, (int, float)) and not isinstance(value, bool):
         for key, words in (
             ("minimum", "less than minimum"),

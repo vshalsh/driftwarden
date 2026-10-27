@@ -1,4 +1,20 @@
-"""Default transport: JSON over HTTP(S) with the standard library (no SDK needed)."""
+"""Default transport: JSON over HTTP(S) with the standard library (no SDK needed).
+
+Secret handling: error messages never include request headers. Any response text
+that does appear in an error (an HTTP error body, a connection-error reason) is
+first scrubbed of every request header value (the API key, including the token
+after ``Bearer``) and of URL ``user:password@`` userinfo, and only then truncated,
+so a secret can never survive as a cut-off prefix.
+
+Redirects are never followed. urllib's default handler would replay the request
+(with its ``x-api-key`` / ``Authorization`` header) to whatever ``Location`` says,
+including another host or an https -> http downgrade. A 3xx answer is a
+non-retryable TransportError instead: point ``base_url`` at the final endpoint.
+
+Known limit (D17): redaction matches the exact secret strings only. A server
+that echoes the key re-cased, URL-encoded or JSON-unicode-escaped is not
+redacted. Neither Anthropic nor OpenAI is known to do this.
+"""
 
 from __future__ import annotations
 
@@ -13,10 +29,26 @@ from driftwarden.llm.base import TransportError
 
 RETRYABLE_STATUS = frozenset({408, 409, 425, 429})
 _MAX_ERROR_BODY = 300
+_MAX_ERROR_READ = 64 * 1024  # bytes of an error body read (then scrubbed, then truncated)
 
 
 def is_retryable_status(status: int) -> bool:
     return status in RETRYABLE_STATUS or status >= 500
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect, so credentials are never re-sent anywhere."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ARG002
+        return None  # urllib then raises HTTPError with the 3xx status
+
+
+_OPENER = urllib.request.build_opener(_RefuseRedirects)
+
+
+def _open(req: urllib.request.Request, timeout: float):
+    """The single network call (tests replace this seam)."""
+    return _OPENER.open(req, timeout=timeout)
 
 
 def urllib_transport(
@@ -35,24 +67,31 @@ def urllib_transport(
         headers={"content-type": "application/json", "accept": "application/json", **headers},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - http(s) only
+        with _open(req, timeout=timeout) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
-            detail = exc.read().decode("utf-8", "replace")[:_MAX_ERROR_BODY]
+            detail = exc.read(_MAX_ERROR_READ).decode("utf-8", "replace")
         except Exception:  # noqa: BLE001 - best effort only
             pass
+        # Scrub BEFORE truncating: a key straddling the cut must not leave a prefix.
+        detail = _scrub(detail, url, headers)[:_MAX_ERROR_BODY]
+        if 300 <= exc.code < 400:
+            raise TransportError(
+                f"HTTP {exc.code} redirect from {_host(url)} refused (credentials are never "
+                "re-sent to a redirect target); set base_url to the final endpoint",
+                status=exc.code,
+                retryable=False,
+            ) from None
         raise TransportError(
-            _scrub(f"HTTP {exc.code} from {_host(url)}: {detail}".rstrip(": "), url, headers),
+            f"HTTP {exc.code} from {_host(url)}: {detail}".rstrip(": "),
             status=exc.code,
             retryable=is_retryable_status(exc.code),
         ) from None
     except (urllib.error.URLError, http.client.HTTPException, OSError) as exc:
-        reason = getattr(exc, "reason", exc)
-        raise TransportError(
-            _scrub(f"cannot reach {_host(url)}: {reason}", url, headers), retryable=True
-        ) from None
+        reason = _scrub(str(getattr(exc, "reason", exc)), url, headers)[:_MAX_ERROR_BODY]
+        raise TransportError(f"cannot reach {_host(url)}: {reason}", retryable=True) from None
     try:
         parsed = json.loads(raw)
     except (ValueError, UnicodeDecodeError) as exc:

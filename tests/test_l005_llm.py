@@ -7,8 +7,12 @@ transport proves it fails cleanly instead of reaching the network.
 
 from __future__ import annotations
 
+import email.message
+import io
 import json
 import socket
+import urllib.request
+import urllib.response
 from pathlib import Path
 from typing import Literal
 
@@ -584,3 +588,207 @@ def test_key_shaped_env_names_rejected(pasted):
 
 def test_backoff_huge_attempt_is_capped():
     assert RetryPolicy(max_delay=7.0).delay(10**6) == 7.0
+
+
+@pytest.mark.parametrize(
+    ("pattern", "nested"),
+    [
+        ("^(a+)+$", True),
+        ("(a?)+", True),
+        ("(x|y+)*", True),
+        ("^[a-z]+-[0-9]{2}$", False),
+        ("^(ab)+$", False),
+        ("([a-z]{3})+", False),
+    ],
+)
+def test_nested_repeat_detection(pattern, nested):
+    from driftwarden.llm.schema import has_nested_repeat
+
+    assert has_nested_repeat(pattern) is nested
+
+
+def test_redos_prone_pattern_is_bounded_not_run_on_long_text():
+    schema = {"type": "string", "pattern": "^(a+)+$"}
+    assert validate_json("a" * 10, schema) == []
+    (err,) = validate_json("a" * 40 + "!", schema)
+    assert "ReDoS guard" in err
+
+
+# ------------------------------------------------------------------ Codex review (PR #12)
+
+
+class _Redirecting(urllib.request.BaseHandler):
+    """Fake http(s) handler: every request is answered with a 302 to ``target``."""
+
+    handler_order = 200  # before urllib's real HTTP(S)Handler (500)
+
+    def __init__(self, target: str) -> None:
+        self.target = target
+        self.requests: list[urllib.request.Request] = []
+
+    def _answer(self, req):
+        self.requests.append(req)
+        hdrs = email.message.Message()
+        hdrs["Location"] = self.target
+        resp = urllib.response.addinfourl(io.BytesIO(b""), hdrs, req.full_url, 302)
+        resp.msg = "Found"
+        return resp
+
+    https_open = http_open = _answer
+
+
+@pytest.mark.parametrize(
+    "target", ["http://api.example.com/v1/x", "https://evil.example.net/steal", "/same/origin"]
+)
+def test_redirects_are_refused_and_credentials_never_resent(monkeypatch, target):
+    import driftwarden.llm.transport as tr
+
+    fake = _Redirecting(target)
+    monkeypatch.setattr(tr, "_OPENER", urllib.request.build_opener(tr._RefuseRedirects, fake))
+    with pytest.raises(TransportError) as ei:
+        urllib_transport("https://api.example.com/v1/x", {"x-api-key": FAKE_KEY}, {}, 1)
+    assert ei.value.status == 302 and not ei.value.retryable
+    assert "redirect" in str(ei.value) and FAKE_KEY not in str(ei.value)
+    assert len(fake.requests) == 1  # the redirect target was never contacted
+
+
+def test_default_opener_refuses_redirects():
+    import driftwarden.llm.transport as tr
+
+    handlers = [type(h) for h in tr._OPENER.handlers]
+    assert tr._RefuseRedirects in handlers
+    assert urllib.request.HTTPRedirectHandler not in handlers
+
+
+@pytest.mark.parametrize(
+    "props",
+    [
+        {"pattern": {"type": "string"}, "$ref": {"type": "integer"}},
+        {"pattern": {"type": "string", "pattern": "^[a-z]+$"}},
+    ],
+)
+def test_property_names_that_are_keywords_are_not_schemas(props):
+    from driftwarden.llm.schema import check_schema
+
+    schema = {"type": "object", "properties": props, "required": list(props)}
+    assert check_schema(schema) == []
+    assert validate_json({k: ("abc" if k == "pattern" else 1) for k in props}, schema) == []
+
+
+def test_pydantic_field_named_pattern():
+    class Rule(BaseModel):
+        pattern: str
+        ref: int
+
+    t = FakeTransport(anthropic_reply('{"pattern": "a.*", "ref": 1}'))
+    p, _ = anthropic(t)
+    assert p.complete_json("x", Rule).value.pattern == "a.*"
+
+
+def test_nested_schemas_still_checked():
+    from driftwarden.llm.schema import check_schema
+
+    bad = {"type": "string", "pattern": "("}
+    for schema in (
+        {"properties": {"a": bad}},
+        {"items": bad},
+        {"anyOf": [bad]},
+        {"$defs": {"X": bad}},
+        {"not": bad},
+        {"prefixItems": [bad]},
+    ):
+        assert check_schema(schema), schema
+
+
+@pytest.mark.parametrize("text", ["NaN", "[Infinity]", '{"n": -Infinity}', "1e999", "[-1e400]"])
+def test_non_finite_numbers_are_invalid_json_and_retried(text):
+    with pytest.raises(ValueError, match="non-finite|out of range"):
+        parse_json_reply(text)
+    t = FakeTransport(anthropic_reply(text), anthropic_reply('{"n": 1}'))
+    p, _ = anthropic(t)
+    res = p.complete_json("x", {"type": "object"})
+    assert res.attempts == 2 and res.value == {"n": 1}
+
+
+@pytest.mark.parametrize(
+    ("value", "schema", "ok"),
+    [
+        ([1], {"enum": [[True]]}, False),
+        ([True], {"const": [True]}, True),
+        ({"a": 1}, {"const": {"a": True}}, False),
+        ({"a": 1.0}, {"const": {"a": 1}}, True),
+        ([1, 2], {"enum": [[1]]}, False),
+        ([], {"type": "array", "items": False}, True),
+        ([1], {"type": "array", "items": False}, False),
+        ([1], {"type": "array", "items": True}, True),
+    ],
+)
+def test_nested_json_equality_and_boolean_items(value, schema, ok):
+    assert (validate_json(value, schema) == []) is ok
+
+
+# ------------------------------------------------------------------ Codex review round 2
+
+
+@pytest.mark.parametrize("text", ["9" * 5000, '{"n": ' + "1" * 5000 + "}"])
+def test_overlong_integer_is_invalid_json_and_retried(text):
+    with pytest.raises(ValueError) as ei:
+        parse_json_reply(text)
+    assert type(ei.value).__name__ == "JsonSchemaError" and ei.value.kind == "json"
+    t = FakeTransport(anthropic_reply(text), anthropic_reply('{"n": 1}'))
+    p, _ = anthropic(t)
+    assert p.complete_json("x", {"type": "object"}).attempts == 2
+
+
+def test_json_pointer_keeps_empty_tokens_and_escapes():
+    defs = {"": {"type": "integer"}, "a/b": {"type": "string"}, "~x": {"type": "boolean"}}
+    root = {"$defs": defs, "alts": [{"type": "number"}]}
+    cases = [
+        ("#/$defs/", 1, "x"),  # member named "" -- not $defs itself
+        ("#/$defs/a~1b", "s", 1),
+        ("#/$defs/~0x", True, 1),
+        ("#/%24defs/a~1b", "s", 1),  # percent-decoded fragment
+        ("#/alts/0", 1.5, "x"),  # array index
+    ]
+    for ref, good, bad in cases:
+        schema = {**root, "$ref": ref}
+        assert validate_json(good, schema) == [], ref
+        assert validate_json(bad, schema) != [], ref
+    # "#" is the root itself; "#/" is the root's member named "".
+    assert validate_json(1, {"$ref": "#/", "": {"type": "string"}}) != []
+    assert validate_json("s", {"$ref": "#/", "": {"type": "string"}}) == []
+
+
+@pytest.mark.parametrize("ref", ["#/$defs//", "#/$defs/missing", "#/allOf/5", "#$defs", "#/x/01"])
+def test_bad_json_pointers_are_config_errors(ref):
+    from driftwarden.llm.schema import check_schema
+
+    schema = {"$defs": {"": {"type": "integer"}}, "allOf": [{}], "x": [{}, {}], "$ref": ref}
+    assert check_schema(schema)
+
+
+def test_refusal_logs_billed_usage_and_model(tmp_path):
+    reply = anthropic_reply("", inp=1200, out=30, stop="refusal")
+    reply["model"] = "claude-sonnet-5-5"
+    p, sleeps = anthropic(FakeTransport(reply), log=CostLog(tmp_path))
+    with pytest.raises(RefusalError) as ei:
+        p.complete("x")
+    assert ei.value.usage.input_tokens == 1200 and ei.value.model == "claude-sonnet-5-5"
+    (rec,) = p.cost_log.records
+    assert rec["outcome"] == "refusal" and rec["model"] == "claude-sonnet-5-5"
+    assert (rec["input_tokens"], rec["output_tokens"]) == (1200, 30)
+    assert rec["cost_usd"] == pytest.approx((1200 * 2.0 + 30 * 10.0) / 1e6)
+    assert sleeps.calls == []
+
+
+def test_openai_refusal_logs_usage_but_not_text(tmp_path):
+    reply = openai_reply("", inp=40, out=6)
+    reply["choices"][0]["message"]["refusal"] = "REFUSAL-CANARY"
+    p = OpenAICompatProvider(
+        "m", base_url="http://h/v1", transport=FakeTransport(reply), cost_log=CostLog(tmp_path)
+    )
+    with pytest.raises(RefusalError):
+        p.complete("x")
+    (rec,) = p.cost_log.records
+    assert (rec["input_tokens"], rec["output_tokens"]) == (40, 6)
+    assert "REFUSAL-CANARY" not in p.cost_log.path.read_text(encoding="utf-8")
