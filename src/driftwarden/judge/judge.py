@@ -29,10 +29,24 @@ Two paths:
              otherwise (cites the allowed technology when present).
   boundary   VIOLATED if the target is imported outside ``allowed_in`` in
              production code; DRIFTING if only in tests; HOLDING otherwise.
+             An import establishes only import/use/depend on/reference/include;
+             ``call``/``access``/``query``/... or a manner ("directly") without
+             ``action: import`` give UNKNOWN "qualifier not decidable" when the
+             target is imported outside (HOLDING when it is not).
   free       UNKNOWN (no deterministic rule).
   =========  ===============================================================
 
-  Anything the rules cannot map (``EvidenceSet.undecidable``) is UNKNOWN.
+  Anything the rules cannot map (``EvidenceSet.undecidable``) is UNKNOWN, and so
+  is a claim with ``between`` (communication scope) or an actor that names
+  nothing in the repository.
+
+  Fail-closed net: ``HONOURED_FIELDS`` lists the rule fields each kind
+  evaluates. Any other non-empty field ("unless", "for" on a forbid, "scope" on
+  a require...) is a qualifier the rules did not evaluate; the verdict becomes
+  UNKNOWN "qualifier X not evaluated" unless it is a forbid / only / boundary
+  HOLDING by absence, which no narrowing can change. A claim's ``subject`` is
+  descriptive, except that a rule-library forbid/require whose sentence names
+  it as the acting subject ("Handlers must not ...") is scoped to that actor.
 
 * **LLM** (``provider.complete_json`` with :data:`JUDGE_SCHEMA`). The model sees
   the claim and the candidate snippets only (never the whole repository), each
@@ -260,8 +274,56 @@ def _manner(claim: Claim) -> str | None:
     return hit.group(1).lower() if hit else None
 
 
+# Claim fields each rule kind honours (evaluates). Any other non-empty field is a
+# qualifier the rules did not evaluate: see rule_verdict.
+HONOURED_FIELDS: dict[str, frozenset[str]] = {
+    "forbid": frozenset({"forbid", "action", "manner", "scope", "actor"}),
+    "require": frozenset({"require", "for", "actor"}),
+    "only": frozenset({"only", "category", "between", "actor"}),  # between -> UNKNOWN
+    "boundary": frozenset({"target", "allowed_in", "via", "action", "manner", "actor"}),
+    "free": frozenset({"text"}),
+}
+# Kinds whose HOLDING-by-absence survives any narrowing qualifier: if nothing
+# forbidden / no other member / nothing outside is present anywhere, it is not
+# present in any subset either.
+_ABSENCE_SAFE = frozenset({"forbid", "only", "boundary"})
+# Boundary actions an import establishes ("Only adapters/ may import/use X").
+BOUNDARY_IMPORT_ACTIONS = frozenset({"import", "use", "depend on", "reference", "include"})
+
+
+def unhonoured_fields(claim: Claim) -> list[str]:
+    """Non-empty rule fields the rules do not evaluate for this claim kind."""
+    honoured = HONOURED_FIELDS.get(claim.kind, frozenset())
+    return sorted(
+        k for k, val in claim.rule.items() if k not in honoured and val not in (None, "", [], {})
+    )
+
+
 def rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
-    """The deterministic verdict for ``claim`` from ``es`` (before the gate)."""
+    """The deterministic verdict for ``claim`` from ``es`` (before the gate).
+
+    Fail-closed net: a qualifier the rules do not evaluate (``unhonoured_fields``)
+    turns the verdict into UNKNOWN "qualifier X not evaluated", keeping the cited
+    evidence, unless the verdict is a HOLDING-by-absence that no narrowing can
+    change (forbid / only / boundary with nothing found)."""
+    verdict = _rule_verdict(claim, es)
+    extra = unhonoured_fields(claim)
+    if not extra or verdict.status == "UNKNOWN":
+        return verdict
+    if verdict.status == "HOLDING" and claim.kind in _ABSENCE_SAFE:
+        violating = es.with_relation("forbidden", "alternative", "outside_boundary")
+        if not violating:
+            return verdict
+    data = verdict.model_dump()
+    data.update(
+        status="UNKNOWN",
+        rationale=f"qualifier {', '.join(map(repr, extra))} not evaluated by the rules; "
+        f"without it: {verdict.status} ({verdict.rationale})",
+    )
+    return Verdict.model_validate(data)
+
+
+def _rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
     base = {"claim_id": claim.id, "commit": es.commit, "origin": "rule", "notes": list(es.notes)}
 
     def v(status: VerdictStatus, evidence: list[Evidence], rationale: str) -> Verdict:
@@ -364,6 +426,22 @@ def rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
         out = es.with_relation("outside_boundary")
         prod = [e for e in out if e.production]
         inside = es.with_relation("inside_boundary")
+        action = rule.get("action") if isinstance(rule.get("action"), str) else None
+        manner = _manner(claim)
+        if (action and action not in BOUNDARY_IMPORT_ACTIONS) or (manner and action != "import"):
+            # "Only adapters/ may call requests": an import outside adapters/ does not
+            # establish a call there; without call-site analysis it is undecidable.
+            if not out:
+                return v(
+                    "HOLDING", _spread(inside, 10), "target not used outside the allowed paths"
+                )
+            what = " ".join(x for x in (action, manner) if x)
+            return v(
+                "UNKNOWN",
+                out[:10],
+                f"qualifier not decidable: '{what}' needs call-site analysis; "
+                f"{_names(out)} imported outside the allowed paths ({_ids(out)})",
+            )
         if prod:
             return v(
                 "VIOLATED",

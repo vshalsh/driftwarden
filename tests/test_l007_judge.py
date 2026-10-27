@@ -1327,3 +1327,289 @@ def test_codex_allowed_package_is_never_its_own_alternative(tmp_path):
         _claim("only", {"only": ["ioredis"], "category": "cache"})
     )
     assert v.status == "VIOLATED" and {e.technology for e in v.evidence} == {"memcached"}
+
+
+# ------------------------------------------------------------------ L-025 judge hardening
+
+
+def test_l025_1_python_from_imports_match_dotted_patterns(tmp_path):
+    repo = _repo_with(
+        tmp_path,
+        {
+            "src/db.py": "from mysql import connector\n",
+            "src/store.py": "from google import cloud\n",
+            "src/proto.py": "from google import protobuf\n",
+        },
+    )
+    judge = Judge(repo, mode="offline")
+    v = judge.judge(_claim("forbid", {"forbid": ["MySQL"]}))
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["src/db.py"]
+    v = judge.judge(_claim("forbid", {"forbid": ["Google Cloud"]}))
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["src/store.py"]
+
+
+def test_l025_2_literal_terraform_sources_match(tmp_path):
+    tf = (
+        "terraform {\n  required_providers {\n    random = {\n"
+        '      source  = "hashicorp/random"\n      version = "3.6.0"\n    }\n  }\n}\n\n'
+        'module "vpc" {\n  source  = "terraform-aws-modules/vpc/aws"\n  version = "5.5.0"\n}\n'
+    )
+    repo = _repo_with(tmp_path, {"infra/main.tf": tf})
+    judge = Judge(repo, mode="offline")
+    for term in ("hashicorp/random", "terraform-aws-modules/vpc/aws"):
+        v = judge.judge(_claim("forbid", {"forbid": [term]}))
+        assert v.status == "VIOLATED", (term, v.rationale)
+        assert {e.kind for e in v.evidence} == {"infra"}
+        assert all(c.status == "VERIFIED" for c in v.checks)
+
+
+def test_l025_3_bare_directory_targets(tmp_path):
+    repo = _repo_with(
+        tmp_path,
+        {
+            "src/payments/__init__.py": "",
+            "src/payments/core.py": "X = 1\n",
+            "src/billing/charge.py": "from payments import core\n",
+            "src/web/views.py": "from payments import core\n",
+        },
+    )
+    c = _claim("boundary", {"target": ["payments"], "allowed_in": ["billing/"]})
+    v = Judge(repo, mode="offline").judge(c)
+    assert v.status == "VIOLATED", v.rationale
+    assert [e.ref.path for e in v.evidence] == ["src/web/views.py"]
+    # A package of the same name that is actually used is evaluated as well.
+    repo2 = _repo_with(
+        tmp_path / "b",
+        {
+            "requirements.txt": "redis==5\n",
+            "src/redis/__init__.py": "",
+            "src/app.py": "import json\n",
+        },
+    )
+    c2 = _claim("boundary", {"target": ["redis"], "allowed_in": ["cache/"]})
+    es = collect_evidence(c2, load_snapshot(repo2))
+    assert any("directory src/redis/" in r or "directory redis/" in r for r in es.resolved)
+
+
+def test_l025_4_between_is_never_decided_by_presence(tmp_path):
+    repo = _repo_with(
+        tmp_path,
+        {"requirements.txt": "kafka-python==2\ncelery==5\n", "src/jobs.py": "import celery\n"},
+    )
+    c = _claim("only", {"only": ["Kafka"], "between": "Services"})
+    v = Judge(repo, mode="offline").judge(c)
+    assert v.status == "UNKNOWN" and "communication scope" in v.rationale
+
+
+@pytest.mark.parametrize(
+    "action,status",
+    [
+        ("call", "UNKNOWN"),
+        ("access", "UNKNOWN"),
+        ("query", "UNKNOWN"),
+        ("talk to", "UNKNOWN"),
+        ("import", "VIOLATED"),
+        ("use", "VIOLATED"),
+    ],
+)
+def test_l025_5_boundary_action_qualifiers(tmp_path, action, status):
+    repo = _repo_with(
+        tmp_path,
+        {"src/adapters/http.py": "import requests\n", "src/jobs/sync.py": "import requests\n"},
+    )
+    rule = {"target": ["requests"], "allowed_in": ["adapters/"], "action": action}
+    v = Judge(repo, mode="offline").judge(_claim("boundary", rule))
+    assert v.status == status, v.rationale
+    if status == "UNKNOWN":
+        assert "qualifier not decidable" in v.rationale
+        assert [e.ref.path for e in v.evidence] == ["src/jobs/sync.py"]
+    clean = _repo_with(tmp_path / "clean", {"src/adapters/http.py": "import requests\n"})
+    assert Judge(clean, mode="offline").judge(_claim("boundary", rule)).status == "HOLDING"
+
+
+def test_l025_boundary_manner_needs_an_import_action(tmp_path):
+    repo = _repo_with(tmp_path, {"src/jobs/sync.py": "import requests\n"})
+    q = "Jobs must not use requests directly outside adapters/."
+    rule = {"target": ["requests"], "allowed_in": ["adapters/"], "manner": "directly"}
+    v = Judge(repo, mode="offline").judge(_claim("boundary", rule, quote=q))
+    assert v.status == "UNKNOWN" and "directly" in v.rationale
+    v = Judge(repo, mode="offline").judge(_claim("boundary", {**rule, "action": "import"}, quote=q))
+    assert v.status == "VIOLATED"
+
+
+def test_l025_subject_named_as_acting_subject_is_an_actor(tmp_path):
+    files = {"src/jobs/nightly.py": "import requests\n", "src/handlers/api.py": "import json\n"}
+    repo = _repo_with(tmp_path, files)
+    judge = Judge(repo, mode="offline")
+    q = "Handlers must not use requests."
+    claim = _claim("forbid", {"forbid": ["requests"]}, quote=q).model_copy(
+        update={"subject": "handlers"}
+    )
+    assert judge.judge(claim).status == "HOLDING"  # the job is not the handlers' code
+    q2 = "Workers must not use requests."
+    claim2 = _claim("forbid", {"forbid": ["requests"]}, quote=q2).model_copy(
+        update={"subject": "workers"}
+    )
+    v = judge.judge(claim2)
+    assert v.status == "UNKNOWN" and "actor scope not resolvable" in v.rationale
+    # Generic subjects ("services", "codebase") keep the whole repository.
+    claim3 = claim.model_copy(
+        update={
+            "subject": "services",
+            "source": claim.source.model_copy(update={"quote": "Services must not use requests."}),
+        }
+    )
+    assert judge.judge(claim3).status == "VIOLATED"
+
+
+# Every field the rule library (or a hint / model) can put in a rule, per kind:
+# either the judge evaluates it, or a verdict it could change is UNKNOWN.
+FIELD_CASES = [
+    # (kind, base rule, field, value, honoured)
+    ("forbid", {"forbid": ["requests"]}, "action", "import", True),
+    ("forbid", {"forbid": ["requests"]}, "manner", "directly", True),
+    ("forbid", {"forbid": ["requests"]}, "scope", ["src/"], True),
+    ("forbid", {"forbid": ["requests"]}, "actor", ["jobs"], True),
+    ("forbid", {"forbid": ["requests"]}, "for", "new services", False),
+    ("forbid", {"forbid": ["requests"]}, "unless", "approved", False),
+    ("require", {"require": ["requests"]}, "for", "http client", True),
+    ("require", {"require": ["requests"]}, "actor", ["jobs"], True),
+    ("require", {"require": ["requests"]}, "scope", ["src/"], False),
+    ("require", {"require": ["requests"]}, "action", "use", False),
+    ("only", {"only": ["requests"], "category": "http client"}, "actor", ["jobs"], True),
+    ("only", {"only": ["requests"], "category": "http client"}, "between", "services", True),
+    ("only", {"only": ["requests"], "category": "http client"}, "scope", ["src/"], False),
+    ("boundary", {"target": ["requests"], "allowed_in": ["adapters/"]}, "action", "call", True),
+    ("boundary", {"target": ["requests"], "allowed_in": ["adapters/"]}, "manner", "directly", True),
+    ("boundary", {"target": ["requests"], "allowed_in": ["adapters/"]}, "actor", ["jobs"], True),
+    ("boundary", {"target": ["requests"], "allowed_in": ["adapters/"]}, "scope", ["src/"], False),
+    ("boundary", {"target": ["requests"], "allowed_in": ["adapters/"]}, "for", "x", False),
+]
+
+
+@pytest.mark.parametrize("kind,base,field_name,value,honoured", FIELD_CASES)
+def test_l025_every_claim_field_is_honoured_or_unknown(
+    tmp_path, kind, base, field_name, value, honoured
+):
+    from driftwarden.judge.judge import HONOURED_FIELDS
+
+    assert (field_name in HONOURED_FIELDS[kind]) is honoured
+    files = {
+        "requirements.txt": "requests==2\nhttpx==0.27\n",
+        "src/jobs/sync.py": "import requests\nimport httpx\n",
+    }
+    repo = _repo_with(tmp_path, files)
+    plain = Judge(repo, mode="offline").judge(_claim(kind, base))
+    v = Judge(repo, mode="offline").judge(_claim(kind, {**base, field_name: value}))
+    if not honoured:
+        # The unevaluated field could narrow the claim: whatever the plain verdict, a
+        # decided non-absence verdict must become UNKNOWN, and it names the field.
+        assert v.status == "UNKNOWN", (plain.status, v.rationale)
+        assert repr(field_name) in v.rationale and "not evaluated" in v.rationale
+    else:
+        assert v.status in ("HOLDING", "DRIFTING", "VIOLATED", "UNKNOWN")
+        if v.status == "UNKNOWN" and plain.status != "UNKNOWN":
+            assert "not evaluated" not in v.rationale  # honoured fields give real reasons
+
+
+def test_l025_unhonoured_field_keeps_safe_absence_holding(tmp_path):
+    repo = _repo_with(tmp_path, {"src/a.py": "import json\n"})
+    v = Judge(repo, mode="offline").judge(_claim("forbid", {"forbid": ["requests"], "unless": "x"}))
+    assert v.status == "HOLDING"  # nothing forbidden anywhere: no qualifier can change that
+    v = Judge(repo, mode="offline").judge(
+        _claim("require", {"require": ["json5"], "scope": ["src/"]})
+    )
+    assert v.status == "UNKNOWN"
+
+
+def test_l025_rule_library_fields_are_all_audited():
+    """Run the offline rule library over every example sentence of every pattern and
+    check that each rule field it emits is one the judge honours for that kind (the
+    unhonoured-field net then never has to fire on rule-library claims)."""
+    from driftwarden.claims.rules import RULES, match_sentence
+    from driftwarden.judge.judge import HONOURED_FIELDS
+
+    seen: dict[str, set[str]] = {}
+    for pat in RULES:
+        for ex in pat.examples:
+            for m in match_sentence(ex):
+                seen.setdefault(m.kind, set()).update(m.rule)
+    assert {"forbid", "require", "only", "boundary"} <= set(seen)
+    for kind, fields in seen.items():
+        assert fields <= HONOURED_FIELDS[kind], (kind, fields - HONOURED_FIELDS[kind])
+
+
+# ------------------------------------------------------------------ actor name variants
+
+
+def test_actor_variants_keep_the_full_name():
+    from driftwarden.judge.evidence import _actor_variants
+
+    v = _actor_variants("billing_service")
+    assert {"billing_service", "billing-service", "billingservice", "billing"} <= v
+    v = _actor_variants("BillingService")
+    assert {"billing_service", "billingservice", "billing"} <= v
+    v = _actor_variants("domain layer")
+    assert {"domain_layer", "domain-layer", "domain"} <= v
+    assert "handler" in _actor_variants("Handlers") and "handlers" in _actor_variants("handler")
+
+
+@pytest.mark.parametrize("actor", ["billing_service", "billing-service", "BillingService"])
+def test_actor_full_name_directory_is_selected(tmp_path, actor):
+    files = {
+        "src/billing_service/pay.py": "import pymongo\n",
+        "src/billing/invoice.py": "import json\n",
+        "src/other/job.py": "import pymongo\n",
+    }
+    repo = _repo_with(tmp_path, files)
+    rule = {"forbid": ["MongoDB"], "actor": [actor]}
+    v = Judge(repo, mode="offline").judge(_claim("forbid", rule))
+    # Both billing_service/ and billing/ are the actor's code (union); other/ is not.
+    assert v.status == "VIOLATED", v.rationale
+    assert [e.ref.path for e in v.evidence] == ["src/billing_service/pay.py"]
+
+
+def test_actor_only_full_name_directory_resolves(tmp_path):
+    repo = _repo_with(tmp_path, {"src/billing_service/pay.py": "import pymongo\n"})
+    v = Judge(repo, mode="offline").judge(
+        _claim("forbid", {"forbid": ["MongoDB"], "actor": ["billing_service"]})
+    )
+    assert v.status == "VIOLATED" and "not resolvable" not in v.rationale
+
+
+# ------------------------------------------------------------------ subject is descriptive
+
+
+@pytest.mark.parametrize("subject", ["payments", "module:payments", "package:payments"])
+def test_boundary_subject_is_never_the_actor(tmp_path, subject):
+    files = {
+        "src/payments/__init__.py": "",
+        "src/payments/core.py": "X = 1\n",
+        "src/billing/charge.py": "from payments import core\n",
+        "src/web/views.py": "from payments import core\n",
+    }
+    repo = _repo_with(tmp_path, files)
+    q = "Payments may only be imported from billing/."
+    claim = _claim("boundary", {"target": ["payments"], "allowed_in": ["billing/"]}, quote=q)
+    v = Judge(repo, mode="offline").judge(claim.model_copy(update={"subject": subject}))
+    assert v.status == "VIOLATED", v.rationale
+    assert [e.ref.path for e in v.evidence] == ["src/web/views.py"]
+
+
+def test_subject_equal_to_the_restricted_term_is_not_an_actor(tmp_path):
+    repo = _repo_with(tmp_path, {"src/jobs/sync.py": "import requests\n"})
+    q = "Requests must not be used."
+    claim = _claim("forbid", {"forbid": ["requests"]}, quote=q).model_copy(
+        update={"subject": "requests"}
+    )
+    v = Judge(repo, mode="offline").judge(claim)
+    assert v.status == "VIOLATED" and "actor" not in v.rationale
+
+
+def test_prefixed_subject_on_forbid_keeps_whole_repo(tmp_path):
+    repo = _repo_with(tmp_path, {"src/jobs/sync.py": "import requests\n"})
+    plain = _claim("forbid", {"forbid": ["requests"]})
+    labelled = plain.model_copy(update={"subject": "module:payments"})
+    a = Judge(repo, mode="offline").judge(plain)
+    b = Judge(repo, mode="offline").judge(labelled)
+    assert a.status == b.status == "VIOLATED"
