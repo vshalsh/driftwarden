@@ -41,6 +41,7 @@ from driftwarden.grounding.verify import verify_dependency, verify_source_quote
 from driftwarden.judge import Judge, build_prompt, gate, verify_evidence
 from driftwarden.llm import OfflineProvider, RetryPolicy
 from driftwarden.models import WORKTREE, Claim, DependencyRef, Evidence, Provenance, Verdict
+from driftwarden.text import decode_text
 
 FIXTURES = Path(__file__).parent / "fixtures" / "judge_repos"
 STATS = Path(os.environ["L007_STATS"]) if os.environ.get("L007_STATS") else None
@@ -90,15 +91,9 @@ WT_REQ = (
 DEV3 = ["forbid-requirements-dev-file", "forbid-requirements-test-dir", "only-other-dev-dep"]
 HOLE_IDS = "rev-HEAD rev-branch rev-short-sha path-trailing-slash path-dot-slash path-double-slash path-inner-dot rev-HEAD-tilde rev-peel-syntax".split()
 
-# D-L007-2..8 fixed on L-007/L-025, D1/D7 by L-023 (xfail markers removed). Only the D6
-# oracle marker below remains (restored from origin/main; Sonnet to decide on the oracle).
-KNOWN: dict[tuple[str, str | None], str] = {
-    # D6 is fixed: the dependency is cited and passes verify_source_quote and
-    # verify_dependency, which decode UTF-16 via text.decode_text. This test's own
-    # oracle_ok() decodes show output as UTF-8 only, so it cannot match any UTF-16
-    # citation. Kept red for Sonnet to decide on the oracle; assertion unchanged.
-    ("test_utf16_requirements_is_evidence", None): D6 + " [fixed in code; oracle_ok is UTF-8 only]",
-}
+# All known defects are fixed: D-L007-2..8 on L-007/L-025, D1/D7 by L-023, and D6 (the oracle
+# now decodes via text.decode_text, BOM/UTF-16/32 aware). No xfail markers remain.
+KNOWN: dict[tuple[str, str | None], str] = {}
 
 
 @pytest.fixture(autouse=True)
@@ -156,14 +151,14 @@ def show(repo: Path, commit: str, path: str) -> str:
     out = subprocess.run(
         ["git", "show", f"{commit}:{path}"], cwd=repo, capture_output=True, check=True
     ).stdout
-    return out.decode("utf-8", "replace")
+    return decode_text(out)
 
 
 def oracle_ok(repo: Path, prov: Provenance) -> bool:
     """My own check: quote (whitespace-collapsed, case-sensitive) occurs on those lines of that file/commit."""
     try:
         if prov.commit == WORKTREE:
-            text = (repo / prov.path).read_bytes().decode("utf-8", "replace")
+            text = decode_text((repo / prov.path).read_bytes())
         else:
             text = show(repo, prov.commit, prov.path)
     except Exception:
