@@ -451,15 +451,20 @@ class Judge:
         if self.ledger is not None:
             self.ledger.extend(results)
 
-    def judge(self, claim: Claim, es: EvidenceSet | None = None) -> Verdict:
+    def judge(
+        self, claim: Claim, es: EvidenceSet | None = None, *, provider: Provider | None = None
+    ) -> Verdict:
+        """One judgement of ``claim``. ``provider`` overrides ``self.provider`` for this
+        call only (the consistency runner passes a per-run wrapper)."""
         es = es or self.evidence(claim)
         ruled = gate(rule_verdict(claim, es), self.root)
         self._record(ruled.checks)
         if self.mode == "offline":
             return ruled
-        assert self.provider is not None
+        provider = provider or self.provider
+        assert provider is not None
         try:
-            result = self.provider.complete_json(
+            result = provider.complete_json(
                 build_prompt(claim, es, self.snapshot),
                 JUDGE_SCHEMA,
                 system=SYSTEM_PROMPT,
