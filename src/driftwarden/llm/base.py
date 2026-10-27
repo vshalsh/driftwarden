@@ -7,8 +7,9 @@ the requested schema. Callers must still verify every fact it asserts.
 
 from __future__ import annotations
 
+import itertools
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -16,7 +17,15 @@ from pydantic import BaseModel, Field
 
 from driftwarden.llm.costlog import CostLog
 from driftwarden.llm.pricing import cost_usd
-from driftwarden.llm.schema import JsonSchemaError, Schema, parse_json_reply, validate_reply
+from driftwarden.llm.schema import (
+    JsonSchemaError,
+    Schema,
+    check_schema,
+    parse_json_reply,
+    schema_dict,
+    schema_text,
+    validate_reply,
+)
 
 DEFAULT_MAX_TOKENS = 16000
 
@@ -49,7 +58,15 @@ class TransportError(LLMError):
 
 
 class RefusalError(LLMError):
-    """The model declined the request. Not retried."""
+    """The model declined the request. Not retried.
+
+    ``category`` is the provider's machine-readable reason, if any; the model's
+    refusal text is never logged.
+    """
+
+    def __init__(self, message: str, *, category: str | None = None):
+        super().__init__(message)
+        self.category = category
 
 
 class SchemaValidationError(LLMError):
@@ -68,6 +85,19 @@ class SchemaValidationError(LLMError):
 class Usage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
+
+
+def token_count(value: Any) -> int:
+    """A provider-reported token count; missing, non-numeric or negative counts as 0."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    if isinstance(value, float) and value == value and abs(value) != float("inf"):
+        return max(int(value), 0)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
 
 
 class LLMRequest(BaseModel):
@@ -123,7 +153,8 @@ class RetryPolicy:
 
     def delay(self, attempt: int) -> float:
         """Seconds to wait after failed attempt number ``attempt`` (1-based)."""
-        return min(self.base_delay * (2 ** (attempt - 1)), self.max_delay)
+        exponent = min(max(attempt - 1, 0), 64)  # 2**64 * any sane base_delay is > max_delay
+        return min(self.base_delay * float(2**exponent), self.max_delay)
 
     def backoff(self, attempt: int) -> None:
         self.sleep(self.delay(attempt))
@@ -230,29 +261,50 @@ class BaseProvider:
             error=error,
         )
 
+    # -- secrets
+    def _secrets(self) -> list[str]:
+        """Values that must never be persisted or surfaced (API keys)."""
+        key = getattr(self, "_api_key", None)
+        return [key] if key else []
+
+    def _redact(self, text: str) -> str:
+        for secret in self._secrets():
+            text = text.replace(secret, "[REDACTED]")
+        return text
+
     # -- transport retries
-    def _send_with_retries(self, request: LLMRequest) -> tuple[LLMResponse, float]:
-        attempt = 0
+    def _send_with_retries(
+        self, request: LLMRequest, seq: Iterator[int]
+    ) -> tuple[LLMResponse, float, int]:
+        """One logical send with transport retries. ``seq`` numbers every attempt
+        (monotonic across a whole ``complete``/``complete_json`` call)."""
+        tries = 0
         while True:
-            attempt += 1
+            tries += 1
+            n = next(seq)
             started = time.monotonic()
             try:
                 response = self._send(request)
             except TransportError as exc:
+                status = f"HTTP {exc.status}" if exc.status is not None else "no response"
                 self._log(
-                    request, attempt=attempt, outcome="transport_error", started=started,
-                    error=str(exc),
+                    request, attempt=n, outcome="transport_error", started=started,
+                    error=f"{status}; retryable={exc.retryable}",
                 )  # fmt: skip
-                if not exc.retryable or attempt >= self.retry.max_attempts:
+                if not exc.retryable or tries >= self.retry.max_attempts:
+                    message = self._redact(str(exc))
+                    if message != str(exc):
+                        raise TransportError(
+                            message, status=exc.status, retryable=exc.retryable
+                        ) from None
                     raise
-                self.retry.backoff(attempt)
+                self.retry.backoff(tries)
                 continue
             except RefusalError as exc:
-                self._log(
-                    request, attempt=attempt, outcome="refusal", started=started, error=str(exc)
-                )
+                category = f"category={exc.category}" if exc.category else None
+                self._log(request, attempt=n, outcome="refusal", started=started, error=category)
                 raise
-            return response, started
+            return response, started, n
 
     # -- public API
     def complete(
@@ -269,8 +321,8 @@ class BaseProvider:
             max_tokens=max_tokens or DEFAULT_MAX_TOKENS,
             purpose=purpose,
         )
-        response, started = self._send_with_retries(request)
-        self._log(request, attempt=1, outcome="ok", started=started, response=response)
+        response, started, n = self._send_with_retries(request, itertools.count(1))
+        self._log(request, attempt=n, outcome="ok", started=started, response=response)
         return response
 
     def complete_json(
@@ -288,9 +340,10 @@ class BaseProvider:
         with backoff), feeding the validation errors back to the model. Raises
         SchemaValidationError when every attempt fails.
         """
-        from driftwarden.llm.schema import schema_dict, schema_text
-
         sdict = schema_dict(schema)
+        problems = check_schema(sdict)
+        if problems:
+            raise ProviderConfigError(f"invalid JSON schema: {'; '.join(problems)[:300]}")
         base_request = LLMRequest(
             prompt=prompt,
             system=_json_system(system, schema_text(sdict)),
@@ -301,8 +354,9 @@ class BaseProvider:
         request = base_request
         errors: list[str] = []
         text = ""
+        seq = itertools.count(1)
         for attempt in range(1, self.retry.max_attempts + 1):
-            response, started = self._send_with_retries(request)
+            response, started, n = self._send_with_retries(request, seq)
             text = response.text
             try:
                 data = parse_json_reply(text)
@@ -310,9 +364,10 @@ class BaseProvider:
             except JsonSchemaError as exc:
                 errors = exc.errors
                 outcome = "invalid_json" if exc.kind == "json" else "schema_error"
+                # Only schema locations / error kinds: never reply values or keys.
                 self._log(
-                    request, attempt=attempt, outcome=outcome, started=started,
-                    response=response, error="; ".join(errors)[:500],
+                    request, attempt=n, outcome=outcome, started=started,
+                    response=response, error="; ".join(exc.log_errors)[:500],
                 )  # fmt: skip
                 if attempt < self.retry.max_attempts:
                     self.retry.backoff(attempt)
@@ -320,7 +375,7 @@ class BaseProvider:
                         update={"prompt": _retry_prompt(prompt, errors)}
                     )
                 continue
-            self._log(request, attempt=attempt, outcome="ok", started=started, response=response)
+            self._log(request, attempt=n, outcome="ok", started=started, response=response)
             return JsonResult(value=value, text=text, attempts=attempt, response=response)
         raise SchemaValidationError(
             f"{self.name}/{self.model}: no schema-valid reply after "

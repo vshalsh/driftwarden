@@ -17,8 +17,9 @@ from driftwarden.llm.base import (
     Transport,
     TransportError,
     Usage,
+    token_count,
 )
-from driftwarden.llm.transport import check_url, urllib_transport
+from driftwarden.llm.transport import check_url, redact_url, urllib_transport
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_KEY_ENV = "OPENAI_API_KEY"
@@ -55,7 +56,7 @@ class OpenAICompatProvider(BaseProvider):
         self.json_mode = json_mode
 
     def __repr__(self) -> str:  # never show the key
-        return f"OpenAICompatProvider(model={self.model!r}, base_url={self.base_url!r})"
+        return f"OpenAICompatProvider(model={self.model!r}, base_url={redact_url(self.base_url)!r})"
 
     def build_body(self, request: LLMRequest) -> dict[str, Any]:
         messages = []
@@ -88,20 +89,24 @@ def parse_response(data: dict[str, Any], model: str) -> LLMResponse:
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         raise TransportError("response has no choices", retryable=True)
     choice = choices[0]
-    message = choice.get("message") or {}
+    message = choice.get("message")
+    message = message if isinstance(message, dict) else {}
     if message.get("refusal"):
+        # The refusal text is model output: kept on the exception for the caller,
+        # never written to the cost log (which records only the outcome).
         raise RefusalError(f"model declined the request: {str(message['refusal'])[:200]}")
     content = message.get("content")
     if isinstance(content, list):  # some servers return content parts
         content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
-    usage = data.get("usage") or {}
+    usage = data.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
     return LLMResponse(
         text=content or "",
         model=str(data.get("model") or model),
         provider="openai",
         usage=Usage(
-            input_tokens=int(usage.get("prompt_tokens") or 0),
-            output_tokens=int(usage.get("completion_tokens") or 0),
+            input_tokens=token_count(usage.get("prompt_tokens")),
+            output_tokens=token_count(usage.get("completion_tokens")),
         ),
         stop_reason=choice.get("finish_reason"),
         response_id=data.get("id"),

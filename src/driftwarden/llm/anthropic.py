@@ -12,8 +12,9 @@ from driftwarden.llm.base import (
     Transport,
     TransportError,
     Usage,
+    token_count,
 )
-from driftwarden.llm.transport import check_url, urllib_transport
+from driftwarden.llm.transport import check_url, redact_url, urllib_transport
 
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_BASE_URL = "https://api.anthropic.com"
@@ -52,7 +53,7 @@ class AnthropicProvider(BaseProvider):
         self.structured_output = structured_output
 
     def __repr__(self) -> str:  # never show the key
-        return f"AnthropicProvider(model={self.model!r}, base_url={self.base_url!r})"
+        return f"AnthropicProvider(model={self.model!r}, base_url={redact_url(self.base_url)!r})"
 
     def build_body(self, request: LLMRequest) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -85,21 +86,24 @@ def parse_response(data: dict[str, Any], model: str) -> LLMResponse:
         raise TransportError("anthropic response has no content list", retryable=True)
     stop = data.get("stop_reason")
     if stop == "refusal":
-        details = data.get("stop_details") or {}
-        raise RefusalError(f"model declined the request (category={details.get('category')})")
+        details = data.get("stop_details")
+        category = details.get("category") if isinstance(details, dict) else None
+        category = category if isinstance(category, str) and category.isidentifier() else None
+        raise RefusalError(f"model declined the request (category={category})", category=category)
     text = "".join(
         b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
     )
-    usage = data.get("usage") or {}
+    usage = data.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
     return LLMResponse(
         text=text,
         model=str(data.get("model") or model),
         provider="anthropic",
         usage=Usage(
-            input_tokens=int(usage.get("input_tokens") or 0)
-            + int(usage.get("cache_creation_input_tokens") or 0)
-            + int(usage.get("cache_read_input_tokens") or 0),
-            output_tokens=int(usage.get("output_tokens") or 0),
+            input_tokens=token_count(usage.get("input_tokens"))
+            + token_count(usage.get("cache_creation_input_tokens"))
+            + token_count(usage.get("cache_read_input_tokens")),
+            output_tokens=token_count(usage.get("output_tokens")),
         ),
         stop_reason=stop,
         response_id=data.get("id"),

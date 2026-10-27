@@ -25,7 +25,22 @@ Mode = Literal["auto", "offline", "llm"]
 Provider = Literal["anthropic", "openai"]
 
 LEDGER_EXCLUDE = ".driftwarden/**"
-_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+
+
+def is_env_var_name(value: object) -> bool:
+    """True for a conventional UPPER_SNAKE environment variable name.
+
+    Rejects anything shaped like a pasted secret: lowercase letters, punctuation,
+    more than 64 characters, or a long digit-bearing run (``AKIA...7EXAMPLE``).
+    """
+    if not isinstance(value, str) or not _ENV_NAME.fullmatch(value):
+        return False
+    return not any(
+        len(seg) >= 24 or (len(seg) >= 16 and any(c.isdigit() for c in seg))
+        for seg in value.split("_")
+    )
+
 
 DEFAULT_EXCLUDES = [
     ".git/**",
@@ -72,11 +87,11 @@ class Config(BaseModel):
     @field_validator("api_key_env")
     @classmethod
     def _env_var_name_only(cls, value: str | None) -> str | None:
-        if value is not None and not _ENV_NAME.fullmatch(value):
+        if value is not None and not is_env_var_name(value):
             # Deliberately does not echo the value: it may be a pasted secret.
             raise ValueError(
-                "api_key_env must be the NAME of an environment variable "
-                "(e.g. ANTHROPIC_API_KEY), never the key itself"
+                "api_key_env must be the NAME of an environment variable in UPPER_SNAKE "
+                "case, at most 64 characters (e.g. ANTHROPIC_API_KEY), never the key itself"
             )
         return value
 
