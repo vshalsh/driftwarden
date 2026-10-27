@@ -9,6 +9,7 @@ Order of precedence (first found wins):
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any, Literal
@@ -24,6 +25,7 @@ Mode = Literal["auto", "offline", "llm"]
 Provider = Literal["anthropic", "openai"]
 
 LEDGER_EXCLUDE = ".driftwarden/**"
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 DEFAULT_EXCLUDES = [
     ".git/**",
@@ -42,7 +44,9 @@ class ConfigError(Exception):
 
 
 class Config(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors: a mistyped key field (``api_key = "sk-..."``) must never be
+    # echoed back in an error message or CI log.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     adr_paths: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=lambda: list(DEFAULT_EXCLUDES))
@@ -56,6 +60,33 @@ class Config(BaseModel):
     mode: Mode = "auto"
     provider: Provider = "anthropic"
     model: str | None = None
+    # LLM provider settings (see driftwarden.llm.get_provider). API keys are never
+    # stored in config: ``api_key_env`` names the environment variable to read.
+    base_url: str | None = None
+    api_key_env: str | None = None
+    timeout_s: float = Field(default=600.0, gt=0)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    input_cost_per_mtok: float | None = Field(default=None, ge=0)
+    output_cost_per_mtok: float | None = Field(default=None, ge=0)
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _env_var_name_only(cls, value: str | None) -> str | None:
+        if value is not None and not _ENV_NAME.fullmatch(value):
+            # Deliberately does not echo the value: it may be a pasted secret.
+            raise ValueError(
+                "api_key_env must be the NAME of an environment variable "
+                "(e.g. ANTHROPIC_API_KEY), never the key itself"
+            )
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def _http_url(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith(("http://", "https://")):
+            raise ValueError("base_url must start with http:// or https://")
+        return value
+
     # Where the config came from; informational only.
     source: str | None = Field(default=None, exclude=True)
 
