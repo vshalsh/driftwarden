@@ -90,16 +90,14 @@ WT_REQ = (
 DEV3 = ["forbid-requirements-dev-file", "forbid-requirements-test-dir", "only-other-dev-dep"]
 HOLE_IDS = "rev-HEAD rev-branch rev-short-sha path-trailing-slash path-dot-slash path-double-slash path-inner-dot rev-HEAD-tilde rev-peel-syntax".split()
 
-# D-L007-2..6 fixed on L-007-judge; their xfail markers are removed (D1/D7 -> L-023).
+# D-L007-2..8 fixed on L-007/L-025, D1/D7 by L-023 (xfail markers removed). Only the D6
+# oracle marker below remains (restored from origin/main; Sonnet to decide on the oracle).
 KNOWN: dict[tuple[str, str | None], str] = {
-    **{("test_hole_verify_source_quote_non_canonical_provenance", c): D1 for c in HOLE_IDS},
     # D6 is fixed: the dependency is cited and passes verify_source_quote and
     # verify_dependency, which decode UTF-16 via text.decode_text. This test's own
     # oracle_ok() decodes show output as UTF-8 only, so it cannot match any UTF-16
     # citation. Kept red for Sonnet to decide on the oracle; assertion unchanged.
     ("test_utf16_requirements_is_evidence", None): D6 + " [fixed in code; oracle_ok is UTF-8 only]",
-    ("test_verifier_never_raises_on_nul_in_path", None): D7,
-    ("test_verifier_never_raises_on_nul_in_commit", None): D7,
 }
 
 

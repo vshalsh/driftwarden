@@ -160,12 +160,12 @@ def verify_evidence(
     loc = f"{ev.ref.path}:{ev.ref.line_start}-{ev.ref.line_end}@{ev.ref.commit[:12]}"
     problems: list[str] = []
     if ev.ref.path != posixpath.normpath(ev.ref.path) or ev.ref.path.startswith("/"):
-        # verify_source_quote normalises "a/b.py/" and "./a/b.py" to the real file;
-        # evidence must name it exactly as the repository does.
+        # verify_source_quote rejects these too (L-023); kept here so the gate states
+        # the rule itself: evidence must name the file exactly as the repository does.
         problems.append(f"path {ev.ref.path!r} is not a canonical repo-relative path")
     if ev.ref.commit != WORKTREE and not _FULL_SHA.fullmatch(ev.ref.commit):
-        # verify_source_quote accepts any revision git resolves (HEAD, a branch, a
-        # short SHA); evidence must name the exact commit it was read from.
+        # verify_source_quote rejects moving refs too (L-023); kept here so the gate
+        # states the rule itself: evidence names the exact commit it was read from.
         problems.append(f"commit must be a full SHA or {WORKTREE}, got {ev.ref.commit!r}")
     if commit is not None and ev.ref.commit != commit:
         problems.append(
