@@ -444,15 +444,17 @@ def test_front_matter_hints(make_repo):
     assert got == [
         ("rule", "require", {"require": ["httpx"], "for": "HTTP calls"}, 16, 16),
         ("hint", "forbid", {"forbid": ["requests", "urllib3"]}, 4, 4),
-        # require httpx from the hint duplicates the rule claim and is merged away
+        # the hint's global "require httpx" is broader than the prose's "for HTTP calls"
+        # and cites other lines: it is kept, never merged into the narrower claim
+        ("hint", "require", {"require": ["httpx"]}, 5, 6),
         ("hint", "only", {"only": ["postgresql"], "category": "datastore"}, 7, 7),
         ("hint", "boundary", {"target": ["boto3"], "allowed_in": ["adapters/"]}, 8, 9),
         ("hint", "free", {"text": "Every service exposes /healthz"}, 10, 10),
     ]
-    assert "1 duplicate claim(s) merged" in cs.notes
+    assert not any("duplicate" in n for n in cs.notes)
     assert all(r.status == "VERIFIED" for r in cs.grounding)
     assert (
-        cs.claims[3].source.quote == "  boundary:\n    - {target: boto3, allowed_in: [adapters/]}"
+        cs.claims[4].source.quote == "  boundary:\n    - {target: boto3, allowed_in: [adapters/]}"
     )
 
 
@@ -1056,9 +1058,7 @@ def test_exception_clause_yields_no_unconditional_claim(sentence):
     [
         "Services communicate only via Kafka or RabbitMQ.",
         "Services must communicate exclusively through gRPC or REST.",
-        "Cloud SDKs may be imported only from adapters/ or infra/.",
         "All database access must go through the repository layer or the cache.",
-        "No SQL outside repo/ or db/.",
         "We use only Redis or Memcached for caching.",
     ],
 )
@@ -1071,7 +1071,12 @@ def test_allowed_alternatives_are_not_cut_short(sentence):
     [
         (
             "Services must not import boto3 outside adapters/.",
-            [("boundary", {"target": ["boto3"], "allowed_in": ["adapters/"]})],
+            [
+                (
+                    "boundary",
+                    {"target": ["boto3"], "allowed_in": ["adapters/"], "actor": ["Services"]},
+                )
+            ],
         ),
         (
             "Never use boto3 outside of `adapters/`.",
@@ -1139,13 +1144,119 @@ def test_indented_code_inside_a_list_item_is_skipped():
     ],
 )
 def test_several_root_hint_blocks_are_never_cited_from_the_wrong_block(make_repo, hint):
+    """YAML keeps the last of exact duplicates (reported) and both case variants: each
+    claim cites the lines of the block it really came from."""
     _, cs = _hint_run(make_repo, hint)
+    got = {c.rule["forbid"][0]: c.source.line_start for c in cs.claims if c.origin == "hint"}
+    if hint.startswith("DriftWarden"):
+        assert got == {"alpha": 3, "beta": 5} and cs.unverified == []
+    else:
+        assert got == {"beta": 5}
+        assert any("duplicate key 'driftwarden'" in u.reason for u in cs.unverified)
+
+
+# ------------------------------------------------------------------ round 4: clause coverage
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # Codex round 4
+        "PostgreSQL is the only datastore for analytics.",
+        # ~15 more: leftover actor / purpose / location / member / time / manner clauses
+        "PostgreSQL is the only datastore in production.",
+        "PostgreSQL is the only datastore (for analytics).",
+        "PostgreSQL is the only datastore — for analytics.",
+        "For analytics, PostgreSQL is the only datastore.",
+        "In production, services must not use MongoDB.",
+        "We will use Kafka for billing events only.",
+        "Services must not use Redis for sessions.",
+        "Redis and Memcached must not be used.",
+        "Kafka & RabbitMQ are the only brokers.",
+        "Both Kafka and RabbitMQ are our only brokers.",
+        "Services must not use Redis on mobile.",
+        "Only structlog may be used for logging in the API.",
+        "Services must go through the gateway on weekdays.",
+        "Services must not import boto3 outside adapters/ in production.",
+        "We will use Kafka as the broker for all new services.",
+    ],
+)
+def test_clause_coverage_drops_a_claim_that_leaves_text_uncaptured(sentence):
+    assert match_sentence(sentence) == [], [(m.pattern, m.rule) for m in match_sentence(sentence)]
+
+
+@pytest.mark.parametrize(
+    "sentence,expected",
+    [
+        # Codex round 4 (b): a conjunctive "only" subject keeps every member
+        (
+            "Only Redis and Memcached may be used for caching.",
+            [("only", {"only": ["Redis", "Memcached"], "category": "caching"})],
+        ),
+        # (d) a conjunctive allowed list is captured whole
+        (
+            "No SQL outside repo/ and db/.",
+            [("boundary", {"target": ["SQL"], "allowed_in": ["repo/", "db/"]})],
+        ),
+        # (e) the actor of "never" is the claim's subject
+        (
+            "Request handlers never import pandas.",
+            [("forbid", {"forbid": ["pandas"], "action": "import"})],
+        ),
+        # a purpose the pattern captures is kept on the claim ("for"), not dropped
+        (
+            "Services must use structlog for audit events.",
+            [("require", {"require": ["structlog"], "for": "audit events"})],
+        ),
+        (
+            "We will use Terraform for new infrastructure.",
+            [("require", {"require": ["Terraform"], "for": "new infrastructure"})],
+        ),
+        # a trailing manner adverb is captured, not dropped
+        (
+            "Never call the billing API synchronously.",
+            [("forbid", {"forbid": ["billing API"], "action": "call", "manner": "synchronously"})],
+        ),
+        # universal / boilerplate leftovers do not narrow anything
+        (
+            "Kafka will be the sole message broker for all services.",
+            [("only", {"only": ["Kafka"], "category": "message broker"})],
+        ),
+        (
+            "From today, services must not use MongoDB.",
+            [("forbid", {"forbid": ["MongoDB"], "action": "use"})],
+        ),
+    ],
+)
+def test_clause_coverage_captures_or_keeps(sentence, expected):
+    got = [(m.kind, m.rule) for m in match_sentence(sentence)]
+    assert got == expected
+
+
+def test_never_actor_is_the_subject():
+    (m,) = match_sentence("Request handlers never import pandas.")
+    assert m.subject == "request handlers"
+
+
+def test_hint_keys_differing_only_in_case_are_reported(make_repo):
+    _, cs = _hint_run(make_repo, "driftwarden:\n  forbid: [a]\n  Forbid: [b]")
     assert not [c for c in cs.claims if c.origin == "hint"]
-    assert any("blocks in the front-matter" in u.reason for u in cs.unverified)
+    assert len(cs.unverified) == 2
+    assert all("differing only in case" in u.reason for u in cs.unverified)
+    assert {u.source.line_start for u in cs.unverified} == {3, 4}
 
 
 def test_allowed_list_kept_whole_when_captured_whole():
-    (m,) = match_sentence("Only adapters/ or infra/ may import boto3.")
-    assert m.rule["allowed_in"] == ["adapters/", "infra/"]
+    # an allowed LOCATION list ("in X or Y" = allowed in either) is captured whole
+    for s in (
+        "Only adapters/ or infra/ may import boto3.",
+        "Cloud SDKs may be imported only from adapters/ or infra/.",
+        "Cloud SDKs may be imported only from adapters/ and infra/.",
+    ):
+        (m,) = match_sentence(s)
+        assert m.rule["allowed_in"] == ["adapters/", "infra/"], s
+    for s in ("No SQL outside repo/ or db/.", "No SQL outside repo/ and db/."):
+        (m,) = match_sentence(s)
+        assert m.rule == {"target": ["SQL"], "allowed_in": ["repo/", "db/"]}, s
     (m,) = match_sentence("Services communicate only via Kafka.")
     assert m.rule == {"only": ["Kafka"], "between": "Services"}

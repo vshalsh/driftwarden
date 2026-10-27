@@ -155,10 +155,6 @@ def test_D12_hint_distinct_category_and_distinct_free_text_are_kept(make_repo):
     assert len(cs.claims) == 4
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R1: a broader LLM/hint claim (no scope/action/for) is merged into a narrower rule claim and vanishes (only a '(duplicate)' ledger row)",
-)
 @pytest.mark.parametrize(
     "decision,quote,llm_rule,kind",
     [
@@ -200,10 +196,6 @@ def test_R1_broader_llm_claim_is_not_swallowed_by_narrower_rule_claim(
     assert cites(cs, s + 1), [(c.id, c.rule, c.source.line_start) for c in cs.claims]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R1b: a global front-matter hint is merged into a narrower rule claim and vanishes",
-)
 def test_R1b_global_hint_not_swallowed_by_scoped_rule_claim(make_repo):
     """1. As R1, for the explicit machine-readable `driftwarden:` block (the author's
     stated rule). 2. Code: structure.py _duplicate() (hint is not 'rule', so the lenient
@@ -215,10 +207,6 @@ def test_R1b_global_hint_not_swallowed_by_scoped_rule_claim(make_repo):
     assert any(c.origin == "hint" for c in cs.claims), [(c.origin, c.rule) for c in cs.claims]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R2: hint claims that differ only in their explicit subject are merged (forbid {payments,reports}; boundary subject)",
-)
 @pytest.mark.parametrize(
     "hint",
     [
@@ -236,10 +224,6 @@ def test_R2_hint_claims_with_different_subjects_are_both_kept(make_repo, hint):
     assert len(cs.claims) == 2, [(c.subject, c.rule) for c in cs.claims]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R3: LLM claims that differ only in subject (module:payments vs module:reports) are merged, though the system prompt tells the model to put the scope in subject",
-)
 def test_R3_llm_claims_with_different_subjects_are_both_kept(make_repo):
     """1. SYSTEM_PROMPT: 'subject names what the claim is about, e.g. module:payments'; two
     modules are two claims. 2. Code: structure.py _duplicate() ignores subject for any pair
@@ -446,10 +430,6 @@ def test_crlf_decision_equals_lf_claims_and_quotes_verify(make_repo):
     assert b.unverified == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R13: fenced-code tracking ignores fence char/length and info-string rules; code inside a ```-fence containing ~~~ (or a ````-fence) is read as prose",
-)
 @pytest.mark.parametrize(
     "block",
     [
@@ -471,10 +451,6 @@ def test_R13_code_fence_variants_are_not_prose(make_repo, block):
 # =========================================================================== 4. new false claims
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason='R4: a negator inside the captured subject is not seen by the negation guard: "Services don\'t have to use Redis" and "All services need not use Redis" become require Redis',
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -505,10 +481,6 @@ def test_R4_negation_inside_subject_capture_does_not_become_require(sentence):
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason='R5: "Redis and Postgres are the only datastores" yields only=[Postgres] (first conjunct dropped)',
-)
 @pytest.mark.parametrize(
     "sentence,dropped",
     [
@@ -532,10 +504,6 @@ def test_R5_coordinated_subject_of_only_is_not_truncated_to_last_conjunct(senten
             assert dropped in m.rule["only"], (sentence, m.rule)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R6: forbid claims drop an exception/qualifier clause (outside/except/without/for X, 'but we will for search') and become an unconditional ban",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -571,10 +539,6 @@ def test_R6_forbid_does_not_drop_exception_or_qualifier_clause(sentence):
     assert bare == [], [(m.rule) for m in bare]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R7: temporal 'until/before/after/once/pending/during' limits are not in the conditional guard: a temporary ban becomes permanent",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -599,10 +563,6 @@ def test_R7_time_limited_statements_yield_no_claim(sentence):
     assert match_sentence(sentence) == [], [(m.kind, m.rule) for m in match_sentence(sentence)]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R8: present-tense / that-less reported speech ('Nobody says ...', 'Alice says ...', 'which said ...', 'proposed: ...', 'suggested ...') is read as the ADR's own rule",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -631,10 +591,6 @@ def test_R8_reported_speech_is_not_a_decision(sentence):
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R9: draft/proposal markers other than 'Proposed:'/'Rejected:'/'Option N:' ('(proposed)', '(draft)', '(TBD)', 'Proposal:', 'Option A:', 'Draft:', 'TODO:') do not stop a claim",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -657,10 +613,6 @@ def test_R9_draft_and_proposal_markers_yield_no_claim(sentence):
     assert match_sentence(sentence) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R10: frequency/degree hedges before the negation ('generally don't', 'typically do not', 'currently do not', 'avoid ... in general') still yield an unconditional forbid",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -681,10 +633,6 @@ def test_R10_hedged_or_descriptive_negatives_yield_no_claim(sentence):
     assert match_sentence(sentence) == [], [(m.subject, m.rule) for m in match_sentence(sentence)]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R11: 'X is the only <category> ...' drops a trailing relative/scope clause ('that is not allowed', 'we ban', 'in staging', 'for analytics', 'except for tests', 'should we choose ...')",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -718,10 +666,6 @@ def test_R11_only_category_with_trailing_clause_is_not_a_global_only(sentence):
     assert plain == [], [(m.rule) for m in plain]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R12: terms containing a contrast/coordination/markup fragment ('Redis not Memcached', 'Redis over Memcached', 'must use Memcached', '[Redis]', 'other') are emitted as claim terms",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -752,10 +696,6 @@ def test_R12_claim_terms_are_clean_technology_names(sentence):
                 assert not bad.search(t), (sentence, m.kind, m.rule)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R14: lines under a heading such as '### Alternatives considered' / '## Rejected' inside the decision text yield claims",
-)
 @pytest.mark.parametrize(
     "decision",
     [
@@ -821,10 +761,6 @@ def test_regex_inputs_100kb_run_in_a_few_seconds(build):
     assert time.perf_counter() - t < 8.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R15: match_sentence is quadratic in the number of matches per sentence (_negated rescans the whole prefix): 30 KB -> ~4 s, 100 KB -> ~50 s; round-1 code: 0.15 s",
-)
 def test_R15_many_matches_in_one_sentence_scale_linearly():
     """1. Round-1 requirement 'very long single line is roughly linear' (and the 100 KB
     time-box). 2. Code: rules.py _negated() builds prefix=clean[:start] and runs
@@ -836,10 +772,6 @@ def test_R15_many_matches_in_one_sentence_scale_linearly():
     assert _timed(match_sentence, s) < 2.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R16: sentence_spans is quadratic on abbreviation-dense blocks ('e.g. ' x 5000 = 25 KB -> ~6 s; 100 KB -> ~95 s); pre-existing, same in the round-1 code",
-)
 def test_R16_abbreviation_dense_block_scales_linearly():
     """1. 100 KB time-box. 2. Code: rules.py sentence_spans(): for every abbreviation
     'continue' the start s does not advance, so the next iteration's
@@ -915,10 +847,6 @@ def test_huge_front_matter_is_bounded(make_repo):
     assert len(cs.claims) == 1 and time.perf_counter() - t < 10
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R18: a second hint block under a case-variant key ('Driftwarden:') is silently ignored (first wins), unlike an exact duplicate which is reported",
-)
 def test_R18_case_variant_duplicate_hint_key_is_reported(make_repo):
     """1. D11: duplicate YAML keys must not be silently dropped; the loader matches the
     hint key case-insensitively (test_hint_key_case) so 'Driftwarden' IS a hint block.
@@ -945,10 +873,6 @@ def test_D14_bad_line_numbers_keep_valid_siblings_and_are_reported(make_repo):
         assert [u.origin for u in cs.unverified] == ["llm"] and cs.unverified[0].reason
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R17: D14 fixed only line numbers; any other single schema violation (subject > 200 chars, empty quote/subject, unknown kind, float line number, non-object rule) still discards every sibling LLM claim with only a batch note",
-)
 @pytest.mark.parametrize(
     "patch",
     [
