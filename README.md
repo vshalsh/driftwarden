@@ -54,7 +54,7 @@ DriftWarden is itself an AI system, so it is held to the standard it enforces. E
 | # | What the AI produces | Provenance it must return | Verifier | Sample & threshold | Evidence | What the user sees on failure |
 |---|---|---|---|---|---|---|
 | G1 | A testable claim extracted from an ADR | `path, line_start, line_end, commit, quote` | `grounding/verify.py::verify_source_quote` | Every claim, every run; benchmark ≥ 200 records | `logs/grounding/*.jsonl`, ledger | Claim listed under *Could not verify* with the mismatch reason; it is not judged |
-| G2 | Code evidence cited for a verdict | `path, line_start, line_end, commit, snippet` | `verify_source_quote` | Every cited item | same | Evidence removed. If no verified evidence remains, the verdict becomes `UNKNOWN` and is shown under *Could not verify* |
+| G2 | Code evidence cited for a verdict | `path, line_start, line_end, commit, snippet` | `verify_source_quote` (via `judge/judge.py::gate`) | Every cited item | same | The verdict becomes `UNKNOWN` (grounding `MISMATCH`) and is shown under *Could not verify* with the verifier's reasons; the unverified evidence stays listed |
 | G3 | "Dependency X is present / was added" | `manifest_path, package, version_spec, commit` | `verify_dependency` (non-LLM manifest parsers) | Every dependency claim | same | As G2 |
 | G4 | "First violated at commit C" | `commit, parent, evidence_ref` | `verify_first_violation` | Every timeline entry | same | Timeline entry shown as "first seen: unknown" |
 | G5 | Drafted ADR for an undocumented decision | `introducing_commits[], evidence_refs[]` | `verify_commits_exist` + G2 | Every draft | same | Draft not emitted; listed as a *candidate* with the reason |
