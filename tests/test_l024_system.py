@@ -1576,11 +1576,11 @@ K = 100_000
         ),
     ],
 )
-def test_perf_100kb_single_sentence_decorated(name, s, limit):
+def test_perf_100kb_single_sentence_decorated(name, s, limit, perf_factor):
     assert 90_000 < len(s) < 125_000, len(s)
     dt = timed(match_sentence, s)
     print(f"\n{name}: {dt:.2f}s")
-    assert dt < limit
+    assert dt < limit * perf_factor
 
 
 def test_perf_scaling_is_linear_for_the_worst_pattern():
@@ -1589,21 +1589,29 @@ def test_perf_scaling_is_linear_for_the_worst_pattern():
     assert b < max(a, 0.05) * 8  # 4x input, well below quadratic (16x)
 
 
-def test_perf_100kb_decorated_paragraph_sentence_spans():
+def test_perf_100kb_decorated_paragraph_sentence_spans(perf_factor):
     s = "Decision: We will use Kafka, to reduce ops cost (see ADR-0007). " * 1500
-    assert timed(lambda t: [match_sentence(t[a:b]) for a, b in sentence_spans(t)], s) < 20
-
-
-def test_perf_5000_claim_decorated_adr_end_to_end(make_repo):
-    body = "\n".join(
-        f"Decision: Module m{i} must not import legacy{i}, to reduce ops cost (see ADR-0007)."
-        for i in range(5000)
+    assert (
+        timed(lambda t: [match_sentence(t[a:b]) for a, b in sentence_spans(t)], s)
+        < 20 * perf_factor
     )
-    t = time.perf_counter()
-    repo, cs = offline(make_repo, adr(body))
-    dt = time.perf_counter() - t
-    print(f"\n5000 decorated claims end to end: {dt:.1f}s")
+
+
+def test_perf_5000_claim_decorated_adr_end_to_end(make_repo, perf_factor):
+    """Linear scaling (500 -> 5000, same process) + ceiling calibrated on this runner's measured
+    per-claim G1 (`git show`) cost; no flat wall clock."""
+    from conftest import time_5000_claim_adr
+
+    def body(i):
+        return (
+            f"Decision: Module m{i} must not import legacy{i}, to reduce ops cost (see ADR-0007)."
+        )
+
+    t500, _, _, _ = time_5000_claim_adr(make_repo, body, adr, offline, 500)
+    dt, per_call, repo, cs = time_5000_claim_adr(make_repo, body, adr, offline, 5000)
+    print(f"\n500: {t500:.1f}s, 5000: {dt:.1f}s, G1 per claim {per_call * 1000:.1f} ms")
     assert len(cs.claims) == 5000 and cs.unverified == []
-    assert dt < 120
+    assert dt / t500 < 20, (t500, dt)
+    assert dt < 5000 * per_call * 2.5 + 30 * perf_factor
     for c in cs.claims[:: 5000 // 100]:
         assert verify_source_quote(repo, c.source).status == "VERIFIED"
