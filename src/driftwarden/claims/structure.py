@@ -64,8 +64,10 @@ CLAIMS_SCHEMA: dict[str, Any] = {
                     "subject": {"type": "string", "minLength": 1, "maxLength": 200},
                     "rule": {"type": "object"},
                     "quote": {"type": "string", "minLength": 1},
-                    "line_start": {"type": "integer", "minimum": 1},
-                    "line_end": {"type": "integer", "minimum": 1},
+                    # No "minimum": a bad line number must reach the G1 verifier and come
+                    # back as one unverified claim with a reason, not invalidate the reply.
+                    "line_start": {"type": "integer"},
+                    "line_end": {"type": "integer"},
                 },
             },
         }
@@ -159,8 +161,18 @@ def _terms(rule: dict[str, Any], key: str) -> tuple[str, ...]:
     return tuple(sorted({_norm(x) for x in v if isinstance(x, str)}))
 
 
+_KEY_FIELDS = {
+    "free": ("text",),
+    "boundary": ("target", "allowed_in", "via"),
+    "forbid": ("forbid",),
+    "require": ("require",),
+    "only": ("only",),
+}
+
+
 def claim_key(kind: str, rule: dict[str, Any]) -> str:
-    """De-duplication key: kind plus the rule's key terms, case/space-insensitive."""
+    """Term key: kind plus the rule's key terms, case/space-insensitive. Equal term keys
+    are necessary, not sufficient, for a duplicate (see ``qualifiers`` / ``_duplicate``)."""
     if kind == "free":
         body: Any = _norm(str(rule.get("text", "")))
     elif kind == "boundary":
@@ -168,6 +180,44 @@ def claim_key(kind: str, rule: dict[str, Any]) -> str:
     else:
         body = _terms(rule, kind)
     return json.dumps([kind, body])
+
+
+def _qual_value(v: Any) -> Any:
+    if isinstance(v, str):
+        return _norm(v)
+    if isinstance(v, list):
+        return json.dumps(sorted(json.dumps(_qual_value(x)) for x in v))
+    if isinstance(v, dict):
+        return json.dumps({str(k): _qual_value(x) for k, x in sorted(v.items())})
+    return json.dumps(v, sort_keys=True, default=str)
+
+
+def qualifiers(kind: str, rule: dict[str, Any]) -> dict[str, Any]:
+    """Every other rule field that changes the claim's meaning (scope, for, category,
+    action, between, ...), normalised. Empty values count as absent."""
+    keys = _KEY_FIELDS.get(kind, ())
+    return {k: _qual_value(v) for k, v in rule.items() if k not in keys and v not in (None, "", [])}
+
+
+def dedup_key(claim: Claim) -> str:
+    """Strict identity: kind, key terms, qualifiers and subject."""
+    q = qualifiers(claim.kind, claim.rule)
+    return json.dumps([claim_key(claim.kind, claim.rule), sorted(q.items()), _norm(claim.subject)])
+
+
+def _duplicate(new: Claim, old: Claim) -> bool:
+    """``new`` restates ``old``.
+
+    Two rule-library claims are duplicates only when everything matches (``dedup_key``):
+    "must not use X in domain/" and "... in reports/" are two claims. A hint or model
+    claim names its subject freely and often omits qualifiers, so it restates ``old``
+    when the key terms match and every qualifier both state agrees."""
+    if claim_key(new.kind, new.rule) != claim_key(old.kind, old.rule):
+        return False
+    if new.origin == "rule" and old.origin == "rule":
+        return dedup_key(new) == dedup_key(old)
+    qn, qo = qualifiers(new.kind, new.rule), qualifiers(old.kind, old.rule)
+    return all(qo[k] == v for k, v in qn.items() if k in qo)
 
 
 def _in_decision(prov: Provenance, decision: Decision) -> bool:
@@ -306,17 +356,19 @@ def structure_decision(
                 verified.append((claim, res))
 
     # Merge + de-duplicate (verified only; unverified are always reported), then number.
-    seen: dict[str, str] = {}
+    kept: dict[str, list[Claim]] = {}  # term key -> claims kept (with final ids)
     dups = 0
     for claim, res in verified:
-        key = claim_key(claim.kind, claim.rule)
-        if key in seen:
+        same_terms = kept.setdefault(claim_key(claim.kind, claim.rule), [])
+        orig = next((k for k in same_terms if _duplicate(claim, k)), None)
+        if orig is not None:
             dups += 1
-            out.grounding.append(res.model_copy(update={"subject": f"{seen[key]} (duplicate)"}))
+            out.grounding.append(res.model_copy(update={"subject": f"{orig.id} (duplicate)"}))
             continue
         cid = f"{decision.id}.c{len(out.claims) + 1}"
-        seen[key] = cid
-        out.claims.append(claim.model_copy(update={"id": cid}))
+        final = claim.model_copy(update={"id": cid})
+        same_terms.append(final)
+        out.claims.append(final)
         out.grounding.append(res.model_copy(update={"subject": cid}))
     for n, (uc, res) in enumerate(failed, 1):
         uid = f"{decision.id}.u{n}"

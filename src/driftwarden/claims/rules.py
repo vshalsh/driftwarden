@@ -38,6 +38,39 @@ quote with ``verify_source_quote()``.
 
 Claim ids produced here are provisional (``<ADR>.c<n>``); the dispatcher
 renumbers after merging and de-duplicating.
+
+Precision guards (a missed rule costs recall; an invented or inverted one is a false
+VIOLATED, so the library errs towards no claim):
+
+* A sentence that reports, hedges or conditions a statement yields no claim:
+  rejected/dropped proposals ("Rejected: ...", "... was rejected", "but this was
+  dropped"), reported speech ("Some argued that ..."), hedges ("maybe", "probably",
+  "might"), conditions ("if", "unless", "where possible") and temporary statements
+  ("yet", "for now").
+* A match with a negator earlier in its clause is ignored ("We do not standardise on
+  X", "must not NOT use X").
+* A require/only term that is one of several alternatives or a bound ("Redis or
+  Memcached", "Python 3.11 or later", "either ..."), or no choice at all ("Chosen
+  option: none"), yields no claim.
+* Fenced and indented code blocks are not prose.
+
+Known limits (recall gaps, documented rather than guessed at):
+
+* Curly-/guillemet-quoted terms ("We will use “Postgres”", "«Zürich-DB»") end the
+  term at the quote mark and usually yield no claim.
+* Inverted phrasings: "The only datastore is PostgreSQL", "Nothing outside adapters/
+  may import boto3", "boto3 imports are restricted to adapters/", "No service uses
+  MongoDB" (present tense), "Services do not communicate via REST".
+* Passive / descriptive forms: "Every service is deployed on Kubernetes", "All HTTP
+  traffic goes through the gateway" (no modal).
+* HTML comments (``<!-- ... -->``) are treated as prose.
+* "We decided not to use X", "We are not going to use X" and "We no longer use X"
+  yield no claim (only "will not / won't / do not / don't / cannot use X" and
+  "(we will) avoid X" are forbid patterns).
+* The conditional guard is lexical: any "if"/"unless"/"whether" drops the sentence,
+  including real rules with an exception clause ("must not use X unless approved").
+* An "any of" alternative ("We will use Redis or Memcached") is not modelled; it
+  yields no claim rather than a stricter require.
 """
 
 from __future__ import annotations
@@ -83,7 +116,7 @@ def _subj(name: str) -> str:
 
 
 _STOP_WORDS = (
-    "and|or|but|because|so|when|unless|except|without|instead|for|as|in|from|within|"
+    "and|or|nor|but|because|so|when|unless|except|without|instead|rather|for|as|in|from|within|"
     "inside|outside|via|through|to|which|that|if|is|are|was|were|will|would|must|may|"
     "should|shall|can|by|on|at|with|using|since|until|where|while|we|directly|only"
 )
@@ -92,7 +125,12 @@ _STOP = rf"(?=\s+(?:{_STOP_WORDS})\b|\s*(?:[,;:!?()—–\"]|\.(?:\s|$))|\s*$)"
 # End of a term list: commas and and/or are part of the list.
 _LSTOP = (
     r"(?=\s+(?:without|unless|except|outside|because|in|from|within|inside|for|to|"
-    r"directly|when|if|so|since|until|unless)\b|\s*(?:[;:!?()—–\"]|\.(?:\s|$))|\s*$)"
+    r"directly|when|if|so|since|until|unless|instead|rather)\b|\s*(?:[;:!?()—–\"]|\.(?:\s|$))|"
+    r"\s*$|"
+    # a new clause after a comma ("Don't use MongoDB, use PostgreSQL"): not a list item
+    r"\s*,\s*(?:but|instead|rather|use|prefer|we|they|which|so|and\s+(?:use|prefer))\b|"
+    # ", and PostgreSQL is the only datastore": a new clause with its own verb
+    r"\s*,\s*and\s+(?:[\w.+#/@'-]+\s+){1,4}?(?:is|are|must|shall|should|will|may|can)\b)"
 )
 
 _VERBS = (
@@ -151,14 +189,42 @@ def clean_term(raw: str | None) -> str | None:
     return t
 
 
+_OF_HEAD = re.compile(
+    r"^(?:(?:use|usage|uses|import|imports|importing|adoption|introduction|addition|"
+    r"inclusion)\s+)?of\s+",
+    _I,
+)
+
+
 def _strip_lead(raw: str | None) -> str | None:
-    """Drop filler words in front of a subject ("We decided that PostgreSQL" -> "PostgreSQL")."""
+    """Drop filler words in front of a subject ("We decided that PostgreSQL" -> "PostgreSQL",
+    "Use of MongoDB" -> "MongoDB")."""
     if raw is None:
         return None
     words = raw.split()
     while len(words) > 1 and words[0].lower() in _LEAD:
         words.pop(0)
-    return clean_term(" ".join(words))
+    return clean_term(_OF_HEAD.sub("", " ".join(words)))
+
+
+# A positive term that is really an alternative, a bound or the absence of a choice:
+# "Redis or Memcached", "Python 3.11 or later", "neither X nor Y", "none". Turning it
+# into require/only [X] would be stricter than (or the opposite of) the text.
+_NOT_ONE_TERM = re.compile(
+    r"\b(?:or|nor|and/or|either|neither|rather than|versus|vs|at least|at most)\b|\+$", _I
+)
+_NO_CHOICE = {
+    "none", "nothing", "n/a", "na", "tbd", "tba", "undecided", "no option", "nothing yet",
+    "not decided", "not yet decided", "to be decided", "pending", "unknown", "-",
+}  # fmt: skip
+
+
+def _single_term(x: str | None) -> str | None:
+    """``x`` when it names one technology; None for alternatives, bounds and 'none'."""
+    x = clean_term(x)
+    if not x or _NOT_ONE_TERM.search(x) or x.lower().strip(" .!") in _NO_CHOICE:
+        return None
+    return x
 
 
 def split_list(raw: str | None) -> list[str]:
@@ -240,7 +306,7 @@ def _rx(*sources: str) -> tuple[re.Pattern[str], ...]:
 
 
 def _only(x: str | None, cat: str | None, *, default_cat: str | None = None) -> Built:
-    x, cat = clean_term(x), clean_term(cat) or default_cat
+    x, cat = _single_term(x), clean_term(cat) or default_cat
     if not x or not cat:
         return None
     return cat.lower(), {"only": [x], "category": cat}
@@ -314,11 +380,15 @@ def _b_no_actor_may(g: dict) -> Built:
 
 
 def _b_must_not(g: dict) -> Built:
-    who = _strip_lead(g.get("who"))
-    if g.get("who") and who is None:
+    raw_who = g.get("who")
+    if raw_who and raw_who.strip().lower() == "we":
+        raw_who = None  # "We will not use X": the team speaking for the whole codebase
+    who = _strip_lead(raw_who)
+    if raw_who and who is None:
         return None  # "It must not use ..." names no subject we can test
     scope = _paths(g.get("scope"))
-    return _forbid(who, split_list(g["y"]), action=_base_verb(g["v"]), scope=scope)
+    v = g.get("v")
+    return _forbid(who, split_list(g["y"]), action=_base_verb(v) if v else None, scope=scope)
 
 
 def _b_not_allowed(g: dict) -> Built:
@@ -340,7 +410,7 @@ def _b_never(g: dict) -> Built:
 
 
 def _require(subject: str | None, x: str | None, cat: str | None) -> Built:
-    x = clean_term(x)
+    x = _single_term(x)
     if not x or x.lower().startswith(("only ", "not ")):
         return None
     cat = clean_term(cat)
@@ -536,7 +606,12 @@ RULES: tuple[RulePattern, ...] = (
             "We standardise on structlog for logging.",
             "The team standardized on Terraform.",
         ),
-        non_examples=("We did not standardise anything.", "Standards on logging are TBD."),
+        non_examples=(
+            "We did not standardise anything.",
+            "Standards on logging are TBD.",
+            "We do not standardise on PostgreSQL.",
+            "We won't standardise on PostgreSQL.",
+        ),
     ),
     # ---- forbid ---------------------------------------------------------------
     RulePattern(
@@ -558,11 +633,18 @@ RULES: tuple[RulePattern, ...] = (
     RulePattern(
         "forbid-must-not",
         "forbid",
-        '"(A) must not use/import Y", "Do not use Y".',
+        '"(A) must not use/import Y", "Do not use Y", "We will not use Y", "A must use '
+        'neither X nor Y", "(We will) avoid Y".',
         _rx(
             rf"(?:{_subj('who')}\s+)?(?:{_NEG_MODAL})\s+(?:directly\s+|ever\s+)?"
             rf"(?P<v>{_VERBS})\s+{_list('y')}"
-            rf"(?:\s+(?:in|from|within|inside)\s+{_term('scope')})?{_LSTOP}"
+            rf"(?:\s+(?:in|from|within|inside)\s+{_term('scope')})?{_LSTOP}",
+            rf"{_subj('who')}\s+(?:must|shall|should|may|can|will|are to|is to)\s+"
+            rf"(?P<v>{_VERBS})\s+neither\s+{_list('y')}"
+            rf"(?:\s+(?:in|from|within|inside)\s+{_term('scope')})?{_LSTOP}",
+            rf"(?:^|\bwe\s+(?:will|shall|must|should)\s+)avoid\s+"
+            rf"(?:(?P<v>using|importing|depending on|calling|adding|introducing)\s+)?"
+            rf"{_list('y')}(?:\s+(?:in|from|within|inside)\s+{_term('scope')})?{_LSTOP}",
         ),
         _b_must_not,
         examples=(
@@ -570,11 +652,20 @@ RULES: tuple[RulePattern, ...] = (
             "Do not use MongoDB.",
             "The domain layer must never depend on Django or Flask.",
             "Handlers are not allowed to call the database directly.",
+            "We will not use MongoDB.",
+            "We do not use Redis.",
+            "Services must use neither MongoDB nor Redis.",
+            "We will avoid MongoDB.",
+            "Avoid importing pandas in request handlers.",
         ),
         non_examples=(
             "Services must use the event bus.",
             "We must not forget the migration plan.",
             "We will not delay the release.",
+            "We do not use Redis yet.",
+            "Where possible, avoid MongoDB.",
+            "We should try to avoid MongoDB.",
+            "If we can, we will avoid Redis.",
         ),
     ),
     RulePattern(
@@ -606,6 +697,7 @@ RULES: tuple[RulePattern, ...] = (
             "Synchronous service-to-service HTTP calls are not allowed.",
             "Global mutable singletons are forbidden.",
             "Raw SQL is prohibited in controllers.",
+            "Use of MongoDB is prohibited.",
         ),
         non_examples=(
             "Exceptions are allowed with approval.",
@@ -634,7 +726,12 @@ RULES: tuple[RulePattern, ...] = (
             "Chosen option: structlog.",
             'Chosen option: "in-process LRU cache", because it needs no new datastore.',
         ),
-        non_examples=("We have not chosen an option yet.", "Considered option: Flask."),
+        non_examples=(
+            "We have not chosen an option yet.",
+            "Considered option: Flask.",
+            "Chosen option: none.",
+            "Chosen option: Redis or Memcached.",
+        ),
     ),
     RulePattern(
         "require-must-use",
@@ -651,7 +748,12 @@ RULES: tuple[RulePattern, ...] = (
             "Every service must be written in Go.",
             "Frontends shall be built with React.",
         ),
-        non_examples=("Services must not use structlog.", "You must use your judgement."),
+        non_examples=(
+            "Services must not use structlog.",
+            "You must use your judgement.",
+            "Services must use neither MongoDB nor Redis.",
+            "Services must use Python 3.11 or later.",
+        ),
     ),
     RulePattern(
         "require-all-use",
@@ -671,23 +773,31 @@ RULES: tuple[RulePattern, ...] = (
     RulePattern(
         "require-we-will-use",
         "require",
-        '"We will use X (as/for Y)".',
+        '"We will use X (as/for Y)"; "Don\'t use Y, use X".',
         _rx(
             rf"\bwe\s+(?:will\s+|shall\s+|have decided to\s+|decided to\s+|are going to\s+|"
             rf"agreed to\s+|have agreed to\s+|choose to\s+|chose to\s+)?"
             rf"(?:use|adopt|go with|build on|rely on)\s+{_term('x')}"
-            rf"(?:\s+(?:as|for)\s+(?:our\s+|the\s+|a\s+|an\s+)?{_term('cat')})?{_STOP}"
+            rf"(?:\s+(?:as|for)\s+(?:our\s+|the\s+|a\s+|an\s+)?{_term('cat')})?{_STOP}",
+            # the alternative named after a ban; only the "use X" clause is claimed
+            rf"^(?:do not|don't|never)\s+use\s+[^,;]{{1,120}}?[,;]\s+"
+            rf"(?P<claim>(?:but\s+|instead\s+)?use\s+{_term('x')}(?:\s+instead)?){_STOP}",
         ),
         _b_we_use,
         examples=(
             "We will use RabbitMQ as the message broker.",
             "We will use Architecture Decision Records, as described by Michael Nygard.",
             "We have decided to adopt Terraform for infrastructure.",
+            "Don't use MongoDB, use PostgreSQL.",
         ),
         non_examples=(
             "We will not use MongoDB.",
             "We will revisit this decision in a year.",
             "Should we use MongoDB?",
+            "We will use Redis or Memcached.",
+            "Maybe we will use Redis.",
+            "If we need a cache, we will use Redis.",
+            "Rejected: we will use MongoDB.",
         ),
     ),
 )
@@ -707,11 +817,14 @@ def sentence_spans(text: str) -> list[tuple[int, int]]:
     """Character spans ``[start, end)`` of the prose sentences of ``text``.
 
     Blank lines, headings, table rows and list items start a new block; fenced
-    code is skipped; a list marker is not part of the sentence.
+    code and indented code (4+ columns after a blank line, outside a list) are
+    skipped; a list marker is not part of the sentence.
     """
     blocks: list[tuple[int, int]] = []
     cur: list[int] | None = None
     in_fence = False
+    in_code = False  # indented code block
+    in_list = False  # inside a list item (indented lines are its continuation)
     offset = 0
     for line in text.split("\n"):
         start, end = offset, offset + len(line)
@@ -721,10 +834,27 @@ def sentence_spans(text: str) -> list[tuple[int, int]]:
             cur = _flush(blocks, cur)
             continue
         stripped = line.strip()
-        if in_fence or not stripped or _HEADING.match(line) or stripped.startswith("|"):
+        if in_fence:
+            continue
+        if not stripped:
             cur = _flush(blocks, cur)
             continue
+        indented = _columns(line) >= 4
+        if in_code and indented:
+            continue
+        in_code = False
+        if indented and cur is None and not in_list:
+            in_code = True
+            continue
+        if _HEADING.match(line) or stripped.startswith("|"):
+            cur = _flush(blocks, cur)
+            in_list = False
+            continue
         m = _BULLET.match(line)
+        if m:
+            in_list = True
+        elif not indented and cur is None:
+            in_list = False
         if m:
             cur = _flush(blocks, cur)
             s = start + m.end()
@@ -753,6 +883,19 @@ def sentence_spans(text: str) -> list[tuple[int, int]]:
     return [(a, b) for a, b in spans if text[a:b].strip()]
 
 
+def _columns(line: str) -> int:
+    """Leading indentation in columns (a tab counts as 4)."""
+    n = 0
+    for ch in line:
+        if ch == " ":
+            n += 1
+        elif ch == "\t":
+            n += 4 - n % 4
+        else:
+            break
+    return n
+
+
 def _flush(blocks: list[tuple[int, int]], cur: list[int] | None) -> None:
     if cur is not None and cur[1] > cur[0]:
         blocks.append((cur[0], cur[1]))
@@ -777,18 +920,62 @@ class Match:
     span: tuple[int, int]  # in the cleaned sentence
 
 
+# Sentences that report, hedge or condition a statement instead of deciding it. They
+# yield no claim at all (precision first: a missed rule costs recall, an invented or
+# inverted one costs a false VIOLATED).
+_NOT_A_DECISION = re.compile(
+    r"^(?:rejected|dropped|discarded|abandoned|withdrawn|superseded|deprecated|"
+    r"proposed|considered|alternatives?|option\s+\d+|pros?|cons?)\s*:"  # MADR-style labels
+    r"|\b(?:rejected|dropped|discarded|abandoned|withdrawn|overruled|vetoed|"
+    r"(?:was|were) not (?:adopted|accepted|chosen|pursued))\b"
+    r"|\b(?:argued|suggested|claimed|contended|speculated|wondered|asked|felt|believed|"
+    r"thought|said)\s+(?:that\b|[\"'])"
+    r"|\b(?:maybe|perhaps|possibly|probably|potentially|hopefully|ideally|tentatively|"
+    r"likely|might)\b"
+    r"|\b(?:if|unless|in case|provided that|assuming|whether)\b"
+    r"|\b(?:where|when|if|as) (?:possible|feasible|practical|appropriate|needed|necessary)\b"
+    r"|\b(?:yet|for now|for the time being|at the moment|at present|temporarily|initially)\b",
+    _I,
+)
+# A negator in front of a match, in the same clause: "We do not standardise on X".
+_NEGATOR = re.compile(r"\b(?:not|never|no longer|neither|nor|without)\b|n't\b", _I)
+_CLAUSE_START = re.compile(r".*(?:[,;:()—–]|\b(?:and|but|while|whereas|so|then)\b)", _I | re.S)
+# A term that is one of several alternatives: "Redis or Memcached", "3.11 or later".
+_ALT_AFTER = re.compile(r"\s*(?:\bor\b|\bnor\b|\band/or\b|\+)", _I)
+_ALT_BEFORE = re.compile(r"\b(?:or|nor|either|neither)\s*$", _I)
+
+
+def _negated(clean: str, start: int) -> bool:
+    prefix = clean[:start]
+    m = _CLAUSE_START.match(prefix)
+    clause = prefix[m.end() :] if m else prefix
+    return bool(_NEGATOR.search(clause))
+
+
+def _alternative(clean: str, m: re.Match[str]) -> bool:
+    """The positive term of ``m`` is one alternative or a bound, not a single choice."""
+    if "x" not in m.re.groupindex or m.group("x") is None:
+        return False
+    a, b = m.span("x")
+    return bool(_ALT_AFTER.match(clean, b) or _ALT_BEFORE.search(clean[:a]))
+
+
 def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> list[Match]:
     """Typed matches for one sentence, in priority order, without overlaps."""
     clean = clean_sentence(sentence)
-    if not clean or clean.endswith("?"):
+    if not clean or clean.endswith("?") or _NOT_A_DECISION.search(clean):
         return []
     taken: list[tuple[int, int]] = []
     out: list[Match] = []
     for pat in patterns:
         for rx in pat.regexes:
             for m in rx.finditer(clean):
-                span = m.span()
+                span = m.span("claim") if "claim" in rx.groupindex else m.span()
                 if span[0] == span[1] or any(span[0] < b and a < span[1] for a, b in taken):
+                    continue
+                if _negated(clean, span[0]):
+                    continue  # "We do not standardise on X", "must not NOT use X"
+                if pat.kind in ("require", "only") and _alternative(clean, m):
                     continue
                 built = pat.build(m.groupdict())
                 if built is None:
@@ -978,10 +1165,51 @@ def _hint_specs(kind: str, value: Any) -> list[tuple[str, Any, str | None]]:
     return [("free", {"text": t}, None) for t in lst]
 
 
+class _HintLoader(yaml.SafeLoader):
+    """SafeLoader that records duplicate mapping keys (PyYAML silently keeps the last)."""
+
+    def __init__(self, stream: str) -> None:
+        super().__init__(stream)
+        # (key, first key line, duplicate key line, first value, first value end line)
+        self.duplicates: list[tuple[Any, int, int, Any, int]] = []
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> dict[Any, Any]:
+        if isinstance(node, yaml.MappingNode):
+            self.flatten_mapping(node)
+            first: dict[Any, tuple[Any, Any]] = {}
+            for key_node, value_node in node.value:
+                key = self.construct_object(key_node, deep=True)
+                try:
+                    hash(key)
+                except TypeError:
+                    continue  # the base constructor reports unhashable keys
+                if key in first:
+                    k0, v0 = first[key]
+                    end = v0.end_mark.line - (1 if v0.end_mark.column == 0 else 0)
+                    value = self.construct_object(v0, deep=True)
+                    self.duplicates.append(
+                        (key, k0.start_mark.line, key_node.start_mark.line, value, end)
+                    )
+                else:
+                    first[key] = (key_node, value_node)
+        return super().construct_mapping(node, deep=deep)
+
+
+def _load_front_matter(source: str) -> tuple[Any, list[tuple[Any, int, int, Any, int]]]:
+    loader = _HintLoader(source)
+    try:
+        return loader.get_single_data(), loader.duplicates
+    finally:
+        loader.dispose()
+
+
 def extract_hint_claims(decision: Decision, text: str, *, start: int = 0) -> RuleResult:
-    """Claims from a ``driftwarden:`` block in the ADR's YAML front-matter."""
+    """Claims from a ``driftwarden:`` block in the ADR's YAML front-matter. Never raises:
+    a block that cannot be read is returned in ``rejected`` with the reason."""
     result = RuleResult()
     lines = split_lines(text)
+    if lines:
+        lines[0] = lines[0].removeprefix("﻿")  # BOM (Windows editors)
     if not lines or lines[0].strip() != "---":
         return result
     fm_end = next((i for i in range(1, len(lines)) if lines[i].strip() in ("---", "...")), None)
@@ -1001,15 +1229,32 @@ def extract_hint_claims(decision: Decision, text: str, *, start: int = 0) -> Rul
         )
 
     try:
-        data = yaml.safe_load("\n".join(lines[1:fm_end]))
+        data, duplicates = _load_front_matter("\n".join(lines[1:fm_end]))
     except yaml.YAMLError as exc:
         if subs or whole != (0, 0):
-            reason = f"front-matter is not valid YAML: {str(exc).splitlines()[0]}"
+            msg = (str(exc).splitlines() or [type(exc).__name__])[0]
+            reason = f"front-matter is not valid YAML: {msg}"
+            result.rejected.append(RejectedHint("hint", "front-matter", None, prov(whole), reason))
+        return result
+    except Exception as exc:  # RecursionError on deep nesting etc.: report, never raise
+        if subs or whole != (0, 0):
+            reason = f"front-matter could not be read ({type(exc).__name__}): too deeply nested?"
             result.rejected.append(RejectedHint("hint", "front-matter", None, prov(whole), reason))
         return result
     if not isinstance(data, dict):
         return result
     hints = next((v for k, v in data.items() if str(k).lower() == HINT_KEY), None)
+    in_block = whole != (0, 0)
+    for key, first, dup, value, end in duplicates:
+        # yaml lines are 0-based from the line after the opening '---'
+        a, b, e = first + 1, dup + 1, max(first, end) + 1
+        if not (in_block and whole[0] <= a <= whole[1]) and str(key).lower() != HINT_KEY:
+            continue  # a duplicate elsewhere in the front-matter is not a hint
+        reason = (
+            f"duplicate key {key!r} in front-matter (lines {a + 1} and {b + 1}): YAML keeps "
+            "only the last one, so this earlier value is not used; merge the two entries"
+        )
+        result.rejected.append(RejectedHint("hint", str(key), value, prov((a, e)), reason))
     if hints is None:
         return result
     if not isinstance(hints, dict):

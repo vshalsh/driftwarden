@@ -717,3 +717,153 @@ def test_empty_llm_reply_and_empty_decision(basic):
         cs = structure_decision(d, repo, mode="llm", provider=prov)
         assert cs.unverified == []
     assert len(calls) == len(scan.decisions)
+
+
+# ------------------------------------------------------------------ precision guards (L-006 fixes)
+
+
+@pytest.mark.parametrize(
+    "sentence,expected",
+    [
+        ("We will not use MongoDB.", [("forbid", {"forbid": ["MongoDB"], "action": "use"})]),
+        ("We won't use MongoDB.", [("forbid", {"forbid": ["MongoDB"], "action": "use"})]),
+        ("We do not use Redis.", [("forbid", {"forbid": ["Redis"], "action": "use"})]),
+        ("We will avoid MongoDB.", [("forbid", {"forbid": ["MongoDB"]})]),
+        ("Avoid MongoDB.", [("forbid", {"forbid": ["MongoDB"]})]),
+        (
+            "Services must use neither MongoDB nor Redis.",
+            [("forbid", {"forbid": ["MongoDB", "Redis"], "action": "use"})],
+        ),
+        (
+            "Don't use MongoDB, use PostgreSQL.",
+            [
+                ("forbid", {"forbid": ["MongoDB"], "action": "use"}),
+                ("require", {"require": ["PostgreSQL"]}),
+            ],
+        ),
+        ("Use of MongoDB is prohibited.", [("forbid", {"forbid": ["MongoDB"]})]),
+        ("We will use PostgreSQL rather than MongoDB.", [("require", {"require": ["PostgreSQL"]})]),
+        (
+            "Services must not use MongoDB, and PostgreSQL is the only datastore.",
+            [
+                ("only", {"only": ["PostgreSQL"], "category": "datastore"}),
+                ("forbid", {"forbid": ["MongoDB"], "action": "use"}),
+            ],
+        ),
+    ],
+)
+def test_guarded_patterns_exact_rules(sentence, expected):
+    assert [(m.kind, m.rule) for m in match_sentence(sentence)] == expected
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # hedges / conditions / temporary
+        "Maybe we will use Redis.",
+        "We will probably use Redis.",
+        "If we need a cache, we will use Redis.",
+        "Where possible, avoid MongoDB.",
+        "We should try to avoid MongoDB.",
+        "We do not use Redis yet.",
+        "We won't use MongoDB for now.",
+        # rejected / reported
+        "Rejected: we will use MongoDB.",
+        "The proposal that services must not use MongoDB was rejected.",
+        "Some argued that services must not use MongoDB.",
+        "Avoiding MongoDB was discussed and dropped.",
+        # negated positives
+        "We do not standardise on PostgreSQL.",
+        "We have not standardised on PostgreSQL.",
+        # alternatives, bounds, no choice
+        "We will use Redis or Memcached.",
+        "We will use either Redis or Memcached.",
+        "PostgreSQL or MySQL is the only datastore.",
+        "Services must use Python 3.11 or later.",
+        "Services must use Python 3.11+.",
+        "Chosen option: none.",
+        "Chosen option: Redis or Memcached.",
+    ],
+)
+def test_guarded_sentences_yield_no_claim(sentence):
+    assert match_sentence(sentence) == [], [(m.pattern, m.rule) for m in match_sentence(sentence)]
+
+
+def test_indented_code_is_skipped_but_list_continuation_is_prose():
+    text = "Intro.\n\n    Never use Redis.\n    Do not use Kafka.\n\nMore.\n"
+    assert [text[a:b] for a, b in sentence_spans(text)] == ["Intro.", "More."]
+    text = "- First item.\n\n    Services must not use MongoDB.\n"
+    assert [text[a:b] for a, b in sentence_spans(text)] == [
+        "First item.",
+        "Services must not use MongoDB.",
+    ]
+
+
+def test_dedup_keeps_rule_claims_that_differ_in_qualifiers_or_subject(make_repo):
+    body = (
+        "Services must not use MongoDB in domain/. Services must not use MongoDB in reports/.\n"
+        "Services must not use MongoDB. Handlers must not use MongoDB.\n"
+        "Services must not use MongoDB.\n"  # exact restatement: merged
+    )
+    repo = make_repo({"docs/adr/0001-x.md": f"# 1. X\n\n## Decision\n\n{body}"})
+    (d,) = scan_adrs(repo).decisions
+    cs = structure_decision(d, repo, mode="offline")
+    assert [(c.subject, c.rule.get("scope")) for c in cs.claims] == [
+        ("services", ["domain/"]),
+        ("services", ["reports/"]),
+        ("services", None),
+        ("handlers", None),
+    ]
+    assert "1 duplicate claim(s) merged" in cs.notes
+
+
+def test_llm_claim_with_conflicting_qualifier_is_not_merged(make_repo):
+    q = "Services must not use MongoDB in domain/."
+    repo = make_repo({"docs/adr/0001-x.md": f"# 1. X\n\n## Decision\n\n{q}\n"})
+    (d,) = scan_adrs(repo).decisions
+    line = d.source.line_start
+    props = [
+        {"kind": "forbid", "subject": "svc", "rule": {"forbid": ["mongodb"]}, "quote": q,
+         "line_start": line, "line_end": line},
+        {"kind": "forbid", "subject": "svc", "rule": {"forbid": ["mongodb"], "scope": ["api/"]},
+         "quote": q, "line_start": line, "line_end": line},
+    ]  # fmt: skip
+    cs = structure_decision(d, repo, mode="llm", provider=scripted(lambda a, r: props))
+    assert [(c.origin, c.rule.get("scope")) for c in cs.claims] == [
+        ("rule", ["domain/"]),
+        ("llm", ["api/"]),
+    ]
+    assert "1 duplicate claim(s) merged" in cs.notes
+
+
+def test_duplicate_hint_key_is_reported_with_its_lines(make_repo):
+    text = (
+        "---\ndriftwarden:\n  forbid: [alpha]\n  forbid: [beta]\n---\n"
+        "# 1. X\n\n## Decision\n\nWe will use Kafka.\n"
+    )
+    repo = make_repo({"docs/adr/0001-x.md": text})
+    (d,) = scan_adrs(repo).decisions
+    cs = structure_decision(d, repo, mode="offline")
+    assert [c.rule for c in cs.claims if c.origin == "hint"] == [{"forbid": ["beta"]}]
+    (u,) = cs.unverified
+    assert u.rule == ["alpha"] and "duplicate key 'forbid'" in u.reason
+    assert (u.source.line_start, u.source.line_end) == (3, 3)
+    assert u.source.quote == "  forbid: [alpha]"
+
+
+def test_bom_and_deeply_nested_front_matter():
+    bom = "﻿---\ndriftwarden:\n  forbid: [mongodb]\n---\n# 1. X\n\n## Decision\n\nWe use Kafka.\n"
+    d = parse_adr(bom, "docs/adr/0001-x.md", WORKTREE)
+    hints = [c.rule for c in extract_rule_claims(d, bom).claims if c.origin == "hint"]
+    assert hints == [{"forbid": ["mongodb"]}]
+    deep = "---\ndriftwarden:\n  forbid: " + "[" * 2000 + "x" + "]" * 2000 + "\n---\n# 1. X\n"
+    d = parse_adr(deep, "docs/adr/0001-x.md", WORKTREE)
+    res = extract_rule_claims(d, deep)  # must not raise
+    assert res.claims == [] and "could not be read" in res.rejected[0].reason
+
+
+def test_schema_allows_out_of_range_lines_so_g1_reports_them():
+    item = {"kind": "free", "subject": "s", "rule": {"text": "t"}, "quote": "q"}
+    for a in (0, -1):
+        claims = [{**item, "line_start": a, "line_end": a}]
+        assert validate_json({"claims": claims}, CLAIMS_SCHEMA) == []
