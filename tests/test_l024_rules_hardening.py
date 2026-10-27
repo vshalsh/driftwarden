@@ -501,3 +501,104 @@ def test_round2_harmless_forms_keep_the_claim(sentence, kinds):
 )
 def test_round2_temporal_while_is_still_a_condition(sentence):
     assert match_sentence(sentence) == []
+
+
+# ------------------------------------------------- Codex review of PR #18 (3x P2)
+
+REF_PAREN_SCOPED = [
+    "Services must use Redis (see ADR-7, scope: payments).",
+    "Services must use Redis (see ADR-7 for payments).",
+    "Services must not use Redis (see the payments team).",
+    "We will use Kafka (cf. ADR-3, analytics workloads).",
+    "We will use Kafka (approved by ops in staging).",
+    "We will use Kafka (see ADR-7; EU region).",
+    "We will use Kafka (per ADR-3, batch jobs).",
+    "We will use Kafka (ref: ADR-3 sessions).",
+    "We will use Kafka (see notes on the checkout flow).",
+]
+
+
+@pytest.mark.parametrize("sentence", REF_PAREN_SCOPED)
+def test_codex1_only_recognised_reference_brackets_are_removed(sentence):
+    assert match_sentence(sentence) == [], [(m.kind, m.rule) for m in match_sentence(sentence)]
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "We will use Kafka (see ADR-0007).",
+        "We will use Kafka (ADR-0007).",
+        "We will use Kafka (see also RFC-12).",
+        "We will use Kafka (cf. ADR-0001, 2024-05-01).",
+        "We will use Kafka (see the security review).",
+        "We will use Kafka (approved by the architecture board).",
+        "We will use Kafka (approved by Jane Doe).",
+        "We will use Kafka (see PR #42).",
+        "We will use Kafka (see ADR-7 for details).",
+        "We will use Kafka (ref: ADR-3).",
+        "We will use Kafka (#118).",
+    ],
+)
+def test_codex1_reference_brackets_keep_the_claim(sentence):
+    (m,) = match_sentence(sentence)
+    assert m.rule == {"require": ["Kafka"]}
+
+
+PRODUCT_NAMES = [
+    "Google Cloud Run",
+    "Cloud Run",
+    "Microsoft Access",
+    "Cloudflare Access",
+    "Okta Access Gateway",
+    "Octopus Deploy",
+    "Deno Deploy",
+    "Webpack Bundle Analyzer",
+    "Import Maps",
+    "Vendor Portal",
+    "Azure Functions",
+    "AWS Lambda",
+    "Apache Spark",
+    "Apache Flink",
+    "Run:ai",
+    "Add-on SDK",
+    "Cloud Deploy",
+    "Access Context Manager",
+    "Install4j",
+    "Prefer Header Proxy",
+    "Used Book API",
+]
+
+
+@pytest.mark.parametrize("name", PRODUCT_NAMES)
+def test_codex2_chosen_option_product_names_with_verb_like_words(name):
+    (m,) = match_sentence(f"Chosen option: {name}.")
+    assert m.kind == "require" and m.rule == {"require": [name]}
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Chosen option: some services have to use Redis.",
+        "Chosen option: services use Redis.",
+        "Chosen option: use Redis.",
+        "Chosen option: Redis is used.",
+        "Chosen option: teams decided Redis.",
+        "Chosen option: Redis only in staging.",
+    ],
+)
+def test_codex2_chosen_option_clause_is_still_refused(sentence):
+    assert match_sentence(sentence) == []
+
+
+@pytest.mark.parametrize(
+    ("sentence", "kinds"),
+    [
+        ("Never import pandas; we will use Kafka for consistency.", ["forbid", "require"]),
+        ("Do not use MongoDB, and we will use Kafka for consistency.", ["forbid", "require"]),
+        ("We will use Kafka for consistency; never import pandas.", ["forbid", "require"]),
+        ("Do not use Redis for performance; we will use Kafka.", ["require"]),
+        ("Do not use Redis for performance.", []),
+    ],
+)
+def test_codex3_bare_for_purpose_only_suppresses_its_own_clause(sentence, kinds):
+    assert sorted(m.kind for m in match_sentence(sentence)) == kinds

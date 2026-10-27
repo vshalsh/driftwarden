@@ -58,9 +58,11 @@ VIOLATED, so the library errs towards no claim):
   "Decision:", "Outcome:", "Chosen option:" before a full clause, "In summary,",
   "Given the above,", "As a result,", "After a long discussion,", "Note that",
   "Importantly,", "Per ADR-0003,", "The team agreed that", "We decided that"), and so is
-  a parenthetical reference (``_REF_PAREN``: "(see ADR-0007)", "(see the security
-  review)", "(approved by ...)") -- the guards below still see the brackets, and a
-  bracket that names a scope ("(see ADR-7, production only)") is not a reference.
+  a parenthetical reference (``_ref_paren``: "(see ADR-0007)", "(see the security
+  review)", "(approved by Jane Doe)", "(cf. RFC-12, 2024-05-01)") -- only a recognised
+  head followed by ids, dates, names after "by" and the closed rationale vocabulary;
+  the guards below still see the brackets, and any other bracket ("(see ADR-7, scope:
+  payments)", "(see ADR-7, production only)") stays in the text and drops the claim.
   Mid-sentence discourse markers (", as a rule,", ", in summary,", ", therefore,")
   and labels such as "Status: Accepted.", "Final decision:", "Decision (2024-05-01):"
   are removed too.
@@ -97,9 +99,10 @@ VIOLATED, so the library errs towards no claim):
   default", "with the legacy system" drop the claim (or are captured, e.g. ``scope``),
   and never end up inside a term (a term stops at "only", "with", "by", "which",
   "that", "between", "everywhere"; "Chosen option: Redis only in staging" is no claim).
-* Decision (L-024 D5): a ban followed by a comma-less "for <abstract noun>" ("Do not
-  use Redis for performance / for security / for cost") is read as a workload
-  ("for performance-critical paths"), so the forbid claim is dropped; with a comma
+* Decision (L-024 D5): a ban directly followed, in its clause, by a comma-less "for
+  <abstract noun>" ("Do not use Redis for performance / for security / for cost") is
+  read as a workload ("for performance-critical paths"), so that forbid claim is
+  dropped (another clause's claims are not touched); with a comma
   (", for security reasons") or leading ("For security reasons, ...") it is rationale.
 * Permission and aspiration (L-024) never yield an obligation: "can", "could", "may",
   "might", "is allowed / free / permitted / encouraged / welcome to", "ought to",
@@ -685,10 +688,21 @@ def _require(subject: str | None, x: str | None, cat: str | None) -> Built:
     return (subject or (cat.lower() if cat else "technology")), rule
 
 
+# A clause inside a MADR choice: a modal / auxiliary, or a lower-case verb form
+_CHOICE_CLAUSE = re.compile(
+    r"(?i:\b(?:must|shall|should|will|would|can|cannot|may|might|could|is|are|was|were|be|"
+    r"been|has|have|had|do|does|did|need|needs)\b|n't\b)"
+    rf"|(?<![\w.+#/@'-])(?:{_VERBS}|{_PASSIVE}|decided|agreed|chose|choose|prefer)"
+    r"(?![\w.+#/@'-])"
+)
+
+
 def _b_chosen(g: dict) -> Built:
-    if _CLAUSE_VERB.search(g["x"] or "") or _NOT_A_NAME.search(g["x"] or ""):
+    x = g["x"] or ""
+    if _CHOICE_CLAUSE.search(x) or _NOT_A_NAME.search(x):
         # "Chosen option: some services have to use Redis", "Chosen option: Redis only in
-        # staging": a clause or a scoped choice, not a name
+        # staging": a clause or a scoped choice, not a name ("Google Cloud Run", "Microsoft
+        # Access", "Octopus Deploy" are names: a capitalised verb-like word is not a verb)
         return None
     return _require("chosen option", g["x"], None)
 
@@ -1347,17 +1361,48 @@ _LEAD_DECOR = re.compile(
     r")+",
     _I,
 )
-_REF_PAREN = re.compile(
-    r"\s*\(\s*(?:(?:see(?:\s+also)?|cf\.?|ref\.?|refs?\.?|reference|details\s+in|"
-    r"discussed\s+in|tracked\s+in|recorded\s+in|documented\s+in|"
-    r"(?:approved|agreed|reviewed|signed\s+off|ratified|decided)\s+by)\b"
-    # the reference must not carry a scope or an exception
-    r"(?![^()]*\b(?:only|except|excluding|unless|until|when|whenever|while|if|outside|"
-    r"inside|within|but|not|no|never|production|prod|staging|tests?|ci|local|dev|"
-    r"for\s+(?!details|more|background|context|rationale|the\s+rationale))\b)"
-    r"[^()]{0,120}|" + _REF + r"|#\d+)\s*\)",
+# A parenthesis is removed only when it is a recognised reference (``_ref_paren``): a
+# head ("see", "cf.", "ref:", "per", "details in", "approved by", ...) followed only by
+# ADR / RFC / PR / issue ids, dates, names after "by" and the closed rationale vocabulary,
+# or a bare id / date. Anything else ("(see ADR-7, scope: payments)") stays in the text,
+# where clause coverage rejects the claim.
+_PAREN = re.compile(r"\s*\(([^()]{0,160})\)")
+_REF_HEAD = re.compile(
+    r"^\s*(?:(?P<see>see(?:\s+also)?|cf\.?|ref\.?:?|refs?\.?:?|reference:?|per|as\s+per|"
+    r"details\s+in|discussed\s+in|tracked\s+in|recorded\s+in|documented\s+in|"
+    r"decided\s+in|agreed\s+in)"
+    r"|(?P<by>(?:approved|agreed|reviewed|signed\s+off|ratified|decided|owned)\s+by))\s+",
     _I,
 )
+_REF_TOKEN = re.compile(
+    r"^(?:(?:ADR|RFC|PR|MR)[- ]?#?\d+[a-z]?|#\d+|\d{4}(?:-\d{2}(?:-\d{2})?)?|\d{1,2}|"
+    r"january|february|march|april|may|june|july|august|september|october|november|"
+    r"december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|pr|mr|issue|ticket|adr|rfc)$",
+    _I,
+)
+_REF_FOR = frozenset("details more background context rationale".split())
+
+
+def _ref_paren(m: re.Match[str]) -> str:
+    body = m.group(1).strip()
+    if re.fullmatch(r"(?:(?:ADR|RFC|PR|MR)[- ]?#?\d+[a-z]?|#\d+|\d{4}-\d{2}-\d{2})", body, _I):
+        return ""
+    h = _REF_HEAD.match(body)
+    if not h or re.search(r"[^\w\s,.:#/'-]", body):
+        return m.group(0)
+    words = _WORD.findall(body[h.end() :])
+    if not words:
+        return m.group(0)
+    for i, w in enumerate(words):
+        lw = w.strip(".:'").lower()
+        if _REF_TOKEN.match(w.strip(".:,")) or _in_vocab(lw) or lw in _REF_FOR:
+            continue
+        if lw == "for" and i + 1 < len(words) and words[i + 1].lower() in _REF_FOR:
+            continue
+        if h.group("by") and w[:1].isupper() and w.replace("-", "").isalpha():
+            continue  # a name after "approved by"
+        return m.group(0)
+    return ""
 
 
 _TOK = r"[\w.+#/@'-]+"
@@ -1645,12 +1690,21 @@ def _in_vocab(w: str) -> bool:
     )
 
 
-def _strip_rationale(clean: str) -> tuple[str, bool] | None:
-    """``clean`` without its whitelisted rationale phrases, and whether a bare (comma-less)
-    "for <purpose noun>" was among them; None when a marker's phrase is not a rationale."""
+_CLAUSE_GAP = re.compile(r"[,;:!?()\[\]{}—–]|\s-\s|\b(?:and|but|while|whereas|so|then)\b", _I)
+
+
+def _bare_for_qualifies(clean: str, span: tuple[int, int], bare_at: list[int]) -> bool:
+    """A bare "for <purpose noun>" was removed right after this match, in its clause."""
+    return any(p >= span[0] and not _CLAUSE_GAP.search(clean, min(span[1], p), p) for p in bare_at)
+
+
+def _strip_rationale(clean: str) -> tuple[str, list[int]] | None:
+    """``clean`` without its whitelisted rationale phrases, and the positions (in the
+    returned text) where a bare (comma-less) "for <purpose noun>" was removed; None when a
+    marker's phrase is not a rationale."""
     ends = [m.start() for m in _RATIONALE_END.finditer(clean)]
     cut: list[tuple[int, int]] = []
-    bare_for = False
+    bare: set[int] = set()  # indexes into ``cut`` of bare "for <purpose>" phrases
     pos = 0
     while True:
         m = _RATIONALE_MARK.search(clean, pos)
@@ -1673,7 +1727,7 @@ def _strip_rationale(clean: str) -> tuple[str, bool] | None:
             words = [w.lower() for w in _WORD.findall(phrase)]
             ok = bool(words) and words[0] != "that" and _vocab_only(phrase)
             if kind == "for" and ok and "," not in m.group("pre") and m.start() > 0:
-                bare_for = True
+                bare.add(len(cut))
         elif kind == "ref":  # a reference: ADR / RFC ids, reviews, the wiki; names after "by"
             by = m.group("ref").lower().endswith(" by")
             words = _WORD.findall(phrase)
@@ -1690,13 +1744,16 @@ def _strip_rationale(clean: str) -> tuple[str, bool] | None:
         cut.append((m.start(), end))
         pos = max(end, m.end())
     if not cut:
-        return clean, False
-    out, at = [], 0
-    for a, b in cut:
+        return clean, []
+    out, at, size, bare_at = [], 0, 0, []
+    for i, (a, b) in enumerate(cut):
         out.append(clean[at:a])
+        size += a - at
+        if i in bare:
+            bare_at.append(size)
         at = b
     out.append(clean[at:])
-    return "".join(out), bare_for
+    return "".join(out), bare_at
 
 
 def _clauses(clean: str) -> list[tuple[int, int]]:
@@ -1813,11 +1870,11 @@ def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> li
     clean = _strip_while(clean)
     if clean is None:
         return []  # a temporal / conditional 'while' (N1)
-    clean = _REF_PAREN.sub("", clean).strip()  # after the guards: they see the brackets
+    clean = _PAREN.sub(_ref_paren, clean).strip()  # after the guards: they see the brackets
     stripped = _strip_rationale(clean)
     if stripped is None:
         return []  # a 'rationale' that carries a scope or a condition (L-024 D1-D4, D9)
-    clean, bare_for = stripped
+    clean, bare_at = stripped
     neg = _Clauses(clean)
     taken: list[tuple[int, int]] = []  # sorted, non-overlapping
     out: list[Match] = []
@@ -1854,7 +1911,7 @@ def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> li
                 subject, rule = built
                 if rule_errors(pat.kind, rule):
                     continue
-                if bare_for and pat.kind == "forbid":
+                if pat.kind == "forbid" and _bare_for_qualifies(clean, span, bare_at):
                     continue  # "Do not use Redis for performance": a workload, not a reason
                 taken.insert(k, span)
                 out.append(Match(pat.id, pat.kind, subject, rule, span))
