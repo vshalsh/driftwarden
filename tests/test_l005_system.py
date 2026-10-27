@@ -176,13 +176,6 @@ def test_backoff_is_capped():
     assert [p.delay(i) for i in (1, 2, 3, 6, 7, 50, 1000)] == [1, 2, 4, 30, 30, 30, 30]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=OverflowError,
-    reason="DEFECT D4 (latent, low): "
-    "RetryPolicy.delay overflows for attempt >= ~1025; unreachable via Config "
-    "(max_attempts <= 10) but reachable via RetryPolicy(max_attempts=2000)",
-)
 def test_backoff_huge_attempt_no_overflow():
     assert RetryPolicy().delay(5000) == 30.0
 
@@ -220,10 +213,6 @@ def test_missing_usage_counts_as_zero(usage):
     assert anth(Fake(r)).complete("p").usage.input_tokens == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D5 - low: non-numeric usage token count leaks bare ValueError instead of an LLMError",
-)
 def test_garbage_usage_value_does_not_crash_with_untyped_error():
     r = a_reply("x")
     r["usage"] = {"input_tokens": "lots"}
@@ -254,10 +243,6 @@ def test_openai_refusal_not_retried():
     assert len(t.calls) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D6 - AC breach: model refusal text (reply content) is persisted in cost-log 'error'",
-)
 def test_openai_refusal_text_not_copied_into_cost_log(tmp_path):
     """Acceptance: cost log never contains replies. A refusal IS model reply text."""
     secret_reply = "REFUSAL-TEXT-FROM-MODEL-ZZZ"
@@ -379,9 +364,6 @@ def test_dangling_and_remote_ref_reported_not_raised():
     assert validate_json(1, {"$ref": "http://evil/x.json"})
 
 
-@pytest.mark.xfail(
-    strict=True, reason="DEFECT D7 - low: cyclic $ref raises RecursionError out of the validator"
-)
 def test_self_referential_ref_does_not_hang_or_recursion_error():
     # {"$ref": "#"} validates a value against itself forever.
     try:
@@ -397,10 +379,6 @@ def test_recursive_tree_schema_ok():
     assert validate_json({"kids": [{"kids": 3}]}, tree)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D8 - low: invalid schema 'pattern' leaks re.error out of the validator",
-)
 def test_invalid_regex_in_schema_does_not_leak_re_error():
     import re
 
@@ -470,10 +448,6 @@ def test_cost_log_has_no_prompt_or_reply_on_success_and_schema_failure(tmp_path)
     assert "REPLY-CANARY" not in txt, "reply text leaked into the cost log"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D9 - AC breach: enum/const mismatch error embeds the model's reply value into the cost log",
-)
 def test_cost_log_enum_mismatch_does_not_echo_reply_value(tmp_path):
     p = anth(Fake(*[a_reply('{"n": 1, "tag": "REPLY-CANARY-ENUM"}')] * 3), tmp_path)
     with pytest.raises(SchemaValidationError):
@@ -481,10 +455,6 @@ def test_cost_log_enum_mismatch_does_not_echo_reply_value(tmp_path):
     assert "REPLY-CANARY-ENUM" not in log_text(p)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D9 - AC breach: unexpected-property error embeds model-chosen key names into the cost log",
-)
 def test_cost_log_unexpected_property_name_not_echoed(tmp_path):
     p = anth(Fake(*[a_reply('{"n": 1, "REPLY-CANARY-KEY": 1}')] * 3), tmp_path)
     with pytest.raises(SchemaValidationError):
@@ -499,10 +469,6 @@ def test_invalid_json_error_does_not_echo_reply(tmp_path):
     assert "REPLY-CANARY" not in log_text(p)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D10 - low/med: provider error text (server body, up to 300 chars) is logged verbatim, no redaction of the active API key",
-)
 def test_server_error_body_echoing_key_is_not_persisted(tmp_path):
     """A hostile/buggy server can echo the Authorization header in an error body."""
     p = oai(Fake(TransportError(f"HTTP 401 from x: bad key {OKEY}", status=401)), tmp_path)
@@ -547,19 +513,19 @@ def test_api_key_env_rejects_key_shaped_values_without_echo(tmp_path, pasted):
     assert pasted not in str(ei.value) or pasted == ""
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D1: underscore/alnum-only pasted key passes "
-    "api_key_env validation and is echoed in the offline reason",
-)
 def test_api_key_env_pasted_underscore_key_not_echoed():
     from driftwarden.config import Config
 
-    pasted = "gsk_SECRETabcdef0123456789"  # matches the env-name regex
-    cfg = Config(api_key_env=pasted)
+    pasted = "gsk_SECRETabcdef0123456789"  # matched the old env-name regex
+    # Fixed in L-005 by rejecting it at config validation (without echoing it)...
+    with pytest.raises(ValueError) as ei:
+        Config(api_key_env=pasted)
+    assert pasted not in str(ei.value)
+    # ...and, for configs built without validation, by never echoing it.
+    cfg = Config.model_construct(api_key_env=pasted)
     prov = get_provider(cfg, env={})
     assert pasted not in repr(prov) and pasted not in getattr(prov, "reason", "")
-    cfg2 = Config(api_key_env=pasted, mode="llm")
+    cfg2 = Config.model_construct(api_key_env=pasted, mode="llm")
     with pytest.raises((ProviderConfigError, ValueError)) as ei:
         get_provider(cfg2, env={})
     assert pasted not in str(ei.value)
@@ -575,10 +541,6 @@ def test_base_url_scheme_validation():
             Config(base_url=bad)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D2: base_url userinfo (user:pass@) surfaces in errors/log via _host() netloc",
-)
 def test_base_url_credentials_not_in_transport_errors(monkeypatch):
     import urllib.error
 
@@ -684,11 +646,6 @@ def test_total_http_calls_bounded_by_max_attempts_squared_documented():
     assert len(t.calls) <= 9
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D3: cost-log 'attempt' restarts at 1 on every "
-    "transport-retry loop; records are ambiguous",
-)
 def test_cost_log_attempt_numbers_monotonic(tmp_path):
     t = Fake(TransportError("503", status=503, retryable=True), a_reply("bad"), a_reply("bad"),
              a_reply('{"n": 1}'))  # fmt: skip
@@ -878,10 +835,6 @@ def test_concurrent_appends_one_log_no_torn_lines(tmp_path):
     assert all(json.loads(line)["outcome"] == "ok" for line in lines)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT D11 - HIGH: unlocked lazy CostLog.path resolution; concurrent first appends silently drop JSONL lines",
-)
 def test_concurrent_first_append_does_not_lose_file_records(tmp_path):
     """First use of .path is lazy and not locked; racing threads must not drop records."""
     lost = 0
@@ -924,7 +877,6 @@ def test_concurrent_providers_distinct_run_ids(tmp_path):
     assert len({lg.run_id for lg in logs}) == 20
 
 
-@pytest.mark.xfail(strict=True, reason="DEFECT D11 - HIGH: same race via a shared provider")
 def test_shared_provider_across_threads(tmp_path):
     class T:
         def __call__(self, url, headers, body, timeout):

@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,23 +93,28 @@ class CostLog:
         self._path: Path | None = None
         self._resolved = False
         self._warned = False
+        # Guards lazy path resolution, the record list and file appends, so one
+        # CostLog (or a provider holding it) is safe to share across threads.
+        self._lock = threading.RLock()
 
     @property
     def path(self) -> Path | None:
         """The JSONL file, resolved on first use (None when logging in memory only)."""
-        if not self._resolved:
-            self._resolved = True
-            base = self.base_dir
-            if base is not None and not _writable(base):
-                base = None
-                self._warn(f"cannot write LLM cost log under {self.base_dir}")
-            elif base is None and self.root is not None:
-                base = resolve_base(self.root)
-                if base is None:
-                    self._warn(f"cannot write LLM cost log for {self.root}")
-            if base is not None:
-                self._path = base / _SUBDIR / f"{self.run_id}.jsonl"
-        return self._path
+        with self._lock:
+            if not self._resolved:
+                base = self.base_dir
+                if base is not None and not _writable(base):
+                    base = None
+                    self._warn(f"cannot write LLM cost log under {self.base_dir}")
+                elif base is None and self.root is not None:
+                    base = resolve_base(self.root)
+                    if base is None:
+                        self._warn(f"cannot write LLM cost log for {self.root}")
+                if base is not None:
+                    self._path = base / _SUBDIR / f"{self.run_id}.jsonl"
+                # Set last: no other thread can observe "resolved" before _path is final.
+                self._resolved = True
+            return self._path
 
     def _warn(self, msg: str) -> None:
         if not self._warned:
@@ -121,24 +127,28 @@ class CostLog:
             "run_id": self.run_id,
             **fields,
         }
-        self.records.append(record)
-        path = self.path
-        if path is not None:
-            try:
-                with path.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-            except OSError as exc:
-                self._warn(f"cannot append to {path}: {exc.strerror or exc}")
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        with self._lock:
+            self.records.append(record)
+            path = self.path
+            if path is not None:
+                try:
+                    with path.open("a", encoding="utf-8") as fh:
+                        fh.write(line)
+                except OSError as exc:
+                    self._warn(f"cannot append to {path}: {exc.strerror or exc}")
         return record
 
     def totals(self) -> dict[str, Any]:
         """Token and cost totals across every attempt logged so far."""
-        costs = [r.get("cost_usd") for r in self.records]
+        with self._lock:
+            records = list(self.records)
+        costs = [r.get("cost_usd") for r in records]
         known = [c for c in costs if c is not None]
         return {
-            "calls": len(self.records),
-            "input_tokens": sum(r.get("input_tokens", 0) for r in self.records),
-            "output_tokens": sum(r.get("output_tokens", 0) for r in self.records),
+            "calls": len(records),
+            "input_tokens": sum(r.get("input_tokens", 0) for r in records),
+            "output_tokens": sum(r.get("output_tokens", 0) for r in records),
             "cost_usd": round(sum(known), 8) if known else None,
             "cost_complete": len(known) == len(costs),
         }
