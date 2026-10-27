@@ -1290,9 +1290,6 @@ def _bare(s: str) -> list:
     ]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="L-024 D1: a purpose / rationale marker swallows everything after it"
-)
 @pytest.mark.parametrize("s", D1)
 def test_D1_purpose_or_rationale_does_not_swallow_a_trailing_scope(s):
     """D1 (NEW vs main, HIGH). 1. Requirement: 'a scope qualifier is never whitelisted'
@@ -1309,7 +1306,6 @@ def test_D1_purpose_or_rationale_does_not_swallow_a_trailing_scope(s):
     assert _bare(s) == []
 
 
-@pytest.mark.xfail(strict=True, reason="L-024 D2: operational / domain-object purpose is a scope")
 @pytest.mark.parametrize("s", D2)
 def test_D2_purpose_that_names_an_operation_or_domain_is_a_scope(s):
     """D2 (NEW, MEDIUM). 1. 'to <verb> payments' / 'in order to store sessions' state WHERE
@@ -1321,7 +1317,6 @@ def test_D2_purpose_that_names_an_operation_or_domain_is_a_scope(s):
     assert claims(s) == []
 
 
-@pytest.mark.xfail(strict=True, reason="L-024 D3: 'given <condition>' is treated as rationale")
 @pytest.mark.parametrize("s", D3)
 def test_D3_given_as_a_condition_is_not_rationale(s):
     """D3 (mostly NEW, MEDIUM). 1. 'given the staging environment', 'given the payments
@@ -1335,9 +1330,6 @@ def test_D3_given_as_a_condition_is_not_rationale(s):
     assert _bare(s) == []
 
 
-@pytest.mark.xfail(
-    strict=True, reason="L-024 D4: relative clause with an explicit scope word is kept"
-)
 @pytest.mark.parametrize("s", D4)
 def test_D4_relative_clause_with_scope_word_drops_the_claim(s):
     """D4 (pre-existing, MEDIUM). 1. docstring: a purpose / relative gap that 'carries a scope
@@ -1351,9 +1343,6 @@ def test_D4_relative_clause_with_scope_word_drops_the_claim(s):
     assert _bare(s) == []
 
 
-@pytest.mark.xfail(
-    strict=True, reason="L-024 D5: forbid + 'for <abstract noun>' is read as rationale"
-)
 @pytest.mark.parametrize("s", D5)
 def test_D5_forbid_for_abstract_noun_is_a_workload_not_a_reason(s):
     """D5 (NEW, LOW, arguable). 1. 'for <noun>' purpose vs workload: 'Do not use Redis for
@@ -1366,7 +1355,6 @@ def test_D5_forbid_for_abstract_noun_is_a_workload_not_a_reason(s):
     assert claims(s) == []
 
 
-@pytest.mark.xfail(strict=True, reason="L-024 D6: scope text ends up inside the claim term")
 @pytest.mark.parametrize("s", D6)
 def test_D6_claim_terms_are_clean_names(s):
     """D6 (pre-existing except the first, MEDIUM for require / only / boundary). 1. R12:
@@ -1386,9 +1374,6 @@ def test_D6_claim_terms_are_clean_names(s):
             ), (s, rule)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="L-024 D7: N5 residual -- some 'instead of Y <scope>' still keep the claim"
-)
 @pytest.mark.parametrize("s", D7)
 def test_D7_instead_of_with_residual_scope_is_dropped(s):
     """D7 (pre-existing, MEDIUM). 1. N5: 'X instead of Y <scope>' keeps the scope or drops.
@@ -1400,9 +1385,6 @@ def test_D7_instead_of_with_residual_scope_is_dropped(s):
     assert _bare(s) == []
 
 
-@pytest.mark.xfail(
-    strict=True, reason="L-024 D8: contrastive / concessive 'while' now drops real rules"
-)
 @pytest.mark.parametrize("s", D8)
 def test_D8_contrastive_or_concessive_while_does_not_drop_a_real_rule(s):
     """D8 (NEW recall regression, LOW). 1. Recall delta vs main should be 0 for real rules:
@@ -1413,9 +1395,6 @@ def test_D8_contrastive_or_concessive_while_does_not_drop_a_real_rule(s):
     assert claims(s) != []
 
 
-@pytest.mark.xfail(
-    strict=True, reason="L-024 D9: a clause-verb homograph hides an explicit scope word"
-)
 @pytest.mark.parametrize("s", D9)
 def test_D9_noun_that_looks_like_a_verb_does_not_hide_the_scope(s):
     """D9 (forbid + 'vendor lock-in' variants NEW; require variants pre-existing, HIGH).
@@ -1432,9 +1411,6 @@ def test_D9_noun_that_looks_like_a_verb_does_not_hide_the_scope(s):
 # ================================================================ generator-level (xfail)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="L-024 D1-D4/D6/D9: scope leaks remain in the decorated matrix"
-)
 def test_D0_matrix_has_zero_scope_leaks(matrix):
     """Aggregate of D1-D4, D6, D9 over the generated matrix (24k sample by default; the full
     231,205-sentence run leaks 8,697 of 135,846 S / C sentences, main 12,616, 5,092 new; the

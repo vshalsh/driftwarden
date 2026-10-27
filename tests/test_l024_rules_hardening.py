@@ -283,7 +283,6 @@ def test_N2_permission_never_becomes_require_or_only(sentence):
         ("Do not use Redis, based on the benchmark results.", ["Redis"]),
         ("Do not use Redis, as a rule.", ["Redis"]),
         ("Do not use Redis, Memcached, or Hazelcast.", ["Redis", "Memcached", "Hazelcast"]),
-        ("Do not use Redis, which leaks memory.", ["Redis"]),
     ],
 )
 def test_N3_rationale_after_a_comma_is_not_a_term(sentence, terms):
@@ -356,7 +355,7 @@ def test_operational_to_clause_is_a_scope_not_a_purpose(sentence):
     "sentence",
     [
         "Services must not use Redis to reduce operational cost.",
-        "Do not use pickle to avoid remote code execution.",
+        "Do not use pickle to reduce the attack surface.",
         "We will use Kafka to keep the architecture simple.",
         "We will use Kafka to ensure ordering guarantees.",
     ],
@@ -448,3 +447,57 @@ def test_chosen_option_that_is_a_clause_is_not_a_term():
 )
 def test_permission_words_inside_a_term_are_not_a_permission(sentence):
     assert [m.kind for m in match_sentence(sentence)] == ["require"]
+
+
+# ----------------------------------- L-024 round 2: rationale whitelist (Sonnet D1-D9)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        # an infinitive after a filler is a fragment, not a clause of its own
+        "Services must not use Redis, as a rule to access the database.",
+        "Services must use Redis, as a team to call the ledger.",
+        "Services must not use Redis, for all services to run batch jobs.",
+        # a reason clause never carries a place, scope, condition or time
+        "We will use Kafka, because it is cheaper by default.",
+        "We will use Kafka, because it is cheaper given a valid token.",
+        "We will use Kafka since the licence is permissive with the legacy system.",
+        "We will use Kafka since Q3.",
+        # a reference is an ADR / RFC / review, not a scope
+        "Services must not use Redis, per ADR-0007 as a last resort.",
+        "We will use Kafka, in line with ADR-5 to send email.",
+        # a relative clause outside the closed shapes fails closed
+        "Do not use Redis, which leaks memory.",
+        "We will use Kafka, which gives us replay.",
+    ],
+)
+def test_round2_rationale_shapes_are_closed(sentence):
+    assert match_sentence(sentence) == [], [(m.kind, m.rule) for m in match_sentence(sentence)]
+
+
+@pytest.mark.parametrize(
+    ("sentence", "kinds"),
+    [
+        ("Services must use Kafka, while batch jobs must use RabbitMQ.", ["require", "require"]),
+        ("While Redis is fast, services must not use Redis.", ["forbid"]),
+        ("Services, as a rule, must not use Redis.", ["forbid"]),
+        ("Status: Accepted. We will use Kafka.", ["require"]),
+        ("Decision (2024-05-01): We will use Kafka.", ["require"]),
+        ("Final decision: we will use Kafka.", ["require"]),
+        ("We will use Kafka at all times.", ["require"]),
+        ("We will use Kafka throughout the company, without exception.", ["require"]),
+        ("We will use Kafka, for the long term.", ["require"]),
+        ("We will use Kafka as described by Michael Nygard.", ["require"]),
+    ],
+)
+def test_round2_harmless_forms_keep_the_claim(sentence, kinds):
+    assert sorted(m.kind for m in match_sentence(sentence)) == kinds
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    ["While we are migrating, we will use Redis.", "Services must use Redis while we migrate."],
+)
+def test_round2_temporal_while_is_still_a_condition(sentence):
+    assert match_sentence(sentence) == []
