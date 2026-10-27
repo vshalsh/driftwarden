@@ -191,6 +191,22 @@ def assert_cited_ok(repo: Path, v: Verdict, commit: str | None = None) -> None:
             assert verify_dependency(repo, ev.dependency).status == "VERIFIED"
 
 
+def _skip_unless_name_roundtrips(tmp_path: Path, name: str) -> None:
+    """Skip when the filesystem cannot store ``name`` byte-for-byte (macOS APFS/HFS+ normalise unicode
+    names to NFD; some filesystems reject quotes or odd characters). Linux must run these."""
+    probe = tmp_path / "name-probe"
+    try:
+        target = probe / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+        listed = {p.relative_to(probe).as_posix() for p in probe.rglob("*") if p.is_file()}
+    except OSError:
+        pytest.skip(f"filesystem rejects file name {name!r}")
+    if listed != {name}:
+        pytest.skip(f"filesystem does not preserve file name {name!r} (unicode normalisation)")
+    shutil.rmtree(probe)
+
+
 # ------------------------------------------------------------------ rule semantics table
 
 MONGO = {"forbid": ["MongoDB"]}
@@ -1872,6 +1888,7 @@ def test_utf8_bom_source(tmp_path):
     ],
 )
 def test_unusual_file_names(tmp_path, name):
+    _skip_unless_name_roundtrips(tmp_path, name)
     repo, _ = build(tmp_path, {name: "import pymongo\n"})
     for commit in ("HEAD", WORKTREE):
         v = judge_offline(repo, mkclaim("forbid", MONGO), commit=commit)
@@ -1881,6 +1898,13 @@ def test_unusual_file_names(tmp_path, name):
 
 
 def test_non_utf8_file_name_never_yields_unverified_violation(tmp_path):
+    probe = tmp_path / "probe-dir"
+    probe.mkdir()
+    try:
+        with open(os.fsencode(probe) + b"/caf\xe9.py", "wb") as fh:
+            fh.write(b"x")
+    except OSError:
+        pytest.skip("filesystem rejects non-UTF-8 file names")
     repo, _ = build(tmp_path, {"src/ok.py": "x = 1\n"})
     with open(os.fsencode(repo) + b"/src/caf\xe9.py", "wb") as fh:
         fh.write(b"import pymongo\n")
