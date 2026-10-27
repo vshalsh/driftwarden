@@ -94,14 +94,12 @@ WT_REQ = (
 DEV3 = ["forbid-requirements-dev-file", "forbid-requirements-test-dir", "only-other-dev-dep"]
 HOLE_IDS = "rev-HEAD rev-branch rev-short-sha path-trailing-slash path-dot-slash path-double-slash path-inner-dot rev-HEAD-tilde rev-peel-syntax".split()
 
-# D-L007-2..6 fixed on L-007-judge @24c4e70 (markers removed); D1/D7 -> L-023. D8/D9 found in round 2.
+# D-L007-2..6 fixed on L-007-judge @24c4e70 (markers removed); D1/D7 fixed by L-023 (markers
+# removed). D8/D9 found in round 2.
 KNOWN: dict[tuple[str, str | None], str] = {
-    **{("test_hole_verify_source_quote_non_canonical_provenance", c): D1 for c in HOLE_IDS},
     ("test_oversized_manifest_is_not_silent", None): D8,
     ("test_real_service_dirs_named_docs_or_ci_stay_production", "services/docs"): D9,
     ("test_real_service_dirs_named_docs_or_ci_stay_production", "services/ci"): D9,
-    ("test_verifier_never_raises_on_nul_in_path", None): D7,
-    ("test_verifier_never_raises_on_nul_in_commit", None): D7,
 }
 
 
