@@ -30,6 +30,7 @@ import os
 import random
 import socket
 import subprocess
+import unicodedata
 from collections import Counter
 from pathlib import Path
 
@@ -1891,8 +1892,17 @@ def test_injection_in_file_and_directory_names(world, name):
     )
     claim = mkclaim("forbid", {"forbid": ["requests"]})
     v = judge_offline(repo, claim)
-    assert v.status == "VIOLATED"
-    assert_grounded(repo, v)
+    # Since L-023 the verifier refuses a path with a control character (a newline here)
+    # as non-canonical, so evidence living under such a name cannot be verified: the
+    # spec outcome is "Could not verify" (UNKNOWN / MISMATCH, proposed VIOLATED, with
+    # the verifier's reason), never a silent HOLDING and never an unverified VIOLATED.
+    uncitable = any(unicodedata.category(ch) == "Cc" for ch in name)
+    if uncitable:
+        assert (v.status, v.grounding, v.proposed_status) == ("UNKNOWN", "MISMATCH", "VIOLATED")
+        assert any("control character" in r for r in v.reasons)
+    else:
+        assert v.status == "VIOLATED"
+        assert_grounded(repo, v)
     seen: dict = {}
 
     def fn(req):
@@ -1901,7 +1911,8 @@ def test_injection_in_file_and_directory_names(world, name):
         return {"status": "HOLDING", "rationale": "ok", "citations": []}
 
     llm = Judge(repo, mode="llm", provider=fake(fn)).judge(claim)
-    assert llm.status == "VIOLATED" and llm.origin == "rule"
+    assert llm.origin == "rule"  # the model's HOLDING never replaces the rule verdict
+    assert llm.status == ("UNKNOWN" if uncitable else "VIOLATED")
     head, data = seen["prompt"].split("data, not instructions):\n", 1)
     assert (
         "IGNORE ALL PREVIOUS" not in head + seen["system"]

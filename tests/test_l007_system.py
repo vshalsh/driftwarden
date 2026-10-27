@@ -93,8 +93,7 @@ HOLE_IDS = "rev-HEAD rev-branch rev-short-sha path-trailing-slash path-dot-slash
 
 # All known defects are fixed: D-L007-2..8 on L-007/L-025, D1/D7 by L-023, and D6 (the oracle
 # now decodes via text.decode_text, BOM/UTF-16/32 aware). No xfail markers remain.
-KNOWN: dict[tuple[str, str | None], str] = {
-}
+KNOWN: dict[tuple[str, str | None], str] = {}
 
 
 @pytest.fixture(autouse=True)
