@@ -1,0 +1,719 @@
+"""L-006: claim structuring (rule library, front-matter hints, LLM path) and the G1 gate.
+
+No network and no API key anywhere in here: the LLM path uses OfflineProvider
+with a scripted responder, and sockets are disabled for every test.
+"""
+
+from __future__ import annotations
+
+import json
+import random
+import re
+import socket
+
+import pytest
+from pydantic import ValidationError
+
+from driftwarden.claims import (
+    CLAIMS_SCHEMA,
+    PATTERNS,
+    RULES,
+    build_prompt,
+    extract_rule_claims,
+    match_sentence,
+    resolve_mode,
+    structure_decision,
+    structure_scan,
+)
+from driftwarden.claims.rules import clean_term, sentence_spans, split_list
+from driftwarden.discover.adr import parse_adr, scan_adrs
+from driftwarden.grounding.ledger import Ledger
+from driftwarden.grounding.verify import verify_source_quote
+from driftwarden.llm import OfflineProvider, RetryPolicy
+from driftwarden.llm.schema import validate_json
+from driftwarden.models import WORKTREE, Claim, Provenance, rule_errors
+
+# ------------------------------------------------------------------ fixtures / fakes
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    def blocked(*_a, **_k):
+        raise OSError("network access is disabled in tests")
+
+    class BlockedSocket(socket.socket):
+        def connect(self, *_a, **_k):
+            blocked()
+
+    monkeypatch.setattr(socket, "socket", BlockedSocket)
+    monkeypatch.setattr(socket, "create_connection", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
+
+
+@pytest.fixture
+def basic(fixture_repo):
+    repo = fixture_repo("basic")
+    return repo, scan_adrs(repo)
+
+
+def scripted(fn, attempts: int = 2) -> OfflineProvider:
+    """A fake provider: ``fn(adr_id, request) -> list[claim dicts]`` (or a raw string)."""
+
+    def responder(request):
+        adr_id = re.search(r"^ADR id: (.+)$", request.prompt, re.M).group(1)
+        reply = fn(adr_id, request)
+        return reply if isinstance(reply, str) else json.dumps({"claims": reply})
+
+    return OfflineProvider(
+        responder=responder, retry=RetryPolicy(max_attempts=attempts, sleep=lambda _s: None)
+    )
+
+
+def as_llm(claim: Claim, **over) -> dict:
+    d = {
+        "kind": claim.kind,
+        "subject": claim.subject,
+        "rule": dict(claim.rule),
+        "quote": claim.source.quote,
+        "line_start": claim.source.line_start,
+        "line_end": claim.source.line_end,
+    }
+    d.update(over)
+    return d
+
+
+def kinds(matches):
+    return [(m.pattern, m.kind) for m in matches]
+
+
+# ------------------------------------------------------------------ rule library
+
+
+def test_library_has_at_least_12_distinct_typed_patterns():
+    ids = [p.id for p in RULES]
+    assert len(ids) == len(set(ids)) >= 12
+    assert set(PATTERNS) == set(ids)
+    assert {p.kind for p in RULES} == {"forbid", "require", "only", "boundary"}
+    for p in RULES:
+        assert p.examples and p.non_examples, f"{p.id} needs positive and negative tests"
+
+
+@pytest.mark.parametrize(
+    "pattern,sentence",
+    [(p.id, ex) for p in RULES for ex in p.examples],
+)
+def test_pattern_positive(pattern, sentence):
+    ms = match_sentence(sentence)
+    assert pattern in [m.pattern for m in ms], (sentence, kinds(ms))
+    m = next(m for m in ms if m.pattern == pattern)
+    assert m.kind == PATTERNS[pattern].kind
+    assert rule_errors(m.kind, m.rule) == []
+    assert m.subject.strip()
+
+
+@pytest.mark.parametrize(
+    "pattern,sentence",
+    [(p.id, ex) for p in RULES for ex in p.non_examples],
+)
+def test_pattern_negative(pattern, sentence):
+    assert pattern not in [m.pattern for m in match_sentence(sentence)]
+
+
+@pytest.mark.parametrize(
+    "sentence,kind,subject,rule",
+    [
+        (
+            "PostgreSQL is the only datastore.",
+            "only",
+            "datastore",
+            {"only": ["PostgreSQL"], "category": "datastore"},
+        ),
+        (
+            "Services must not import `requests` or `urllib3`.",
+            "forbid",
+            "services",
+            {"forbid": ["requests", "urllib3"], "action": "import"},
+        ),
+        (
+            "No cloud SDK outside `adapters/`.",
+            "boundary",
+            "cloud sdk",
+            {"target": ["cloud SDK"], "allowed_in": ["adapters/"]},
+        ),
+        (
+            "All database access must go through the repository layer.",
+            "boundary",
+            "database access",
+            {"target": ["database access"], "via": ["repository layer"]},
+        ),
+        (
+            "We will use **RabbitMQ** as the message broker.",
+            "require",
+            "message broker",
+            {"require": ["RabbitMQ"], "for": "message broker"},
+        ),
+        (
+            "Services communicate only via the event bus.",
+            "only",
+            "communication",
+            {"only": ["event bus"], "between": "Services"},
+        ),
+        (
+            "We decided that Kafka is the sole message broker.",
+            "only",
+            "message broker",
+            {"only": ["Kafka"], "category": "message broker"},
+        ),
+        (
+            "Only `services/billing/` may access the payments database.",
+            "boundary",
+            "payments database",
+            {
+                "target": ["payments database"],
+                "allowed_in": ["services/billing/"],
+                "action": "access",
+            },
+        ),
+        (
+            "Node.js must not be used in the core.",
+            "forbid",
+            "codebase",
+            {"forbid": ["Node.js"], "action": "use", "scope": ["core"]},
+        ),
+    ],
+)
+def test_pattern_extracts_exact_rule(sentence, kind, subject, rule):
+    (m,) = match_sentence(sentence)
+    assert (m.kind, m.subject, m.rule) == (kind, subject, rule)
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Should PostgreSQL be the only datastore?",
+        "We discussed several options.",
+        "Python code is formatted with ruff format and linted with ruff check.",
+        "This is not allowed.",
+        "It must not use globals.",
+        "",
+        "   ",
+    ],
+)
+def test_no_claim_from_questions_pronouns_or_prose(sentence):
+    assert match_sentence(sentence) == []
+
+
+def test_one_phrase_one_claim_priority():
+    # boundary-not-outside wins over forbid-must-not-be-used on the same words
+    ms = match_sentence("Cloud SDKs must not be used outside adapters/.")
+    assert kinds(ms) == [("boundary-not-outside", "boundary")]
+    # only-use-for wins over require-we-will-use
+    ms = match_sentence("We will use only Redis for caching.")
+    assert kinds(ms) == [("only-use-for", "only")]
+
+
+def test_two_claims_from_one_sentence():
+    ms = match_sentence("PostgreSQL is the only datastore and services must not use MongoDB.")
+    assert sorted(k for _, k in kinds(ms)) == ["forbid", "only"]
+
+
+def test_term_helpers():
+    assert split_list("another database, cache-as-database or document store") == [
+        "database",
+        "cache-as-database",
+        "document store",
+    ]
+    assert clean_term("the adapters/ package") == "adapters/ package"
+    assert clean_term("it") is None
+    assert clean_term("  the database directly ") == "database"
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    ["no " * 3000, "only " * 3000, "all services must " * 800, "We will use " + "x " * 5000],
+)
+def test_long_adversarial_sentence_is_fast(sentence):
+    import time
+
+    t = time.monotonic()
+    match_sentence(sentence)
+    assert time.monotonic() - t < 3.0
+
+
+def test_sentence_spans_handles_lines_bullets_fences_abbreviations():
+    text = (
+        "PostgreSQL is the only datastore, e.g. for\n"
+        "orders. Services must not use MongoDB.\n"
+        "\n"
+        "* Do not use Redis.\n"
+        "```\n"
+        "Never import pandas.\n"
+        "```\n"
+        "| No SQL outside db/. |\n"
+    )
+    got = [text[a:b] for a, b in sentence_spans(text)]
+    assert got == [
+        "PostgreSQL is the only datastore, e.g. for\norders.",
+        "Services must not use MongoDB.",
+        "Do not use Redis.",
+    ]
+
+
+# ------------------------------------------------------------------ Claim model
+
+
+def _prov():
+    return Provenance(path="a.md", line_start=1, line_end=1, commit=WORKTREE, quote="q")
+
+
+def test_claim_model_is_typed():
+    c = Claim(
+        id="ADR-0001.c1",
+        kind="only",
+        subject="datastore",
+        rule={"only": ["pg"]},
+        source=_prov(),
+        decision_id="ADR-0001",
+    )
+    assert c.origin == "rule"
+    with pytest.raises(ValidationError):
+        Claim(id="x", kind="maybe", subject="s", rule={}, source=_prov(), decision_id="d")
+    with pytest.raises(ValidationError):  # rule shape must match kind
+        Claim(
+            id="x",
+            kind="forbid",
+            subject="s",
+            rule={"only": ["a"]},
+            source=_prov(),
+            decision_id="d",
+        )
+    with pytest.raises(ValidationError):
+        Claim(
+            id="x",
+            kind="boundary",
+            subject="s",
+            rule={"target": ["a"]},
+            source=_prov(),
+            decision_id="d",
+        )
+    with pytest.raises(ValidationError):
+        Claim(id="x", kind="free", subject=" ", rule={"text": "t"}, source=_prov(), decision_id="d")
+    with pytest.raises(ValidationError):  # frozen
+        c.kind = "forbid"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "kind,rule,ok",
+    [
+        ("forbid", {"forbid": ["x"]}, True),
+        ("forbid", {"forbid": []}, False),
+        ("forbid", {"forbid": "x"}, False),
+        ("require", {"require": ["x"], "for": "y"}, True),
+        ("only", {"only": [""]}, False),
+        ("boundary", {"target": ["x"], "via": ["b"]}, True),
+        ("boundary", {"target": ["x"], "allowed_in": []}, False),
+        ("free", {"text": "x"}, True),
+        ("free", {"text": ""}, False),
+        ("nope", {}, False),
+        ("only", ["x"], False),
+    ],
+)
+def test_rule_errors(kind, rule, ok):
+    assert (rule_errors(kind, rule) == []) is ok
+
+
+# ------------------------------------------------------------------ offline mode on fixtures
+
+EXPECTED_OFFLINE = {
+    "ADR-0001": [("require", {"require": ["Architecture Decision Records"]})],
+    "ADR-0002": [
+        ("only", {"only": ["PostgreSQL"], "category": "datastore"}),
+        (
+            "forbid",
+            {"forbid": ["database", "cache-as-database", "document store"], "action": "add"},
+        ),
+    ],
+    "ADR-0003": [
+        ("only", {"only": ["event bus"], "between": "Services"}),
+        ("forbid", {"forbid": ["Synchronous service-to-service HTTP calls"]}),
+    ],
+    "ADR-0004": [("boundary", {"target": ["Cloud provider SDKs"], "allowed_in": ["adapters/"]})],
+    "ADR-0005": [("require", {"require": ["FastAPI"]})],
+    "ADR-0006": [("require", {"require": ["structlog"]})],
+    "ADR-0007": [("require", {"require": ["server-rendered templates"]})],
+    "ADR-0008": [("require", {"require": ["in-process LRU cache"]})],
+    "ADR-0009": [],
+    "ADR-0010": [],
+    "ADR-0011": [("require", {"require": ["RabbitMQ"], "for": "message broker"})],
+    "ADR-0012": [("require", {"require": ["UTF-8"]})],
+}
+
+
+def test_offline_claims_on_fixture_adrs(basic):
+    repo, scan = basic
+    sets = structure_scan(scan.decisions, repo, mode="offline")
+    got = {cs.decision_id: [(c.kind, c.rule) for c in cs.claims] for cs in sets}
+    assert got == EXPECTED_OFFLINE
+    for cs in sets:
+        assert cs.mode == "offline" and cs.unverified == []
+        for n, c in enumerate(cs.claims, 1):
+            assert c.id == f"{cs.decision_id}.c{n}"
+            assert c.decision_id == cs.decision_id and c.origin == "rule" and c.pattern
+
+
+def test_g1_every_offline_claim_verifies_and_is_ledgered(basic, tmp_path):
+    """G1 grounding test: 100 % of offline claims verify at the ADR's commit and
+    point inside the decision section; every result is a ledger row."""
+    repo, scan = basic
+    ledger = Ledger(tmp_path / "out", run_id="l006-offline")
+    sets = structure_scan(scan.decisions, repo, mode="offline", ledger=ledger)
+    by_id = {d.id: d for d in scan.decisions}
+    claims = [c for cs in sets for c in cs.claims]
+    assert len(claims) == 12
+    for c in claims:
+        d = by_id[c.decision_id]
+        assert c.source.path == d.source.path and c.source.commit == d.source.commit == scan.head
+        assert d.source.line_start <= c.source.line_start <= c.source.line_end <= d.source.line_end
+        assert verify_source_quote(repo, c.source).status == "VERIFIED"
+    summary = ledger.write_summary()
+    assert summary["by_check"]["G1"] == {"VERIFIED": 12, "MISMATCH": 0}
+    assert summary["pass_rate"] == 1.0
+    rows = [json.loads(x) for x in ledger.path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 12 and {r["subject"] for r in rows} == {c.id for c in claims}
+    assert all(r["check_id"] == "G1" and r["status"] == "VERIFIED" for r in rows)
+
+
+def test_quote_is_the_sentence_and_spans_lines(basic):
+    repo, scan = basic
+    d = next(d for d in scan.decisions if d.id == "ADR-0002")
+    cs = structure_decision(d, repo, mode="offline")
+    c2 = cs.claims[1]
+    assert (c2.source.line_start, c2.source.line_end) == (17, 18)
+    assert c2.source.quote.startswith("No service may add another database")
+    assert c2.source.quote.endswith("supersedes this one.")
+
+
+def test_emphasis_and_curly_quotes_in_decision_text_verify(basic):
+    repo, scan = basic
+    d = next(d for d in scan.decisions if d.id == "ADR-0012")
+    (c,) = structure_decision(d, repo, mode="offline").claims
+    assert "**UTF-8**" in c.source.quote
+    assert verify_source_quote(repo, c.source).status == "VERIFIED"
+
+
+def test_worktree_adr_claims_verify(make_repo):
+    adr = "# 1. Datastore\n\n## Decision\n\nPostgreSQL is the only datastore.\n"
+    repo = make_repo({"docs/adr/0001-db.md": adr})
+    (repo / "docs/adr/0001-db.md").write_text(
+        adr + "Services must not import pymongo.\n", encoding="utf-8"
+    )
+    (d,) = scan_adrs(repo).decisions
+    assert d.source.commit == WORKTREE
+    cs = structure_decision(d, repo, mode="offline")
+    assert [c.kind for c in cs.claims] == ["only", "forbid"] and cs.unverified == []
+    assert all(r.status == "VERIFIED" for r in cs.grounding)
+
+
+# ------------------------------------------------------------------ front-matter hints
+
+HINT_ADR = """---
+status: accepted
+driftwarden:
+  forbid: [requests, urllib3]
+  require:
+    - httpx
+  only: {datastore: [postgresql]}
+  boundary:
+    - {target: boto3, allowed_in: [adapters/]}
+  free: Every service exposes /healthz
+---
+# Use httpx
+
+## Decision Outcome
+
+We will use httpx for HTTP calls.
+"""
+
+
+def test_front_matter_hints(make_repo):
+    repo = make_repo({"docs/adr/0003-http.md": HINT_ADR})
+    (d,) = scan_adrs(repo).decisions
+    cs = structure_decision(d, repo, mode="offline")
+    assert cs.unverified == []
+    got = [(c.origin, c.kind, c.rule, c.source.line_start, c.source.line_end) for c in cs.claims]
+    assert got == [
+        ("rule", "require", {"require": ["httpx"], "for": "HTTP calls"}, 16, 16),
+        ("hint", "forbid", {"forbid": ["requests", "urllib3"]}, 4, 4),
+        # require httpx from the hint duplicates the rule claim and is merged away
+        ("hint", "only", {"only": ["postgresql"], "category": "datastore"}, 7, 7),
+        ("hint", "boundary", {"target": ["boto3"], "allowed_in": ["adapters/"]}, 8, 9),
+        ("hint", "free", {"text": "Every service exposes /healthz"}, 10, 10),
+    ]
+    assert "1 duplicate claim(s) merged" in cs.notes
+    assert all(r.status == "VERIFIED" for r in cs.grounding)
+    assert (
+        cs.claims[3].source.quote == "  boundary:\n    - {target: boto3, allowed_in: [adapters/]}"
+    )
+
+
+def test_bad_hints_are_reported_not_dropped(make_repo):
+    adr = HINT_ADR.replace(
+        "  forbid: [requests, urllib3]\n", "  forbid: {deps: {nested: 1}}\n  maybe: [x]\n"
+    ).replace(
+        "  boundary:\n    - {target: boto3, allowed_in: [adapters/]}\n",
+        "  boundary: [{target: boto3}]\n",
+    )
+    repo = make_repo({"docs/adr/0003-http.md": adr})
+    (d,) = scan_adrs(repo).decisions
+    cs = structure_decision(d, repo, mode="offline")
+    reasons = sorted(u.reason for u in cs.unverified)
+    assert len(reasons) == 3
+    assert any("expected a list" in r for r in reasons)
+    assert any("unknown hint kind 'maybe'" in r for r in reasons)
+    assert any("allowed_in" in r for r in reasons)
+    assert all(u.origin == "hint" and u.source is not None for u in cs.unverified)
+    assert [u.id for u in cs.unverified] == ["ADR-0003.u1", "ADR-0003.u2", "ADR-0003.u3"]
+
+
+def test_invalid_yaml_front_matter_with_hint_is_reported(make_repo):
+    adr = (
+        "---\nstatus: accepted\ndriftwarden:\n  forbid: [a, b\n---\n"
+        "# T\n\nPostgreSQL is the only datastore.\n"
+    )
+    repo = make_repo({"docs/adr/0001-x.md": adr})
+    (d,) = scan_adrs(repo).decisions
+    cs = structure_decision(d, repo, mode="offline")
+    assert [c.kind for c in cs.claims] == ["only"]
+    (u,) = cs.unverified
+    assert "not valid YAML" in u.reason
+
+
+def test_no_hints_without_text():
+    d = parse_adr(HINT_ADR, "docs/adr/0003-http.md", WORKTREE)
+    assert [c.origin for c in extract_rule_claims(d).claims] == ["rule"]
+    assert [c.origin for c in extract_rule_claims(d, HINT_ADR).claims].count("hint") == 5
+
+
+# ------------------------------------------------------------------ LLM path
+
+
+def test_mode_resolution():
+    off = OfflineProvider()
+    assert resolve_mode(None, None) == "offline"
+    assert resolve_mode("auto", off) == "offline"
+    assert resolve_mode("llm", off) == "llm"
+    assert resolve_mode("offline", off) == "offline"
+    with pytest.raises(ValueError):
+        resolve_mode("llm", None)
+    with pytest.raises(ValueError):
+        resolve_mode("magic", off)
+
+
+def test_offline_mode_never_calls_the_model(basic):
+    repo, scan = basic
+    calls = []
+    prov = scripted(lambda a, r: calls.append(a) or [])
+    structure_scan(scan.decisions, repo, mode="offline", provider=prov)
+    structure_scan(scan.decisions, repo, provider=prov)  # auto + offline provider -> offline
+    assert calls == []
+
+
+def test_prompt_numbers_decision_lines_and_schema_is_valid(basic):
+    _, scan = basic
+    d = next(d for d in scan.decisions if d.id == "ADR-0002")
+    p = build_prompt(d)
+    assert "15 | PostgreSQL is the only datastore." in p
+    assert "17 | No service may add another database" in p
+    assert validate_json({"claims": []}, CLAIMS_SCHEMA) == []
+    assert validate_json({"claims": [{"kind": "only"}]}, CLAIMS_SCHEMA)
+
+
+def test_llm_faithful_claims_verify_merge_and_dedup(basic, tmp_path):
+    repo, scan = basic
+    offline = {cs.decision_id: cs for cs in structure_scan(scan.decisions, repo, mode="offline")}
+
+    def faithful(adr_id, _req):
+        out = [as_llm(c, subject=c.subject.upper()) for c in offline[adr_id].claims]  # dups
+        d = next(d for d in scan.decisions if d.id == adr_id)
+        if d.decision_text.strip():
+            first = d.decision_text.split("\n")[0]
+            out.append(
+                {
+                    "kind": "free",
+                    "subject": "decision",
+                    "rule": {"text": f"holds: {first[:40]}"},
+                    "quote": first,
+                    "line_start": d.source.line_start,
+                    "line_end": d.source.line_start,
+                }
+            )
+        return out
+
+    ledger = Ledger(tmp_path, run_id="l006-llm")
+    sets = structure_scan(
+        scan.decisions, repo, mode="llm", provider=scripted(faithful), ledger=ledger
+    )
+    for cs in sets:
+        assert cs.mode == "llm" and cs.unverified == []
+        rule_claims = [c for c in cs.claims if c.origin == "rule"]
+        llm_claims = [c for c in cs.claims if c.origin == "llm"]
+        assert [(c.kind, c.rule) for c in rule_claims] == [
+            (c.kind, c.rule) for c in offline[cs.decision_id].claims
+        ]
+        assert [c.kind for c in llm_claims] == ["free"]  # restated rule claims merged away
+        assert [c.id for c in cs.claims] == [
+            f"{cs.decision_id}.c{n}" for n in range(1, len(cs.claims) + 1)
+        ]
+    assert ledger.summary()["pass_rate"] == 1.0
+
+
+TAMPERS = ("word", "shift_out", "outside_decision", "fabricated", "range_too_short")
+
+
+def _tamper(claim_dict: dict, how: str, decision, rng: random.Random) -> dict:
+    d = dict(claim_dict)
+    if how == "word":
+        words = d["quote"].split(" ")
+        i = rng.randrange(len(words))
+        words[i] = words[i] + "zz"
+        d["quote"] = " ".join(words)
+    elif how == "shift_out":
+        d["line_start"] += 100
+        d["line_end"] += 100
+    elif how == "outside_decision":  # a real line, but from the title / context
+        d["quote"] = decision.title
+        d["line_start"] = d["line_end"] = 1
+    elif how == "fabricated":
+        d["quote"] = "MongoDB is the only datastore."
+    elif how == "range_too_short":
+        d["line_start"] = d["line_end"] = decision.source.line_start - 1 or 1
+    return d
+
+
+def test_g1_tampered_llm_quotes_are_caught_on_every_fixture_claim(basic, tmp_path):
+    """G1 grounding test, LLM path: every tampered citation is caught and surfaces as
+    an unverified claim with a reason; none becomes a claim."""
+    repo, scan = basic
+    offline = {cs.decision_id: cs for cs in structure_scan(scan.decisions, repo, mode="offline")}
+    by_id = {d.id: d for d in scan.decisions}
+    rng = random.Random(6)
+
+    def tampered(adr_id, _req):
+        out = []
+        for c in offline[adr_id].claims:
+            for how in TAMPERS:
+                out.append(
+                    _tamper(as_llm(c, kind="free", rule={"text": how}), how, by_id[adr_id], rng)
+                )
+        return out
+
+    ledger = Ledger(tmp_path, run_id="l006-tamper")
+    sets = structure_scan(
+        scan.decisions, repo, mode="llm", provider=scripted(tampered), ledger=ledger
+    )
+    total = 0
+    for cs in sets:
+        assert [c.origin for c in cs.claims] == ["rule"] * len(offline[cs.decision_id].claims)
+        assert len(cs.unverified) == len(TAMPERS) * len(offline[cs.decision_id].claims)
+        for u in cs.unverified:
+            total += 1
+            assert u.origin == "llm" and u.reason and u.grounding is not None
+            assert u.grounding.status == "MISMATCH" and u.grounding.subject == u.id
+            assert u.source is not None and u.source.commit == scan.head
+    assert total == 12 * len(TAMPERS)
+    summary = ledger.write_summary()
+    assert summary["by_check"]["G1"] == {"VERIFIED": 12, "MISMATCH": total}
+
+
+def test_unverified_reasons_are_specific(basic):
+    repo, scan = basic
+    d = next(d for d in scan.decisions if d.id == "ADR-0002")
+
+    def reply(_a, _r):
+        base = {"kind": "only", "subject": "datastore", "rule": {"only": ["PostgreSQL"]}}
+        return [
+            {
+                **base,
+                "quote": "PostgreSQL is the only datastore.",
+                "line_start": 14,
+                "line_end": 14,
+            },
+            {
+                **base,
+                "quote": "PostgreSQL is the only datastore.",
+                "line_start": 90,
+                "line_end": 90,
+            },
+            {
+                **base,
+                "quote": "Operating many datastores is costly.",
+                "line_start": 11,
+                "line_end": 11,
+            },
+            {**base, "quote": "MySQL is the only datastore.", "line_start": 15, "line_end": 15},
+            {
+                **base,
+                "kind": "forbid",
+                "quote": "PostgreSQL is the only datastore.",
+                "line_start": 15,
+                "line_end": 15,
+            },
+        ]
+
+    cs = structure_decision(d, repo, mode="llm", provider=scripted(reply))
+    reasons = [u.reason for u in cs.unverified]
+    assert len(reasons) == 5
+    assert "quote not in cited range; found at lines 15-15" in reasons[0]
+    assert "out of bounds" in reasons[1]
+    assert "outside the decision text of ADR-0002 (lines 15-18)" in reasons[2]
+    assert "not found in cited range or anywhere" in reasons[3]
+    assert reasons[4].startswith("malformed rule: forbid rule needs 'forbid'")
+    # the malformed one has a VERIFIED citation; the claim is still not accepted
+    assert cs.unverified[4].grounding.status == "VERIFIED"
+    assert [c.origin for c in cs.claims] == ["rule", "rule"]
+
+
+def test_model_cannot_choose_path_or_commit(basic):
+    repo, scan = basic
+    d = next(d for d in scan.decisions if d.id == "ADR-0004")
+    seen = []
+
+    def reply(_a, req):
+        seen.append(req.prompt)
+        c = {
+            "kind": "forbid",
+            "subject": "x",
+            "rule": {"forbid": ["boto3"]},
+            "quote": "Business logic stays portable between providers.",
+            "line_start": 17,
+            "line_end": 17,
+        }
+        if len(seen) == 1:  # extra keys violate the schema and are retried
+            return [{**c, "path": "README.md", "commit": "HEAD"}]
+        return [c]
+
+    cs = structure_decision(d, repo, mode="llm", provider=scripted(reply))
+    assert len(seen) == 2 and "rejected" in seen[1]
+    (u,) = cs.unverified
+    assert u.source.path == d.source.path and u.source.commit == d.source.commit
+    assert "outside the decision text" in u.reason
+
+
+def test_llm_failure_keeps_rule_claims_and_says_why(basic):
+    repo, scan = basic
+    d = next(d for d in scan.decisions if d.id == "ADR-0002")
+    cs = structure_decision(d, repo, mode="llm", provider=scripted(lambda a, r: "not json"))
+    assert [c.origin for c in cs.claims] == ["rule", "rule"]
+    assert any("LLM structuring failed for ADR-0002" in n for n in cs.notes)
+    cs = structure_decision(d, repo, mode="llm", provider=OfflineProvider())
+    assert len(cs.claims) == 2 and any("offline" in n for n in cs.notes)
+
+
+def test_empty_llm_reply_and_empty_decision(basic):
+    repo, scan = basic
+    calls = []
+    prov = scripted(lambda a, r: calls.append(a) or [])
+    for d in scan.decisions:
+        cs = structure_decision(d, repo, mode="llm", provider=prov)
+        assert cs.unverified == []
+    assert len(calls) == len(scan.decisions)
