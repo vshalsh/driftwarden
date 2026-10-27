@@ -153,3 +153,64 @@ def is_tracked_and_clean(repo: str | Path, path: str) -> bool:
         return False
     status = _run(["status", "--porcelain", "--", rel], repo)
     return status.strip() == ""
+
+
+@dataclass(frozen=True)
+class TreeEntry:
+    path: str
+    mode: str  # "100644", "100755", "120000" (symlink)
+    sha: str
+    size: int
+
+
+def tree_entries(repo: str | Path, commit: str) -> list[TreeEntry]:
+    """Every blob tracked at ``commit`` (submodules are not blobs and are skipped)."""
+    out = _run_bytes(["ls-tree", "-r", "-z", "-l", "--full-tree", f"{commit}^{{commit}}"], repo)
+    entries = []
+    for rec in out.decode("utf-8", "replace").split("\0"):
+        if not rec:
+            continue
+        meta, _, path = rec.partition("\t")
+        mode, kind, sha, size = meta.split()
+        if kind == "blob":
+            entries.append(TreeEntry(path, mode, sha, int(size)))
+    return entries
+
+
+def read_blobs(repo: str | Path, shas: list[str]) -> dict[str, bytes]:
+    """Raw contents of the given blob objects (one ``git cat-file --batch`` call).
+
+    The bytes are exactly what ``git show <commit>:<path>`` prints: no filters
+    and no ``export-subst`` (unlike ``git archive``).
+    """
+    unique = list(dict.fromkeys(shas))
+    if not unique:
+        return {}
+    try:
+        proc = subprocess.run(
+            ["git", "cat-file", "--batch"],
+            cwd=str(repo),
+            input=("\n".join(unique) + "\n").encode(),
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise GitNotFoundError("git executable not found on PATH") from exc
+    if proc.returncode != 0:
+        raise GitError(f"git cat-file --batch failed: {proc.stderr.decode('utf-8', 'replace')}")
+    data, pos, blobs = proc.stdout, 0, {}
+    for _ in unique:
+        nl = data.index(b"\n", pos)
+        parts = data[pos:nl].decode("utf-8", "replace").split()
+        if len(parts) != 3:
+            raise GitError(f"git cat-file: unexpected header {parts!r}")
+        sha, _kind, size = parts
+        start = nl + 1
+        blobs[sha] = data[start : start + int(size)]
+        pos = start + int(size) + 1  # each object is followed by a newline
+    return blobs
+
+
+def is_clean(repo: str | Path) -> bool:
+    """True if no tracked file has staged or unstaged changes (untracked files ignored)."""
+    return _run(["status", "--porcelain", "--untracked-files=no"], repo).strip() == ""
