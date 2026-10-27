@@ -39,8 +39,33 @@ What is collected per rule kind (terms are resolved by ``judge.catalog``):
     candidates are added so the model has something to cite.
 
 Each item is flagged ``production=False`` when it sits in a test file
-(``tests/``, ``test_*.py``, ``*.spec.ts``...) or is a dev/test/build-scoped
-dependency; the rules then call the claim DRIFTING rather than VIOLATED.
+(``tests/``, ``test_*.py``, ``*.spec.ts``...), is a dev/test/build-scoped
+dependency, or comes from a manifest whose name or directory marks it as
+non-shipping (``requirements-dev.txt``, ``requirements/test.txt``,
+``docker-compose.ci.yml``, ``docs/requirements.txt``; see
+``is_nonproduction_manifest``); the rules then call the claim DRIFTING rather
+than VIOLATED.
+
+A claim with an ``actor`` ("Handlers must not import boto3 outside adapters/")
+counts only occurrences in the actor's code: directories or modules named like
+it (``handlers/``, ``handler.py``; see ``resolve_actor``). Whole-codebase actors
+("code", "modules") need no filter; an actor that names nothing in the
+repository makes the claim UNKNOWN ("actor scope not resolvable"), never
+VIOLATED. "Alternative" evidence never includes an occurrence that also matches
+the allowed/required technology (``ioredis`` is not a second cache next to
+itself). The per-claim cap keeps up to ``max_per_relation`` items per
+(relation, kind, production, technology) group, so a flood of one package can
+never hide another technology the verdict depends on; truncation is noted.
+
+Commit and WORKTREE snapshots select files the same way (by name, symlinks never
+followed) and decode them like the verifiers (``text.decode_text``), so UTF-16
+manifests are citable and both modes see the same evidence.
+
+Files too large to read (source over ``MAX_PARSE_BYTES``) are listed in
+``Snapshot.skipped``; every rule claim then carries an "incomplete evidence" note,
+and a HOLDING verdict says so in its rationale. Policy: the verdict is not forced
+to UNKNOWN (one generated file would otherwise blank every claim), but the gap
+is never silent.
 
 Known limits: Python imports are matched by module name, so a distribution
 whose import name differs from every catalog/literal pattern is found only
@@ -53,7 +78,7 @@ from __future__ import annotations
 import posixpath
 import re
 import tempfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -72,7 +97,14 @@ from driftwarden.index.files import (
     is_binary,
 )
 from driftwarden.index.imports import IMPORT_LANGUAGES, ImportEdge, ImportGraph, build_import_graph
-from driftwarden.index.manifests import ManifestResult, detect, parse_manifest, scan_manifests
+from driftwarden.index.manifests import (
+    ManifestError,
+    ManifestResult,
+    _prepare,
+    detect,
+    parse_manifest,
+    scan_manifests,
+)
 from driftwarden.judge import catalog
 from driftwarden.judge.catalog import Resolution, Technology
 from driftwarden.models import (
@@ -84,7 +116,7 @@ from driftwarden.models import (
     EvidenceRelation,
     Provenance,
 )
-from driftwarden.text import decode_text, read_text_file, split_lines
+from driftwarden.text import decode_text, split_lines
 
 # Languages whose text is kept for snippets and keyword search. Prose (markdown,
 # rst, html) is left out: ADRs and docs are not evidence about the code.
@@ -116,6 +148,9 @@ class Snapshot:
     imports: ImportGraph
     manifests: list[ManifestResult]
     texts: dict[str, str] = field(default_factory=dict)
+    skipped: list[tuple[str, str]] = field(default_factory=list)
+    """``(path, reason)`` for source files that could hold evidence but were not read
+    (over ``MAX_PARSE_BYTES``). Absence verdicts mention them in their notes."""
     _lines: dict[str, list[str]] = field(default_factory=dict, repr=False)
 
     def lines(self, path: str) -> list[str] | None:
@@ -149,6 +184,58 @@ def _wanted(path: str) -> bool:
     return detect_language(path) in TEXT_LANGUAGES or detect(path) is not None
 
 
+def _as_text(data: bytes, path: str) -> str | None:
+    """Decoded text of a file, or None if it is binary. Decoding follows
+    ``text.decode_text`` (the verifiers' rule), so UTF-16/32 files (BOM or NUL
+    pattern) are text too, and their lines are the lines G2 checks."""
+    if is_binary(b"", path):  # binary extension
+        return None
+    text = decode_text(data)
+    return None if "\x00" in text else text
+
+
+def _maybe_script(path: str) -> bool:
+    """An extensionless file the name alone cannot classify (``bin/worker``)."""
+    name = path.rsplit("/", 1)[-1]
+    return "." not in name and detect_language(path) is None
+
+
+def _unparsed(manifests: list[ManifestResult]) -> list[tuple[str, str]]:
+    """Manifests that matched but yielded nothing (too large, malformed): evidence gap."""
+    return [
+        (m.path, f"manifest not read: {'; '.join(m.errors)[:200]}")
+        for m in manifests
+        if m.errors and not m.refs
+    ]
+
+
+def _too_large(path: str, size: int) -> tuple[str, str] | None:
+    if size > MAX_PARSE_BYTES and detect_language(path) in TEXT_LANGUAGES:
+        return path, f"{size} bytes, over the {MAX_PARSE_BYTES} byte parse limit; not read"
+    return None
+
+
+def _manifest_at(path: str, text: str, commit: str) -> ManifestResult | None:
+    """Parse ``path`` the way ``scan_manifests`` does (same detection and sniffing),
+    so commit and WORKTREE snapshots see the same manifests."""
+    if "node_modules/" in f"/{path}":
+        return None
+    parser = detect(path)
+    if parser is None:
+        return None
+    if parser.sniff is not None:
+        try:
+            sniffed = _prepare(text)
+        except ManifestError:
+            return None
+        if not parser.sniff(path, sniffed):
+            return None
+    res = parse_manifest(path, text)
+    res.commit = commit
+    res.refs = [r.model_copy(update={"commit": commit}) for r in res.refs]
+    return res
+
+
 def load_snapshot(repo: str | Path, commit: str = "HEAD", config: Config | None = None) -> Snapshot:
     """The repository at ``commit`` (resolved to a full SHA), or the working tree
     when ``commit`` is WORKTREE. ``config.exclude`` is honoured.
@@ -163,11 +250,14 @@ def load_snapshot(repo: str | Path, commit: str = "HEAD", config: Config | None 
     excludes = _Excludes(list(cfg.exclude))
     entries = [e for e in git.tree_entries(root, sha) if _safe(e.path) and not excludes(e.path)]
     want = [e for e in entries if e.mode != "120000" and e.size <= MAX_PARSE_BYTES]
-    want = [e for e in want if _wanted(e.path)]
+    # Extensionless files may be scripts with a shebang (bin/worker): read them too and
+    # keep the ones the indexer's shebang detection recognises.
+    want = [e for e in want if _wanted(e.path) or _maybe_script(e.path)]
     blobs = git.read_blobs(root, [e.sha for e in want])
     wanted = {e.path for e in want}
 
     texts: dict[str, str] = {}
+    skipped = [s for s in (_too_large(e.path, e.size) for e in entries if e.mode != "120000") if s]
     file_entries: list[FileEntry] = []
     with tempfile.TemporaryDirectory(prefix="driftwarden-snap-") as tmp:
         base = Path(tmp)
@@ -185,22 +275,30 @@ def load_snapshot(repo: str | Path, commit: str = "HEAD", config: Config | None 
                 file_entries.append(FileEntry(e.path, e.size, lang, binary, tracked=True))
                 continue
             data = blobs[e.sha]
-            binary = is_binary(data[:SNIFF_BYTES], e.path)
+            text = _as_text(data, e.path)
+            binary = text is None
             lang = None if binary else detect_language(e.path, data[:SNIFF_BYTES])
             file_entries.append(FileEntry(e.path, e.size, lang, binary, tracked=True))
-            if binary:
+            if text is None or (not _wanted(e.path) and lang not in TEXT_LANGUAGES):
                 continue
             dest = base / e.path
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
-            texts[e.path] = decode_text(data)
+            texts[e.path] = text
         file_entries.sort(key=lambda f: f.path)
         graph = build_import_graph(FileIndex(root=base, files=file_entries, source="git"))
 
     manifests = [m for m in scan_manifests(root, sha) if not excludes(m.path)]
+    skipped.extend(_unparsed(manifests))
     files = FileIndex(root=root, files=file_entries, source=f"git:{sha}")
     return Snapshot(
-        root=root, commit=sha, files=files, imports=graph, manifests=manifests, texts=texts
+        root=root,
+        commit=sha,
+        files=files,
+        imports=graph,
+        manifests=manifests,
+        texts=texts,
+        skipped=skipped,
     )
 
 
@@ -209,23 +307,39 @@ def _worktree_snapshot(root: Path, cfg: Config) -> Snapshot:
     graph = build_import_graph(files)
     texts: dict[str, str] = {}
     manifests: list[ManifestResult] = []
+    skipped: list[tuple[str, str]] = []
+    # Same selection as the commit snapshot: by file name, not by the index's language
+    # (requirements*.txt has none), symlinks never followed.
     for f in files:
-        if not f.parseable or not _wanted(f.path):
+        if f.is_symlink:
+            continue
+        is_manifest = detect(f.path) is not None
+        if f.size > MAX_PARSE_BYTES and not is_manifest:
+            big = _too_large(f.path, f.size)
+            if big:
+                skipped.append(big)
+            continue
+        if not (_wanted(f.path) or f.language in TEXT_LANGUAGES):  # shebang scripts too
             continue
         try:
-            text = read_text_file(root / f.path)
+            data = (root / f.path).read_bytes()
         except OSError:
             continue
-        texts[f.path] = text
-        parser = detect(f.path, text)
-        if parser is None or "node_modules/" in f"/{f.path}":
-            continue
-        res = parse_manifest(f.path, text)
-        res.commit = WORKTREE
-        res.refs = [r.model_copy(update={"commit": WORKTREE}) for r in res.refs]
-        manifests.append(res)
+        text = _as_text(data, f.path)
+        if text is not None and f.size <= MAX_PARSE_BYTES:
+            texts[f.path] = text
+        res = _manifest_at(f.path, decode_text(data), WORKTREE)
+        if res is not None:
+            manifests.append(res)
+    skipped.extend(_unparsed(manifests))
     return Snapshot(
-        root=root, commit=WORKTREE, files=files, imports=graph, manifests=manifests, texts=texts
+        root=root,
+        commit=WORKTREE,
+        files=files,
+        imports=graph,
+        manifests=manifests,
+        texts=texts,
+        skipped=skipped,
     )
 
 
@@ -249,18 +363,79 @@ def is_test_path(path: str) -> bool:
     return bool(_TEST_FILE.match(parts[-1]))
 
 
+# Words in a manifest's file name (or a requirements/ file's stem) that mark it as
+# not shipping: requirements-dev.txt, dev-requirements.txt, requirements/test.txt,
+# requirements-docs.txt, docker-compose.ci.yml, Dockerfile.test.
+_NONPROD_NAME_WORDS = frozenset(
+    {"dev", "devel", "develop", "development", "test", "tests", "testing", "ci", "docs", "doc",
+     "lint", "linting", "typing", "bench", "benchmark", "benchmarks"}
+)  # fmt: skip
+# Directories whose manifests do not ship (test directories are covered by is_test_path).
+# A bare "dev/" directory is deliberately NOT in the list: it often holds real
+# service code ("dev/requirements.txt" of a service called dev).
+_NONPROD_DIRS = frozenset({"ci", ".ci", "docs", "doc", "lint", ".github", "benchmarks"})
+
+
+def is_nonproduction_manifest(path: str) -> bool:
+    """True for manifests that by name or directory are dev/test/CI/docs/lint only."""
+    parts = path.lower().split("/")
+    if any(p in _NONPROD_DIRS for p in parts[:-1]):
+        return True
+    words = re.split(r"[-_.]+", parts[-1])
+    return any(w in _NONPROD_NAME_WORDS for w in words)
+
+
+# Whole words in a scope's name that mark it as non-shipping. "staging" is NOT in the
+# list: a staging deployment still runs the technology, so a claim about it applies.
+_NONPROD_SCOPE_WORDS = frozenset(
+    {"dev", "devel", "development", "test", "tests", "testing", "e2e", "ci", "docs", "doc",
+     "lint", "linting", "mock", "mocks", "fixture", "fixtures", "bench", "benchmark"}
+)  # fmt: skip
+
+
+def _words(name: str) -> list[str]:
+    """``testImplementation`` -> [test, implementation]; ``test-db`` -> [test, db]."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name)
+    return [w for w in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if w]
+
+
 def is_weak_scope(scope: str | None) -> bool:
-    """True for dependency scopes that do not ship: dev, test, build, optional, groups."""
+    """True for dependency scopes that do not ship.
+
+    The scope is read structurally, never by substring:
+
+    * a bare scope (``dev``, ``test``, ``build``, ``plugin``, ``parent``,
+      ``indirect``, ``peer``) is weak when it is one of those words or its words
+      include a non-shipping word (``testImplementation``, ``androidTestApi``);
+    * ``optional:<extra>`` and ``group:<name>`` (Python extras and dependency
+      groups) are always weak;
+    * ``<kind>:<name>`` / ``<Kind>/<name>`` (``service:web``, ``Deployment/api``,
+      ``module:vpc``) is weak only if a whole word of the *name* is a
+      non-shipping word: ``service:test-db`` and ``Deployment/e2e-runner`` are,
+      ``service:contest``, ``Deployment/attestation``, ``service:latest`` and
+      ``CronJob/protest`` are not. ``staging`` counts as shipping.
+    """
     if not scope:
         return False
-    s = scope.lower()
-    return s in _WEAK_SCOPES or s.startswith(("optional:", "group:")) or "test" in s
+    s = scope.strip()
+    low = s.lower()
+    if low.startswith(("optional:", "group:")):
+        return True
+    m = re.match(r"^([A-Za-z][\w.-]*)[:/](.+)$", s)
+    if m:
+        return any(w in _NONPROD_SCOPE_WORDS for w in _words(m.group(2)))
+    if low in _WEAK_SCOPES:
+        return True
+    return any(w in _NONPROD_SCOPE_WORDS for w in _words(s))
 
 
 def in_dir(path: str, directory: str) -> bool:
-    """``path`` is inside ``directory`` (at the root, or as a nested path segment:
-    ``adapters`` contains ``src/app/adapters/s3.py``)."""
+    """``path`` is ``directory`` itself or inside it (at the root, or as a nested path
+    segment: ``adapters`` contains ``src/app/adapters/s3.py``). Equality matters for
+    Go, whose local import edges target the package directory itself."""
     if directory in ("", "."):
+        return True
+    if path == directory or path.endswith("/" + directory):
         return True
     return path.startswith(directory + "/") or f"/{directory}/" in f"/{path}"
 
@@ -273,20 +448,28 @@ def _str_list(value: object) -> list[str]:
     return []
 
 
+def dir_exists(directory: str, snap: Snapshot) -> bool:
+    """A directory ``directory`` exists in ``snap`` (at the root or nested)."""
+    return any(k == directory or k.endswith("/" + directory) for k in snap.directories())
+
+
 def resolve_dir(raw: str, snap: Snapshot) -> str | None:
-    """A repository directory named by ``raw`` ("adapters/", "`infra/aws/`",
-    "./src/db"), or None. A word without a slash counts only if a directory of
-    that name exists ("persistence" yes, "the persistence layer" no)."""
+    """A repository directory named by ``raw``, or None.
+
+    Explicit directory spellings ("adapters/", "`infra/aws/`", "./src/db") are
+    taken as written. Anything else ("persistence", "internal/cloud") counts only
+    if such a directory exists in the snapshot, so package names with a slash
+    (``@aws-sdk/client-s3``, ``github.com/x/y``) are never mistaken for paths."""
     t = raw.strip().strip("`'\"")
-    pathish = "/" in t
+    explicit = t.endswith("/") or t.startswith("./")
     while t.startswith("./"):
         t = t[2:]
     t = t.strip("/")
     if not t or " " in t or ".." in t.split("/"):
         return None
-    if pathish:
+    if explicit or dir_exists(t, snap):
         return t
-    return t if any(posixpath.basename(d) == t for d in snap.directories()) else None
+    return None
 
 
 # --------------------------------------------------------------------------- occurrences
@@ -342,6 +525,12 @@ class EvidenceSet(BaseModel):
     )
     category: str | None = None
     searched: str = Field(default="", description="What was searched, for absence verdicts.")
+    skipped: list[str] = Field(
+        default_factory=list, description="Source files that were too large to read."
+    )
+    required_terms: dict[str, list[str]] = Field(
+        default_factory=dict, description="require: each required term -> its technology ids."
+    )
     notes: list[str] = Field(default_factory=list)
 
     def get(self, evidence_id: str) -> Evidence | None:
@@ -361,6 +550,8 @@ class _Collector:
         self.seen: set[tuple] = set()
         self.counts: dict[str, int] = {}
         self.notes: list[str] = []
+        self.actor: Callable[[str], bool] | None = None
+        """Only occurrences in files of the claim's actor count (None: whole repo)."""
 
     def add_occurrence(self, o: _Occurrence, relation: EvidenceRelation, tech: Technology) -> None:
         if o.edge is not None:
@@ -380,7 +571,9 @@ class _Collector:
             ver = f" {d.version_spec}" if d.version_spec else ""
             scope = f" [{d.scope}]" if d.scope else ""
             detail = f"{path}:{start} declares {d.package}{ver}{scope}"
-            production = not is_weak_scope(d.scope) and not is_test_path(path)
+            production = not (
+                is_weak_scope(d.scope) or is_test_path(path) or is_nonproduction_manifest(path)
+            )
             dep = d
         key = (relation, o.kind, path, start, end, dep.package if dep else o.names)
         if key in self.seen:
@@ -424,6 +617,8 @@ class _Collector:
                     continue
                 if where is not None and not where(o):
                     continue
+                if self.actor is not None and not self.actor(o.path):
+                    continue
                 if catalog.name_matches(tech, o.namespace, o.names):
                     rel = relation(o) if callable(relation) else relation
                     if rel is None:
@@ -466,14 +661,17 @@ class _Collector:
     def build(self) -> list[Evidence]:
         ordered = sorted(self.items, key=lambda it: it[0])
         kept: list[dict] = []
-        per: dict[str, int] = {}
+        per: dict[tuple, int] = {}
         dropped = 0
         for _, d in ordered:
-            r = d["relation"]
-            if r != "keyword" and per.get(r, 0) >= self.max:
+            # The cap is per (relation, kind, production) group, so many manifest
+            # declarations can never crowd out the one decisive production import:
+            # every group the verdict depends on keeps at least its first items.
+            g = (d["relation"], d["kind"], d["production"], d.get("technology"))
+            if d["relation"] != "keyword" and per.get(g, 0) >= self.max:
                 dropped += 1
                 continue
-            per[r] = per.get(r, 0) + 1
+            per[g] = per.get(g, 0) + 1
             kept.append(d)
         if dropped:
             self.notes.append(f"{dropped} further evidence item(s) not listed (cap {self.max})")
@@ -551,6 +749,73 @@ def _techs(resolutions: Iterable[Resolution]) -> list[Technology]:
     return list(seen.values())
 
 
+def _not_matching(techs: list[Technology]):
+    """Occurrence filter: drop occurrences that match any of ``techs``, so one package
+    (``ioredis``) is never both the allowed technology and an "alternative" (redis)."""
+
+    def where(o: _Occurrence) -> bool:
+        return not any(catalog.name_matches(t, o.namespace, o.names) for t in techs)
+
+    return where
+
+
+# Actors that name the whole codebase rather than a part of it.
+_WHOLE_REPO_ACTORS = frozenset(
+    """code codebase module modules package packages file files component components
+    anyone anything nobody everyone project repository repo application app we they
+    everything""".split()
+)
+
+
+def _actor_variants(actor: str) -> set[str]:
+    words = [w for w in re.split(r"[^a-z0-9]+", actor.lower()) if w]
+    words = [w for w in words if w not in ("the", "a", "an", "all", "any", "every", "each", "our")]
+    if not words:
+        return set()
+    out = {"-".join(words), "_".join(words), "".join(words), words[-1]}
+    for v in list(out):
+        if v.endswith("s") and len(v) > 3:
+            out.add(v[:-1])
+        else:
+            out.add(v + "s")
+    return out
+
+
+def resolve_actor(actors: list[str], snap: Snapshot) -> tuple[Callable[[str], bool] | None, str]:
+    """A path filter for the claim's actor(s), and a reason when one cannot be built.
+
+    An actor maps to the repository directories (or file stems) named like it:
+    "Handlers" -> ``handlers/`` or ``handler.py``, "request handlers" ->
+    ``request_handlers/``. Whole-codebase actors ("code", "modules") need no filter.
+    Returns ``(None, "")`` for the whole repo, ``(None, reason)`` if unresolvable.
+    """
+    names: set[str] = set()
+    for a in actors:
+        clean = " ".join(a.lower().split())
+        if clean in _WHOLE_REPO_ACTORS or clean.removeprefix("the ") in _WHOLE_REPO_ACTORS:
+            return None, ""
+        variants = _actor_variants(a)
+        if not variants:
+            return None, f"actor scope not resolvable: {a!r}"
+        names |= variants
+    dirs = {d for d in snap.directories() if posixpath.basename(d).lower() in names}
+    stems = {
+        f.path
+        for f in snap.files
+        if posixpath.splitext(posixpath.basename(f.path))[0].lower() in names
+    }
+    if not dirs and not stems:
+        return None, (
+            f"actor scope not resolvable: no directory or module named like "
+            f"{', '.join(map(repr, actors))}"
+        )
+
+    def where(path: str) -> bool:
+        return path in stems or any(path.startswith(d + "/") for d in dirs)
+
+    return where, ""
+
+
 def _scope_filter(paths: list[str]):
     def where(o: _Occurrence) -> bool:
         return any(in_dir(o.path, d) for d in paths)
@@ -591,13 +856,18 @@ def _require(c: _Collector, es: EvidenceSet) -> None:
         return
     required = _techs(res)
     c.scan(required, "required")
+    es.required_terms = {r.term: [t.id for t in r.technologies] for r in res}
     cat = catalog.category_for(rule.get("for") if isinstance(rule.get("for"), str) else None)
     if cat is None and len(res) == 1 and res[0].kind == "technology":
         cat = res[0].category
     es.category = cat
     if cat is not None:
         ids = {t.id for t in required}
-        c.scan([t for t in catalog.members(cat) if t.id not in ids], "alternative")
+        c.scan(
+            [t for t in catalog.members(cat) if t.id not in ids],
+            "alternative",
+            where=_not_matching(required),
+        )
 
 
 def _only(c: _Collector, es: EvidenceSet) -> None:
@@ -621,7 +891,11 @@ def _only(c: _Collector, es: EvidenceSet) -> None:
     allowed = _techs(res)
     c.scan(allowed, "allowed")
     ids = {t.id for t in allowed}
-    c.scan([t for t in catalog.members(cat) if t.id not in ids], "alternative")
+    c.scan(
+        [t for t in catalog.members(cat) if t.id not in ids],
+        "alternative",
+        where=_not_matching(allowed),
+    )
 
 
 def _boundary(c: _Collector, es: EvidenceSet) -> None:
@@ -637,9 +911,8 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
     if len(dirs) < len(raw_dirs):
         es.undecidable = f"some of allowed_in {raw_dirs} do not name a repository directory"
         return
-    known = c.snap.directories()
     for d in dirs:
-        if not any(k == d or k.endswith("/" + d) for k in known):
+        if not dir_exists(d, c.snap):
             es.notes.append(f"allowed path {d}/ does not exist at this commit")
 
     def side(o: _Occurrence) -> EvidenceRelation:
@@ -650,6 +923,8 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
     res: list[Resolution] = []
     local_dirs: list[str] = []
     for t in targets:
+        # A repo directory only when spelled as one ("payments/") or when it exists;
+        # otherwise a technology / package name such as "@aws-sdk/client-s3".
         d = resolve_dir(t, c.snap) if "/" in t else None
         if d is not None:
             local_dirs.append(d)
@@ -666,6 +941,8 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
                 continue
             if in_dir(e.source, d):
                 continue  # a module importing its own package
+            if c.actor is not None and not c.actor(e.source):
+                continue
             o = _Occurrence("import", "local", (e.target,), e.source, edge=e)
             c.add_occurrence(o, side(o), Technology(id=f"{d}/", category=None))
 
@@ -689,10 +966,18 @@ def collect_evidence(
     es = EvidenceSet(claim_id=claim.id, commit=snap.commit)
     c = _Collector(claim, snap, max_per_relation)
     handler = _KINDS.get(claim.kind)
+    actors = _str_list(claim.rule.get("actor"))
     if handler is None:
         es.undecidable = "free-form claim: no deterministic rule"
     else:
-        handler(c, es)
+        if actors:
+            c.actor, why = resolve_actor(actors, snap)
+            if why:
+                es.undecidable = why
+            elif c.actor is not None:
+                es.notes.append(f"restricted to the code of {', '.join(actors)}")
+        if not es.undecidable:
+            handler(c, es)
     n_manifests = sum(1 for _ in snap.manifests)
     es.searched = (
         f"{n_manifests} manifest(s), {len(snap.imports)} import edge(s) in "
@@ -705,4 +990,9 @@ def collect_evidence(
         c.keywords(_rule_terms(claim.rule), limit)
     es.candidates = c.build()
     es.notes.extend(c.notes)
+    if snap.skipped and claim.kind != "free":
+        shown = "; ".join(f"{p} ({why})" for p, why in snap.skipped[:5])
+        more = f" (+{len(snap.skipped) - 5} more)" if len(snap.skipped) > 5 else ""
+        es.skipped = [p for p, _ in snap.skipped]
+        es.notes.append(f"incomplete evidence: {len(snap.skipped)} file(s) skipped: {shown}{more}")
     return es

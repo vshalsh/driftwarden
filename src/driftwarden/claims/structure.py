@@ -4,8 +4,11 @@ Dispatcher (``structure_decision`` / ``structure_scan``):
 
 * ``offline``: rule library only (phrase patterns + ADR front-matter hints).
 * ``llm``: the rule library *and* the model (``provider.complete_json`` with a
-  JSON Schema). Rule claims come first; LLM claims that restate a rule claim
-  (same kind and same key terms) are de-duplicated away.
+  JSON Schema). Rule claims come first; an LLM claim is merged away only when it
+  restates another claim of the SAME sentence (overlapping lines, same kind and key
+  terms, no conflicting qualifier) or equals a same-origin claim exactly (see
+  ``_duplicate``). A claim from other lines is never merged, so a broader statement
+  is never swallowed by a narrower one.
 
 G1 gate. Every claim's ``source`` is checked with ``verify_source_quote()`` at
 the ADR's commit, and must cite lines inside the decision section (front-matter
@@ -22,15 +25,16 @@ decisions; claims are produced for every decision and carry ``decision_id``.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from driftwarden import git
 from driftwarden.claims.rules import extract_rule_claims
 from driftwarden.grounding.ledger import Ledger
-from driftwarden.grounding.verify import verify_source_quote
+from driftwarden.grounding.verify import normalise, verify_source_quote
 from driftwarden.llm.base import LLMError, Provider
 from driftwarden.models import (
     WORKTREE,
@@ -57,17 +61,19 @@ CLAIMS_SCHEMA: dict[str, Any] = {
             "maxItems": 50,
             "items": {
                 "type": "object",
+                # Only the reply's SHAPE is checked here (a bad shape is retried as a
+                # whole). Each claim's VALUES (kind, subject length, rule shape, line
+                # numbers) are checked one by one in ``_item_errors``: one bad claim comes
+                # back as one unverified item and never discards its valid siblings.
                 "required": ["kind", "subject", "rule", "quote", "line_start", "line_end"],
                 "additionalProperties": False,
                 "properties": {
-                    "kind": {"enum": CLAIM_KINDS},
-                    "subject": {"type": "string", "minLength": 1, "maxLength": 200},
-                    "rule": {"type": "object"},
-                    "quote": {"type": "string", "minLength": 1},
-                    # No "minimum": a bad line number must reach the G1 verifier and come
-                    # back as one unverified claim with a reason, not invalidate the reply.
-                    "line_start": {"type": "integer"},
-                    "line_end": {"type": "integer"},
+                    "kind": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "rule": {},
+                    "quote": {"type": "string"},
+                    "line_start": {"type": "number"},
+                    "line_end": {"type": "number"},
                 },
             },
         }
@@ -206,18 +212,78 @@ def dedup_key(claim: Claim) -> str:
 
 
 def _duplicate(new: Claim, old: Claim) -> bool:
-    """``new`` restates ``old``.
+    """``new`` restates ``old``. When unsure, both are kept.
 
-    Two rule-library claims are duplicates only when everything matches (``dedup_key``):
-    "must not use X in domain/" and "... in reports/" are two claims. A hint or model
-    claim names its subject freely and often omits qualifiers, so it restates ``old``
-    when the key terms match and every qualifier both state agrees."""
+    * Same origin: everything must match (``dedup_key``: kind, terms, every qualifier
+      and the subject). "must not use X in domain/" and "... in reports/" are two
+      claims; so are hint or model claims with different subjects.
+    * Different origins (a model or hint claim vs a rule claim): only a restatement of
+      the SAME sentence merges, i.e. the two cite overlapping lines, the key terms match
+      and no qualifier both state differs (the model often omits "action" or names the
+      subject differently). A claim from other lines is never merged, even when it looks
+      equal or broader ("Redis is banned everywhere" next to "... in domain/"): a missing
+      qualifier is never a wildcard across sentences."""
     if claim_key(new.kind, new.rule) != claim_key(old.kind, old.rule):
         return False
-    if new.origin == "rule" and old.origin == "rule":
+    if new.origin == old.origin:
         return dedup_key(new) == dedup_key(old)
+    a, b = new.source, old.source
+    if a.path != b.path or a.line_end < b.line_start or b.line_end < a.line_start:
+        return False
+    # same SENTENCE, not just the same line: the two quotes must be the same text
+    # (normalised as G1 compares quotes). "X in domain/. X is banned across all code."
+    # on one line is two sentences and two claims. Unsure -> keep both.
+    if _quote_id(a.quote) != _quote_id(b.quote):
+        return False
     qn, qo = qualifiers(new.kind, new.rule), qualifiers(old.kind, old.rule)
     return all(qo[k] == v for k, v in qn.items() if k in qo)
+
+
+def _quote_id(quote: str) -> str:
+    """Quote identity for de-duplication: G1-normalised, without code backticks, list
+    markers and outer punctuation/space."""
+    q = normalise(quote).replace("`", "")
+    q = re.sub(r"^\s*(?:[*+>-]|\d+[.)])\s+", "", q)
+    return " ".join(q.split()).strip(" .;:!").lower()
+
+
+def _line_ok(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _item_errors(p: dict[str, Any]) -> list[str]:
+    """Why one proposed claim's values are unusable ([] when they are usable)."""
+    errors = []
+    if p.get("kind") not in CLAIM_KINDS:
+        errors.append(f"kind {p.get('kind')!r} is not one of {', '.join(CLAIM_KINDS)}")
+    subject = p.get("subject")
+    if not isinstance(subject, str) or not subject.strip():
+        errors.append("subject must be a non-empty string")
+    elif len(subject) > 200:
+        errors.append(f"subject is {len(subject)} characters (at most 200)")
+    if not isinstance(p.get("quote"), str) or not p["quote"].strip():
+        errors.append("quote must be a non-empty string")
+    if not isinstance(p.get("rule"), dict):
+        errors.append("rule must be an object")
+    for key in ("line_start", "line_end"):
+        if not _line_ok(p.get(key)):
+            errors.append(f"{key} must be an integer, got {p.get(key)!r}")
+    return errors
+
+
+def _item_provenance(p: dict[str, Any], decision: Decision) -> Provenance | None:
+    """The citation of an invalid proposal, when it is well-formed enough to show."""
+    if not (_line_ok(p.get("line_start")) and _line_ok(p.get("line_end"))):
+        return None
+    if not isinstance(p.get("quote"), str):
+        return None
+    return Provenance(
+        path=decision.source.path,
+        line_start=p["line_start"],
+        line_end=p["line_end"],
+        commit=decision.source.commit,
+        quote=p["quote"],
+    )
 
 
 def _in_decision(prov: Provenance, decision: Decision) -> bool:
@@ -329,6 +395,17 @@ def structure_decision(
         proposals, notes = propose_llm_claims(decision, provider)
         out.notes.extend(notes)
         for p in proposals:
+            item = _item_errors(p)
+            if item:
+                reject(
+                    "llm",
+                    str(p.get("kind", "")),
+                    str(p.get("subject", "")),
+                    p.get("rule"),
+                    _item_provenance(p, decision),
+                    "invalid claim: " + "; ".join(item),
+                )
+                continue
             prov = Provenance(
                 path=decision.source.path,
                 line_start=int(p["line_start"]),
@@ -344,15 +421,30 @@ def structure_decision(
                 reason = "malformed rule: " + "; ".join(errors)
                 reject("llm", p["kind"], p["subject"], p["rule"], prov, reason, res)
             else:
-                claim = Claim(
-                    id=f"{decision.id}.llm",
-                    kind=p["kind"],
-                    subject=p["subject"],
-                    rule=p["rule"],
-                    source=prov,
-                    decision_id=decision.id,
-                    origin="llm",
-                )
+                try:
+                    claim = Claim(
+                        id=f"{decision.id}.llm",
+                        kind=p["kind"],
+                        subject=p["subject"],
+                        rule=p["rule"],
+                        source=prov,
+                        decision_id=decision.id,
+                        origin="llm",
+                    )
+                except ValidationError as exc:  # e.g. a whitespace-only subject
+                    bad = "; ".join(
+                        f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()
+                    )
+                    reject(
+                        "llm",
+                        p["kind"],
+                        p["subject"],
+                        p["rule"],
+                        prov,
+                        f"invalid claim: {bad}",
+                        res,
+                    )
+                    continue
                 verified.append((claim, res))
 
     # Merge + de-duplicate (verified only; unverified are always reported), then number.

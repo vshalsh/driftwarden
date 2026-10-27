@@ -567,10 +567,10 @@ def test_llm_may_cite_a_sub_range_with_a_partial_quote(judge_repo):
 
     def model(req):
         c = candidates_in(req.prompt)[0]
-        return {"status": "HOLDING", "rationale": "", "citations": [cite(c, "healthz")]}
+        return {"status": "HOLDING", "rationale": "", "citations": [cite(c, "def healthz")]}
 
     v = Judge(repo, mode="llm", provider=scripted(model)).judge(claim)
-    assert v.status == "HOLDING" and v.evidence[0].ref.quote == "healthz"
+    assert v.status == "HOLDING" and v.evidence[0].ref.quote == "def healthz"
 
 
 @pytest.mark.parametrize(
@@ -935,3 +935,395 @@ def test_g2_tamper_every_cited_evidence_is_caught(tmp_path, capsys):
     assert hist_repo is not None
     assert cited_total >= 20 and sample == 100 * cited_total
     assert caught == sample
+
+
+# ------------------------------------------------------------------ Sonnet defects D-L007-2..6
+
+
+def _repo_with(tmp_path: Path, files: dict[str, str | bytes]) -> Path:
+    repo = tmp_path / "r"
+    repo.mkdir(parents=True)
+    _init(repo)
+    for rel, content in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            p.write_bytes(content)
+        else:
+            p.write_text(content, encoding="utf-8")
+    _commit(repo, "files")
+    return repo
+
+
+MONGO_FORBID = {"forbid": ["MongoDB"]}
+
+
+def test_d2_worktree_reads_requirements_txt_like_the_commit(tmp_path):
+    repo = _repo_with(tmp_path, {"requirements.txt": "pymongo==4\n", "src/a.py": "x = 1\n"})
+    c = _claim("forbid", MONGO_FORBID)
+    head = Judge(repo, mode="offline").judge(c)
+    wt = Judge(repo, mode="offline", commit=WORKTREE).judge(c)
+    assert head.status == wt.status == "VIOLATED"
+    assert [e.ref.path for e in wt.evidence] == ["requirements.txt"]
+    assert all(r.status == "VERIFIED" for r in wt.checks)
+
+
+@pytest.mark.parametrize(
+    "path,nonprod",
+    [
+        ("requirements-dev.txt", True),
+        ("dev-requirements.txt", True),
+        ("requirements/test.txt", True),
+        ("requirements_docs.txt", True),
+        ("docs/requirements.txt", True),
+        ("ci/requirements.txt", True),
+        ("docker-compose.ci.yml", True),
+        ("Dockerfile.test", True),
+        ("requirements.txt", False),
+        ("dev/requirements.txt", False),  # a service directory called dev ships
+        ("services/devices/requirements.txt", False),
+        ("package.json", False),
+    ],
+)
+def test_d3_nonproduction_manifest_names(path, nonprod):
+    from driftwarden.judge.evidence import is_nonproduction_manifest
+
+    assert is_nonproduction_manifest(path) is nonprod
+
+
+def test_d3_dev_requirements_drift_not_violate(tmp_path):
+    repo = _repo_with(tmp_path, {"requirements-dev.txt": "pymongo\n"})
+    v = Judge(repo, mode="offline").judge(_claim("forbid", MONGO_FORBID))
+    assert v.status == "DRIFTING" and not v.evidence[0].production
+
+
+def test_d4_large_file_is_never_a_silent_holding(tmp_path):
+    big = "import pymongo\n" + "x = 1\n" * 400_000  # > 2 MiB
+    repo = _repo_with(tmp_path, {"src/big.py": big, "src/a.py": "x = 1\n"})
+    for commit in ("HEAD", WORKTREE):
+        v = Judge(repo, mode="offline", commit=commit).judge(_claim("forbid", MONGO_FORBID))
+        assert v.status == "HOLDING"
+        assert "incomplete" in v.rationale
+        assert any("src/big.py" in n and "skipped" in n for n in v.notes)
+
+
+def test_d5_rejected_citations_are_in_the_ledger(judge_repo, tmp_path):
+    repo, claim = _free_claim_repo(judge_repo)
+
+    def model(req):
+        c = candidates_in(req.prompt)[0]
+        return {
+            "status": "VIOLATED",
+            "rationale": "",
+            "citations": [
+                {"evidence_id": "e77", "line_start": 1, "line_end": 1, "quote": "whatever text"},
+                {**cite(c), "line_start": 50, "line_end": 50},
+                cite(c, "e"),
+            ],
+        }
+
+    ledger = Ledger(tmp_path / "l", run_id="x")
+    v = Judge(repo, mode="llm", provider=scripted(model), ledger=ledger).judge(claim)
+    assert (v.status, v.grounding) == ("UNKNOWN", "MISMATCH")
+    assert ledger.summary()["by_check"]["G2"]["MISMATCH"] == 3
+    reasons = " | ".join(v.reasons)
+    assert "e77" in reasons and "outside evidence" in reasons and "too short" in reasons
+
+
+def test_tiny_quotes_are_rejected_but_short_whole_lines_are_not(tmp_path):
+    repo = _repo_with(tmp_path, {"src/a.py": "import x\nsecret = 'e'\n"})
+    claim = _claim("free", {"text": "no secret in code"})
+
+    def model_for(quote, line):
+        def model(req):
+            c = next(x for x in candidates_in(req.prompt) if x["line_start"] == line)
+            return {"status": "VIOLATED", "rationale": "", "citations": [cite(c, quote)]}
+
+        return model
+
+    v = Judge(repo, mode="llm", provider=scripted(model_for("e", 2))).judge(claim)
+    assert v.status == "UNKNOWN" and any("too short" in r for r in v.reasons)
+    v = Judge(repo, mode="llm", provider=scripted(model_for("secret = 'e'", 2))).judge(claim)
+    assert v.status == "VIOLATED" and v.grounding == "VERIFIED"
+
+
+def test_d6_utf16_requirements_are_citable(tmp_path):
+    repo = _repo_with(tmp_path, {"requirements.txt": "pymongo==4\r\n".encode("utf-16")})
+    for commit in ("HEAD", WORKTREE):
+        v = Judge(repo, mode="offline", commit=commit).judge(_claim("forbid", MONGO_FORBID))
+        assert v.status == "VIOLATED", (commit, v.rationale, v.notes)
+        assert v.evidence[0].ref.quote == "pymongo==4"
+        assert all(r.status == "VERIFIED" for r in v.checks)
+
+
+def test_terraform_providers_match_the_catalog():
+    aws = catalog.technology("aws-sdk")
+    assert catalog.name_matches(aws, "terraform", ["registry.terraform.io/hashicorp/aws"])
+    assert catalog.name_matches(aws, "terraform", ["hashicorp/aws"])
+    assert not catalog.name_matches(aws, "terraform", ["terraform-aws-modules/vpc/aws"])
+    atlas = catalog.technology("mongodb")
+    assert catalog.name_matches(atlas, "terraform", ["mongodb/mongodbatlas"])
+
+
+def test_terraform_provider_is_infra_evidence(tmp_path):
+    tf = (
+        "terraform {\n  required_providers {\n    aws = {\n"
+        '      source  = "hashicorp/aws"\n      version = "~> 5.0"\n    }\n  }\n}\n'
+    )
+    repo = _repo_with(tmp_path, {"infra/main.tf": tf})
+    v = Judge(repo, mode="offline").judge(_claim("forbid", {"forbid": ["AWS"]}))
+    assert v.status == "VIOLATED" and {e.kind for e in v.evidence} == {"infra"}
+    assert all(r.status == "VERIFIED" for r in v.checks)
+
+
+# ------------------------------------------------------------------ Codex PR #15 round
+
+
+def test_codex1_slashed_package_names_are_not_directories(tmp_path):
+    pkg = '{"name": "x", "dependencies": {"@aws-sdk/client-s3": "^3.0.0"}}\n'
+    repo = _repo_with(
+        tmp_path,
+        {
+            "package.json": pkg,
+            "src/adapters/s3.js": 'import { S3 } from "@aws-sdk/client-s3";\n',
+            "src/report.js": 'import { S3 } from "@aws-sdk/client-s3";\n',
+        },
+    )
+    snap = load_snapshot(repo)
+    assert resolve_dir("@aws-sdk/client-s3", snap) is None
+    assert resolve_dir("github.com/x/y", snap) is None
+    assert resolve_dir("src/adapters", snap) == "src/adapters"  # exists
+    assert resolve_dir("internal/cloud", snap) is None  # missing, not spelled as a dir
+    assert resolve_dir("internal/cloud/", snap) == "internal/cloud"  # explicit
+    c = _claim("boundary", {"target": ["@aws-sdk/client-s3"], "allowed_in": ["adapters/"]})
+    v = Judge(repo, mode="offline").judge(c)
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["src/report.js"]
+
+
+def test_codex2_forbid_qualifiers_are_not_decided_by_presence(tmp_path):
+    repo = _repo_with(
+        tmp_path, {"requirements.txt": "requests==2\n", "src/a.py": "import requests\n"}
+    )
+    judge = Judge(repo, mode="offline")
+    call = judge.judge(_claim("forbid", {"forbid": ["requests"], "action": "call"}))
+    assert call.status == "UNKNOWN" and "qualifier not decidable" in call.rationale
+    assert call.evidence and call.grounding == "VERIFIED"
+    q = "Services must not use requests directly."
+    direct = judge.judge(_claim("forbid", {"forbid": ["requests"], "action": "use"}, quote=q))
+    assert direct.status == "UNKNOWN" and "directly" in direct.rationale
+    q = "Services must not import requests directly."
+    imp = judge.judge(_claim("forbid", {"forbid": ["requests"], "action": "import"}, quote=q))
+    assert imp.status == "VIOLATED" and {e.kind for e in imp.evidence} == {"import"}
+    use = judge.judge(_claim("forbid", {"forbid": ["requests"], "action": "use"}))
+    assert use.status == "VIOLATED"
+    absent = judge.judge(_claim("forbid", {"forbid": ["httpx"], "action": "call"}))
+    assert absent.status == "HOLDING"
+
+
+def test_codex2_import_action_with_declaration_only_drifts(tmp_path):
+    repo = _repo_with(tmp_path, {"requirements.txt": "requests==2\n"})
+    v = Judge(repo, mode="offline").judge(
+        _claim("forbid", {"forbid": ["requests"], "action": "import"})
+    )
+    assert v.status == "DRIFTING"
+
+
+def test_codex3_require_needs_every_term(tmp_path):
+    repo = _repo_with(tmp_path, {"requirements.txt": "structlog==24\n"})
+    judge = Judge(repo, mode="offline")
+    v = judge.judge(_claim("require", {"require": ["structlog", "httpx"]}))
+    assert v.status == "UNKNOWN" and "'httpx'" in v.rationale
+    assert [e.technology for e in v.evidence] == ["structlog"]
+    assert judge.judge(_claim("require", {"require": ["structlog"]})).status == "HOLDING"
+    repo2 = _repo_with(tmp_path / "b", {"requirements.txt": "structlog==24\nhttpx==0.27\n"})
+    v2 = Judge(repo2, mode="offline").judge(_claim("require", {"require": ["structlog", "httpx"]}))
+    assert v2.status == "HOLDING" and {e.technology for e in v2.evidence} == {"structlog", "httpx"}
+
+
+def test_codex4_go_package_directory_is_inside_itself(tmp_path):
+    assert in_dir("internal/db", "internal/db") and in_dir("svc/internal/db", "internal/db")
+    assert not in_dir("internal/dbx", "internal/db")
+    repo = _repo_with(
+        tmp_path,
+        {
+            "go.mod": "module example.com/m\n\ngo 1.22\n",
+            "internal/db/db.go": "package db\n",
+            "internal/store/s.go": 'package store\n\nimport "example.com/m/internal/db"\n\n'
+            "var _ = db.X\n",
+            "cmd/api/main.go": 'package main\n\nimport "example.com/m/internal/db"\n\n'
+            "func main() { _ = db.X }\n",
+        },
+    )
+    c = _claim("boundary", {"target": ["internal/db/"], "allowed_in": ["internal/store/"]})
+    v = Judge(repo, mode="offline").judge(c)
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["cmd/api/main.go"]
+    # allowed_in naming the package directory itself also counts as inside
+    c2 = _claim("boundary", {"target": ["github.com/x/y"], "allowed_in": ["internal/db/"]})
+    assert Judge(repo, mode="offline").judge(c2).status == "HOLDING"
+
+
+@pytest.mark.parametrize("model_status", ["UNKNOWN", "HOLDING", "VIOLATED"])
+def test_codex5_failed_rule_gate_is_never_replaced_by_the_model(tmp_path, model_status):
+    repo = _repo_with(tmp_path, {"src/a.py": "import pymongo\n"})
+    snap = load_snapshot(repo, WORKTREE)
+
+    def model(req):
+        cs = candidates_in(req.prompt)
+        cits = [cite(cs[0])] if cs and model_status != "UNKNOWN" else []
+        return {"status": model_status, "rationale": "", "citations": cits}
+
+    judge = Judge(repo, mode="llm", provider=scripted(model), snapshot=snap)
+    (repo / "src/a.py").write_text("x = 1\n", encoding="utf-8")  # changed after the snapshot
+    v = judge.judge(_claim("forbid", MONGO_FORBID))
+    assert (v.status, v.grounding) == ("UNKNOWN", "MISMATCH")
+    assert v.origin == "rule" and v.proposed_status == "VIOLATED"
+    assert [e.ref.path for e in v.evidence] == ["src/a.py"] and v.reasons
+    assert any(c.status == "MISMATCH" for c in v.checks)
+    assert any("ignored because the rule evidence could not be verified" in n for n in v.notes)
+
+
+def test_codex6_shebang_scripts_are_evidence(tmp_path):
+    script = "#!/usr/bin/env python3\nimport pymongo\n"
+    repo = _repo_with(tmp_path, {"bin/worker": script, "LICENSE": "MIT\n"})
+    for commit in ("HEAD", WORKTREE):
+        snap = load_snapshot(repo, commit)
+        assert "bin/worker" in snap.texts and "LICENSE" not in snap.texts
+        v = Judge(repo, mode="offline", snapshot=snap).judge(_claim("forbid", MONGO_FORBID))
+        assert v.status == "VIOLATED", commit
+        assert [(e.ref.path, e.ref.line_start) for e in v.evidence] == [("bin/worker", 2)]
+        assert all(c.status == "VERIFIED" for c in v.checks)
+
+
+def test_codex7_cap_never_hides_the_decisive_import(tmp_path):
+    files = {f"svc{i:02d}/requirements.txt": "pymongo==4\n" for i in range(60)}
+    files["src/zz.py"] = "import pymongo\n"
+    repo = _repo_with(tmp_path, files)
+    c = _claim("forbid", {"forbid": ["MongoDB"], "action": "import"})
+    v = Judge(repo, mode="offline").judge(c)
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["src/zz.py"]
+    es = collect_evidence(c, load_snapshot(repo))
+    assert len(es.candidates) == 51 and any("not listed (cap 50)" in n for n in es.notes)
+
+
+def test_d8_unreadable_large_manifest_is_noted(tmp_path):
+    big = "pymongo==4\n" + "# padding\n" * 210_000  # > 2,000,000 bytes manifest limit
+    repo = _repo_with(tmp_path, {"requirements.txt": big, "src/a.py": "x = 1\n"})
+    for commit in ("HEAD", WORKTREE):
+        v = Judge(repo, mode="offline", commit=commit).judge(_claim("forbid", MONGO_FORBID))
+        assert v.status == "HOLDING" and "incomplete" in v.rationale
+        assert any("requirements.txt" in n and "manifest not read" in n for n in v.notes)
+
+
+# ------------------------------------------------------------------ scopes read structurally
+
+
+@pytest.mark.parametrize(
+    "scope,weak",
+    [
+        ("service:contest", False),
+        ("Deployment/attestation", False),
+        ("service:latest", False),
+        ("CronJob/protest", False),
+        ("service:staging", False),
+        ("service:web", False),
+        ("Deployment/api", False),
+        ("catalog:testcontainers-bom", False),
+        ("runtime", False),
+        ("base", False),
+        ("service:test-db", True),
+        ("Deployment/e2e-runner", True),
+        ("service:ci", True),
+        ("test", True),
+        ("dev", True),
+        ("testImplementation", True),
+        ("androidTestImplementation", True),
+        ("optional:docs", True),
+        ("optional:postgres", True),
+        ("group:lint", True),
+        ("indirect", True),
+        (None, False),
+    ],
+)
+def test_scope_is_matched_by_whole_words(scope, weak):
+    assert is_weak_scope(scope) is weak
+
+
+def test_compose_service_named_contest_is_production(tmp_path):
+    compose = "services:\n  contest:\n    image: mongo:7\n  test-db:\n    image: mongo:7\n"
+    repo = _repo_with(tmp_path, {"docker-compose.yml": compose})
+    v = Judge(repo, mode="offline").judge(_claim("forbid", MONGO_FORBID))
+    assert v.status == "VIOLATED"
+    assert [(e.dependency.scope, e.production) for e in v.evidence] == [("service:contest", True)]
+
+
+# ------------------------------------------------------------------ Codex review of 616c085
+
+
+def test_codex_cap_keeps_every_required_technology(tmp_path):
+    files = {f"src/f{i:02d}.py": "import httpx\n" for i in range(60)}
+    files["src/zz.py"] = "import structlog\n"
+    repo = _repo_with(tmp_path, files)
+    c = _claim("require", {"require": ["httpx", "structlog"]})
+    es = collect_evidence(c, load_snapshot(repo))
+    assert {e.technology for e in es.with_relation("required")} == {"httpx", "structlog"}
+    assert any("not listed (cap 50)" in n for n in es.notes)
+    v = Judge(repo, mode="offline").judge(c)
+    assert v.status == "HOLDING", v.rationale
+    assert "structlog" in {e.technology for e in v.evidence}
+
+
+def _actor_repo(tmp_path, files):
+    base = {"src/adapters/s3.py": "import boto3\n", "src/jobs/nightly.py": "import boto3\n"}
+    return _repo_with(tmp_path, {**base, **files})
+
+
+def test_codex_actor_restricts_boundary_evidence(tmp_path):
+    rule = {"target": ["boto3"], "allowed_in": ["adapters/"], "actor": ["Handlers"]}
+    # No handlers in the repo: the actor names nothing -> UNKNOWN, never VIOLATED.
+    repo = _actor_repo(tmp_path / "a", {})
+    v = Judge(repo, mode="offline").judge(_claim("boundary", rule))
+    assert v.status == "UNKNOWN" and "actor scope not resolvable" in v.rationale
+    # Handlers exist and are clean; the unrelated job is not the handlers' code.
+    repo = _actor_repo(tmp_path / "b", {"src/handlers/api.py": "import json\n"})
+    v = Judge(repo, mode="offline").judge(_claim("boundary", rule))
+    assert v.status == "HOLDING", v.rationale
+    # A handler importing boto3 outside adapters/ is the violation.
+    repo = _actor_repo(tmp_path / "c", {"src/handlers/api.py": "import boto3\n"})
+    v = Judge(repo, mode="offline").judge(_claim("boundary", rule))
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["src/handlers/api.py"]
+    # A single-module actor (handler.py) resolves too.
+    repo = _actor_repo(tmp_path / "d", {"src/handler.py": "import boto3\n"})
+    v = Judge(repo, mode="offline").judge(_claim("boundary", rule))
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["src/handler.py"]
+    # A whole-codebase actor keeps the whole repository in scope.
+    whole = {**rule, "actor": ["code"]}
+    repo = _actor_repo(tmp_path / "e", {})
+    v = Judge(repo, mode="offline").judge(_claim("boundary", whole))
+    assert v.status == "VIOLATED" and [e.ref.path for e in v.evidence] == ["src/jobs/nightly.py"]
+
+
+def test_codex_actor_applies_to_forbid_too(tmp_path):
+    repo = _actor_repo(tmp_path, {"src/handlers/api.py": "import json\n"})
+    rule = {"forbid": ["boto3"], "actor": ["handlers"]}
+    v = Judge(repo, mode="offline").judge(_claim("forbid", rule))
+    assert v.status == "HOLDING"
+    v = Judge(repo, mode="offline").judge(_claim("forbid", {**rule, "actor": ["workers"]}))
+    assert v.status == "UNKNOWN" and "actor scope not resolvable" in v.rationale
+
+
+def test_codex_allowed_package_is_never_its_own_alternative(tmp_path):
+    pkg = '{"name": "x", "dependencies": {"ioredis": "^5.0.0"}}\n'
+    repo = _repo_with(tmp_path, {"package.json": pkg, "src/c.js": 'import Redis from "ioredis";\n'})
+    judge = Judge(repo, mode="offline")
+    only = judge.judge(_claim("only", {"only": ["ioredis"], "category": "cache"}))
+    assert only.status == "HOLDING", only.rationale
+    assert {e.relation for e in only.evidence} == {"allowed"}
+    req = judge.judge(_claim("require", {"require": ["ioredis"], "for": "cache"}))
+    assert req.status == "HOLDING", req.rationale
+    # A genuinely different cache is still an alternative.
+    pkg2 = '{"name": "x", "dependencies": {"ioredis": "^5.0.0", "memjs": "^1.0.0"}}\n'
+    repo2 = _repo_with(tmp_path / "b", {"package.json": pkg2})
+    v = Judge(repo2, mode="offline").judge(
+        _claim("only", {"only": ["ioredis"], "category": "cache"})
+    )
+    assert v.status == "VIOLATED" and {e.technology for e in v.evidence} == {"memcached"}
