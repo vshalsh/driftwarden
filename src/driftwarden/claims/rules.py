@@ -97,6 +97,12 @@ Known limits (recall gaps, documented rather than guessed at):
 * Hint keys that differ only in case inside one block (``forbid`` / ``Forbid``) are
   reported as unverified; root ``driftwarden:`` blocks are each cited from their own
   lines (an exact duplicate is reported and the kept one cited).
+* A subject with a restrictive determiner ("Some services", "No other service",
+  "Only some modules", "Most ...") yields no claim; partial quantifiers are not
+  modelled.
+* HTML comments are blanked before matching (multi-line, inline, unclosed). The
+  masking does not know about code fences: an unclosed ``<!--`` inside a fenced
+  example hides the rest of the decision text (fail closed).
 * An actor of an active-voice boundary ("Services must not import boto3 outside
   adapters/") is kept as ``actor``; the judge decides how to scope it.
 """
@@ -245,14 +251,30 @@ _OF_HEAD = re.compile(
 )
 
 
+# A determiner that restricts a subject to part of a group ("Some services", "No other
+# service", "Only some modules"): dropping it would broaden the claim, so the subject
+# is refused (no claim) instead.
+_RESTRICTIVE = frozenset(
+    "some most many certain few several both other others another only select specific "
+    "particular various one two three a-few".split()
+)
+
+
+def _restricted(words: list[str]) -> bool:
+    head = [w.lower() for w in words[:2]]
+    return bool(head) and (head[0] in _RESTRICTIVE or head[:2] == ["a", "few"])
+
+
 def _strip_lead(raw: str | None) -> str | None:
     """Drop filler words in front of a subject ("We decided that PostgreSQL" -> "PostgreSQL",
-    "Use of MongoDB" -> "MongoDB")."""
+    "Use of MongoDB" -> "MongoDB"). None for a restricted subject ("Some services")."""
     if raw is None:
         return None
     words = raw.split()
     while len(words) > 1 and words[0].lower() in _LEAD:
         words.pop(0)
+    if _restricted(words):
+        return None
     return clean_term(_OF_HEAD.sub("", " ".join(words)))
 
 
@@ -419,13 +441,17 @@ def _b_not_outside(g: dict) -> Built:
     """ "(A) must not import Y outside Z": Y allowed only in Z; a named actor A is kept
     as ``actor`` (the restriction is on A's code)."""
     built = _b_no_outside(g)
-    raw_who = g.get("who")
-    if built is None or not raw_who or raw_who.strip().lower() in ("we", "they"):
-        return built
+    if built is None:
+        return None
+    subject, rule = built
+    if g.get("manner"):
+        rule = {**rule, "manner": g["manner"].lower()}
+    raw_who = g.get("who") or g.get("anyone")  # "Handlers must not" / "No handler may"
+    if not raw_who or raw_who.strip().lower() in ("we", "they"):
+        return subject, rule
     who = _strip_lead(raw_who)
     if who is None:
         return None
-    subject, rule = built
     return subject, {**rule, "actor": [who]}
 
 
@@ -438,7 +464,7 @@ def _b_only_from(g: dict) -> Built:
 
 def _b_only_actor(g: dict) -> Built:
     y, z = clean_term(g["y"]), _paths(g["z"])
-    if not y or not z:
+    if not y or not z or _restricted((g["z"] or "").split()):
         return None
     return y.lower(), {"target": [y], "allowed_in": z, "action": _base_verb(g["v"])}
 
@@ -459,7 +485,7 @@ def _forbid(who: str | None, items: list[str], **extra: Any) -> Built:
 
 
 def _b_no_actor_may(g: dict) -> Built:
-    who = clean_term(g["who"])
+    who = _strip_lead(g["who"])
     if not who:
         return None
     return _forbid(who, split_list(g["y"]), action=_base_verb(g["v"]))
@@ -474,7 +500,10 @@ def _b_must_not(g: dict) -> Built:
         return None  # "It must not use ..." names no subject we can test
     scope = _paths(g.get("scope"))
     v = g.get("v")
-    return _forbid(who, split_list(g["y"]), action=_base_verb(v) if v else None, scope=scope)
+    manner = (g.get("manner") or "").lower()
+    return _forbid(
+        who, split_list(g["y"]), action=_base_verb(v) if v else None, scope=scope, manner=manner
+    )
 
 
 def _b_not_allowed(g: dict) -> Built:
@@ -525,7 +554,7 @@ def _b_must_use(g: dict) -> Built:
 
 
 def _b_all_use(g: dict) -> Built:
-    who = clean_term(g["who"])
+    who = _strip_lead(g["who"])
     if not who:
         return None
     return _require(who.lower(), g["x"], None)
@@ -564,7 +593,8 @@ RULES: tuple[RulePattern, ...] = (
             # active voice: "(A) must not import Y outside Z", "Never use Y outside Z"
             rf"(?:{_subj('who')}\s+)?"
             rf"(?:(?:{_NEG_MODAL})|\bnever|\bno\s+{_term('anyone')}\s+(?:may|shall|can|must|"
-            rf"should|is allowed to|are allowed to))\s+(?:directly\s+)?(?:{_VERBS})\s+"
+            rf"should|is allowed to|are allowed to))\s+(?:(?P<manner>{_MANNER_WORDS})\s+)?"
+            rf"(?:{_VERBS})\s+"
             rf"{_term('y')}\s+outside\s+(?:of\s+)?{_list('z')}{_LSTOP}",
         ),
         _b_not_outside,
@@ -738,7 +768,8 @@ RULES: tuple[RulePattern, ...] = (
         '"(A) must not use/import Y", "Do not use Y", "We will not use Y", "A must use '
         'neither X nor Y", "(We will) avoid Y".',
         _rx(
-            rf"(?:{_subj('who')}\s+)?(?:{_NEG_MODAL})\s+(?:directly\s+|ever\s+)?"
+            rf"(?:{_subj('who')}\s+)?(?:{_NEG_MODAL})\s+"
+            rf"(?:(?P<manner>{_MANNER_WORDS})\s+|ever\s+)?"
             rf"(?P<v>{_VERBS})\s+{_list('y')}"
             rf"(?:\s+(?:in|from|within|inside)\s+{_term('scope')})?{_LSTOP}",
             rf"{_subj('who')}\s+(?:must|shall|should|may|can|will|are to|is to)\s+"
@@ -932,14 +963,24 @@ _NOT_CHOSEN_HEADING = re.compile(
 _ABBREV = {"e.g", "i.e", "etc", "vs", "cf", "approx", "incl", "esp", "resp", "fig", "no"}
 
 
+_HTML_COMMENT = re.compile(r"<!--.*?(?:-->|\Z)", re.S)
+
+
+def mask_comments(text: str) -> str:
+    """``text`` with every HTML comment (inline, multi-line or unclosed) blanked out:
+    each character becomes a space, newlines are kept, so positions do not move."""
+    return _HTML_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
+
+
 def sentence_spans(text: str) -> list[tuple[int, int]]:
     """Character spans ``[start, end)`` of the prose sentences of ``text``.
 
-    Blank lines, headings, table rows and list items start a new block; fenced
-    code and indented code (4+ columns beyond the enclosing indentation after a blank
-    line: column 4 outside a list, the list item's content column + 4 inside one) are
-    skipped; a list marker is not part of the sentence.
+    Blank lines, headings, table rows and list items start a new block; HTML comments,
+    fenced code and indented code (4+ columns beyond the enclosing indentation after a
+    blank line: column 4 outside a list, the list item's content column + 4 inside one)
+    are skipped; a list marker is not part of the sentence.
     """
+    text = mask_comments(text)
     blocks: list[tuple[int, int]] = []
     cur: list[int] | None = None
     fence: str | None = None  # the opening fence run ("```", "~~~~") while inside one
@@ -1247,6 +1288,20 @@ def _covered(clean: str, matches: list[Match]) -> list[Match]:
     for i in order:
         mine.setdefault(region_of[first[i]], []).append(i)
 
+    # nearest claim-bearing region on each side, in two linear passes
+    prev_with: list[int | None] = []
+    last: int | None = None
+    for r in range(len(regions)):
+        prev_with.append(last)
+        if mine.get(r):
+            last = r
+    next_with: list[int | None] = [None] * len(regions)
+    last = None
+    for r in range(len(regions) - 1, -1, -1):
+        next_with[r] = last
+        if mine.get(r):
+            last = r
+
     drop: set[int] = set()  # regions whose matches are dropped
     manner: dict[int, str] = {}
     for r, (_, k0, k1) in enumerate(regions):
@@ -1258,9 +1313,7 @@ def _covered(clean: str, matches: list[Match]) -> list[Match]:
             text = clean[a:b]
             if _content(text) and not _CLAUSE_VERB.search(text):
                 # fail closed: the nearest claim-bearing region on each side
-                before = [q for q in range(r - 1, -1, -1) if mine.get(q)][:1]
-                after = [q for q in range(r + 1, len(regions)) if mine.get(q)][:1]
-                drop.update(before + after)
+                drop.update(q for q in (prev_with[r], next_with[r]) if q is not None)
             continue
         gaps, at = [], a
         for i in ms:
@@ -1288,7 +1341,7 @@ def _covered(clean: str, matches: list[Match]) -> list[Match]:
 def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> list[Match]:
     """Typed matches for one sentence, in priority order, without overlaps, each
     accounting for its whole clause (``_covered``)."""
-    clean = clean_sentence(sentence)
+    clean = clean_sentence(mask_comments(sentence))
     if not clean or clean.endswith("?") or _NOT_A_DECISION.search(clean):
         return []
     neg = _Clauses(clean)
@@ -1360,9 +1413,10 @@ def extract_rule_claims(decision: Decision, text: str | None = None) -> RuleResu
     body = decision.decision_text
     body_lines = body.split("\n")
     n = 0
+    masked = mask_comments(body)  # same positions; comments never reach the patterns
     for s, e in sentence_spans(body):
-        raw = body[s:e]
-        matches = match_sentence(raw)
+        raw = body[s:e]  # quoted as written (G1); matched without its comments
+        matches = match_sentence(masked[s:e])
         if not matches:
             continue
         first = body.count("\n", 0, s)

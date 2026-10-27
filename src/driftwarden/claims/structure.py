@@ -25,6 +25,7 @@ decisions; claims are produced for every decision and carry ``decision_id``.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -33,7 +34,7 @@ from pydantic import BaseModel, Field, ValidationError
 from driftwarden import git
 from driftwarden.claims.rules import extract_rule_claims
 from driftwarden.grounding.ledger import Ledger
-from driftwarden.grounding.verify import verify_source_quote
+from driftwarden.grounding.verify import normalise, verify_source_quote
 from driftwarden.llm.base import LLMError, Provider
 from driftwarden.models import (
     WORKTREE,
@@ -229,8 +230,21 @@ def _duplicate(new: Claim, old: Claim) -> bool:
     a, b = new.source, old.source
     if a.path != b.path or a.line_end < b.line_start or b.line_end < a.line_start:
         return False
+    # same SENTENCE, not just the same line: the two quotes must be the same text
+    # (normalised as G1 compares quotes). "X in domain/. X is banned across all code."
+    # on one line is two sentences and two claims. Unsure -> keep both.
+    if _quote_id(a.quote) != _quote_id(b.quote):
+        return False
     qn, qo = qualifiers(new.kind, new.rule), qualifiers(old.kind, old.rule)
     return all(qo[k] == v for k, v in qn.items() if k in qo)
+
+
+def _quote_id(quote: str) -> str:
+    """Quote identity for de-duplication: G1-normalised, without code backticks, list
+    markers and outer punctuation/space."""
+    q = normalise(quote).replace("`", "")
+    q = re.sub(r"^\s*(?:[*+>-]|\d+[.)])\s+", "", q)
+    return " ".join(q.split()).strip(" .;:!").lower()
 
 
 def _line_ok(v: Any) -> bool:

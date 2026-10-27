@@ -10,6 +10,7 @@ import json
 import random
 import re
 import socket
+import time
 
 import pytest
 from pydantic import ValidationError
@@ -25,7 +26,7 @@ from driftwarden.claims import (
     structure_decision,
     structure_scan,
 )
-from driftwarden.claims.rules import clean_term, sentence_spans, split_list
+from driftwarden.claims.rules import clean_sentence, clean_term, sentence_spans, split_list
 from driftwarden.discover.adr import parse_adr, scan_adrs
 from driftwarden.grounding.ledger import Ledger
 from driftwarden.grounding.verify import verify_source_quote
@@ -1084,7 +1085,12 @@ def test_allowed_alternatives_are_not_cut_short(sentence):
         ),
         (
             "No module may import boto3 outside adapters/.",
-            [("boundary", {"target": ["boto3"], "allowed_in": ["adapters/"]})],
+            [
+                (
+                    "boundary",
+                    {"target": ["boto3"], "allowed_in": ["adapters/"], "actor": ["module"]},
+                )
+            ],
         ),
     ],
 )
@@ -1260,3 +1266,132 @@ def test_allowed_list_kept_whole_when_captured_whole():
         assert m.rule == {"target": ["SQL"], "allowed_in": ["repo/", "db/"]}, s
     (m,) = match_sentence("Services communicate only via Kafka.")
     assert m.rule == {"only": ["Kafka"], "between": "Services"}
+
+
+# ------------------------------------------------------------------ round 5 (Codex)
+
+
+def test_cross_origin_dedup_needs_the_same_sentence_not_just_the_same_line(make_repo):
+    line = "Services must not use Redis in domain/. Redis is banned across all code."
+    repo = make_repo({"docs/adr/0001-x.md": f"# 1. X\n\n## Decision\n\n{line}\n"})
+    (d,) = scan_adrs(repo).decisions
+    s = d.source.line_start
+
+    def lc(rule, quote):
+        return {"kind": "forbid", "subject": "codebase", "rule": rule, "quote": quote,
+                "line_start": s, "line_end": s}  # fmt: skip
+
+    props = [
+        lc({"forbid": ["redis"]}, "Redis is banned across all code."),  # broader, own sentence
+        lc({"forbid": ["redis"]}, "Services must not use Redis in domain/."),  # restatement
+    ]
+    cs = structure_decision(d, repo, mode="llm", provider=scripted(lambda a, r: props))
+    llm = [c for c in cs.claims if c.origin == "llm"]
+    assert [c.source.quote for c in llm] == ["Redis is banned across all code."]
+    assert "1 duplicate claim(s) merged" in cs.notes
+
+
+def test_leading_manner_adverb_is_captured():
+    (m,) = match_sentence("Handlers must not directly call the database.")
+    assert m.rule == {"forbid": ["database"], "action": "call", "manner": "directly"}
+    (m,) = match_sentence("Handlers must not call the database directly.")
+    assert m.rule == {"forbid": ["database"], "action": "call", "manner": "directly"}
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Some services must use Redis.",
+        "Most services must use Redis.",
+        "Many services must not use MongoDB.",
+        "Certain modules must not import boto3.",
+        "Several services must use structlog.",
+        "Both services must use Kafka.",
+        "No other service may access the payments database.",
+        "Only some services may access the payments database.",
+        "Other services must not use MongoDB.",
+        "Another service must use Redis.",
+        "A few handlers must not call the database.",
+        "One service must use Redis.",
+        "All other services use PostgreSQL.",
+    ],
+)
+def test_restrictive_determiner_on_the_subject_yields_no_claim(sentence):
+    assert match_sentence(sentence) == [], [(m.subject, m.rule) for m in match_sentence(sentence)]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Intro.\n\n<!--\nNever use Redis.\n\nDo not use Kafka.\n-->\n\nNo SQL outside repo/.",
+        "<!-- Never use Redis. -->\n\nNo SQL outside repo/.",
+        "No SQL outside repo/.\n\n<!-- unclosed\n\nNever use Redis.\n",
+    ],
+)
+def test_html_comments_never_become_prose(make_repo, body):
+    repo = make_repo({"docs/adr/0001-x.md": f"# 1. X\n\n## Decision\n\n{body}\n"})
+    (d,) = scan_adrs(repo).decisions
+    cs = structure_decision(d, repo, mode="offline")
+    assert [(c.kind, c.rule) for c in cs.claims] == [
+        ("boundary", {"target": ["SQL"], "allowed_in": ["repo/"]})
+    ]
+    assert all(verify_source_quote(repo, c.source).status == "VERIFIED" for c in cs.claims)
+
+
+def test_inline_html_comment_is_ignored_and_the_quote_still_verifies(make_repo):
+    line = "Services must not use <!-- not --> MongoDB."
+    repo = make_repo({"docs/adr/0001-x.md": f"# 1. X\n\n## Decision\n\n{line}\n"})
+    (d,) = scan_adrs(repo).decisions
+    cs = structure_decision(d, repo, mode="offline")
+    assert [c.rule for c in cs.claims] == [{"forbid": ["MongoDB"], "action": "use"}]
+    assert verify_source_quote(repo, cs.claims[0].source).status == "VERIFIED"
+
+
+def test_many_orphan_fragments_stay_linear():
+    s = "We will use X. " + "(detail); " * 10_000  # ~100 KB, one sentence for the matcher
+    t = time.perf_counter()
+    match_sentence(s)
+    assert time.perf_counter() - t < 3.0
+
+
+def test_negative_boundary_keeps_the_no_actor():
+    (m,) = match_sentence("No request handler may import boto3 outside adapters/.")
+    assert m.rule == {
+        "target": ["boto3"],
+        "allowed_in": ["adapters/"],
+        "actor": ["request handler"],
+    }
+
+
+class _Recording(dict):
+    def __init__(self, *a):
+        super().__init__(*a)
+        self.seen: set[str] = set()
+
+    def __getitem__(self, k):
+        self.seen.add(k)
+        return super().__getitem__(k)
+
+    def get(self, k, default=None):
+        self.seen.add(k)
+        return super().get(k, default)
+
+
+_IGNORED_GROUPS = {"claim"}  # read by match_sentence itself (the claimed span)
+
+
+@pytest.mark.parametrize("pat", RULES, ids=[p.id for p in RULES])
+def test_every_capture_group_is_consumed_by_the_builder(pat):
+    """A named group a builder never reads is text the claim silently drops."""
+    for rx in pat.regexes:
+        consumed: set[str] = set()
+        hit = False
+        for ex in pat.examples:
+            for m in rx.finditer(clean_sentence(ex)):
+                rec = _Recording(m.groupdict())
+                pat.build(rec)
+                consumed |= rec.seen
+                hit = True
+        assert hit, f"{pat.id}: no example exercises {rx.pattern[:60]!r}"
+        unread = set(rx.groupindex) - consumed - _IGNORED_GROUPS
+        assert not unread, f"{pat.id}: groups never read by the builder: {sorted(unread)}"
