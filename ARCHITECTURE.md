@@ -68,8 +68,11 @@ tests/                   # Sonnet's suite; tests/blackbox/REPORT.md by Haiku
 
 ```python
 class Provenance:      # attached to every AI-produced statement
-    path: str; line_start: int; line_end: int
-    commit: str        # full SHA the quote was taken from
+    path: str          # canonical repo-relative POSIX path, byte-exact (L-023)
+    line_start: int; line_end: int
+    commit: str        # full lowercase 40/64-hex SHA the quote was taken from, or
+                       # "WORKTREE"; HEAD/branches/tags/short or uppercase SHAs never
+                       # verify (L-023; callers resolve refs when they create provenance)
     quote: str         # verbatim text the model relied on
 
 class Claim:           # one testable statement derived from a decision

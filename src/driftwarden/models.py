@@ -237,6 +237,41 @@ class Evidence(BaseModel):
     detail: str = Field(default="", description='Human summary, e.g. "imports pymongo".')
 
 
+class RunVote(BaseModel):
+    """One judge run inside a consistency vote (G6)."""
+
+    run: int = Field(description="1-based run number.")
+    status: VerdictStatus
+    grounding: VerdictGrounding
+    origin: VerdictOrigin
+    proposed_status: VerdictStatus | None = None
+    error: str | None = Field(
+        default=None, description="LLMError of this run (the run then counts as UNKNOWN)."
+    )
+    reasons: list[str] = Field(default_factory=list, description="This run's gate reasons.")
+    evidence: list[Evidence] = Field(
+        default_factory=list, description="What this run cited (shown as data, not as fact)."
+    )
+
+
+ConsistencyBasis = Literal["vote", "deterministic"]
+
+
+class Consistency(BaseModel):
+    """The G6 record of a voted verdict: how many runs, what each said, did they agree.
+
+    ``basis="deterministic"``: the rules decided the claim (or the judge is
+    offline), so the result cannot change between runs; one run stands for all
+    ``runs`` and ``executed`` is 1 (cost control, see ``judge.consistency``).
+    """
+
+    runs: int = Field(description="Runs requested.")
+    executed: int = Field(description="Runs actually made.")
+    basis: ConsistencyBasis
+    agreement: bool
+    votes: list[RunVote]
+
+
 class Verdict(BaseModel):
     """The judgement on one claim (ARCHITECTURE.md).
 
@@ -262,6 +297,9 @@ class Verdict(BaseModel):
     notes: list[str] = Field(default_factory=list)
     checks: list[GroundingResult] = Field(
         default_factory=list, description="Every G2/G3 verifier result behind this verdict."
+    )
+    consistency: Consistency | None = Field(
+        default=None, description="G6 vote record; None for a single, unvoted judgement."
     )
 
     @property

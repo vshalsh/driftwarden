@@ -174,12 +174,12 @@ def verify_evidence(
     loc = f"{ev.ref.path}:{ev.ref.line_start}-{ev.ref.line_end}@{ev.ref.commit[:12]}"
     problems: list[str] = []
     if ev.ref.path != posixpath.normpath(ev.ref.path) or ev.ref.path.startswith("/"):
-        # verify_source_quote normalises "a/b.py/" and "./a/b.py" to the real file;
-        # evidence must name it exactly as the repository does.
+        # verify_source_quote rejects these too (L-023); kept here so the gate states
+        # the rule itself: evidence must name the file exactly as the repository does.
         problems.append(f"path {ev.ref.path!r} is not a canonical repo-relative path")
     if ev.ref.commit != WORKTREE and not _FULL_SHA.fullmatch(ev.ref.commit):
-        # verify_source_quote accepts any revision git resolves (HEAD, a branch, a
-        # short SHA); evidence must name the exact commit it was read from.
+        # verify_source_quote rejects moving refs too (L-023); kept here so the gate
+        # states the rule itself: evidence names the exact commit it was read from.
         problems.append(f"commit must be a full SHA or {WORKTREE}, got {ev.ref.commit!r}")
     if commit is not None and ev.ref.commit != commit:
         problems.append(
@@ -637,15 +637,20 @@ class Judge:
         if self.ledger is not None:
             self.ledger.extend(results)
 
-    def judge(self, claim: Claim, es: EvidenceSet | None = None) -> Verdict:
+    def judge(
+        self, claim: Claim, es: EvidenceSet | None = None, *, provider: Provider | None = None
+    ) -> Verdict:
+        """One judgement of ``claim``. ``provider`` overrides ``self.provider`` for this
+        call only (the consistency runner passes a per-run wrapper)."""
         es = es or self.evidence(claim)
         ruled = gate(rule_verdict(claim, es), self.root)
         self._record(ruled.checks)
         if self.mode == "offline":
             return ruled
-        assert self.provider is not None
+        provider = provider or self.provider
+        assert provider is not None
         try:
-            result = self.provider.complete_json(
+            result = provider.complete_json(
                 build_prompt(claim, es, self.snapshot),
                 JUDGE_SCHEMA,
                 system=SYSTEM_PROMPT,

@@ -91,12 +91,9 @@ WT_REQ = (
 DEV3 = ["forbid-requirements-dev-file", "forbid-requirements-test-dir", "only-other-dev-dep"]
 HOLE_IDS = "rev-HEAD rev-branch rev-short-sha path-trailing-slash path-dot-slash path-double-slash path-inner-dot rev-HEAD-tilde rev-peel-syntax".split()
 
-# D-L007-2..6 fixed on L-007-judge; their xfail markers are removed (D1/D7 -> L-023).
+# All known defects are fixed: D-L007-2..8 on L-007/L-025, D1/D7 by L-023, and D6 (the oracle
+# now decodes via text.decode_text, BOM/UTF-16/32 aware). No xfail markers remain.
 KNOWN: dict[tuple[str, str | None], str] = {
-    **{("test_hole_verify_source_quote_non_canonical_provenance", c): D1 for c in HOLE_IDS},
-    # D6 fixed in code; the oracle (show/oracle_ok) now decodes via text.decode_text (BOM/UTF-16/32 aware).
-    ("test_verifier_never_raises_on_nul_in_path", None): D7,
-    ("test_verifier_never_raises_on_nul_in_commit", None): D7,
 }
 
 

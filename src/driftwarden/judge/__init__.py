@@ -3,9 +3,11 @@
 ``evidence`` collects candidate evidence per claim at one commit (deterministic);
 ``catalog`` is the built-in technology/category table it resolves claim terms
 with; ``judge`` turns claim + evidence into a ``Verdict`` (rules offline, or
-rules + model) and re-verifies every cited item (G2/G3) before it is reported.
+rules + model) and re-verifies every cited item (G2/G3) before it is reported;
+``consistency`` runs the judge N times per claim and votes (G6).
 """
 
+from driftwarden.judge.consistency import ConsistencyRunner
 from driftwarden.judge.evidence import EvidenceSet, Snapshot, collect_evidence, load_snapshot
 from driftwarden.judge.judge import (
     JUDGE_SCHEMA,
@@ -20,6 +22,7 @@ from driftwarden.judge.judge import (
 
 __all__ = [
     "JUDGE_SCHEMA",
+    "ConsistencyRunner",
     "EvidenceSet",
     "Judge",
     "Snapshot",
