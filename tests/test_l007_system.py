@@ -41,6 +41,7 @@ from driftwarden.grounding.verify import verify_dependency, verify_source_quote
 from driftwarden.judge import Judge, build_prompt, gate, verify_evidence
 from driftwarden.llm import OfflineProvider, RetryPolicy
 from driftwarden.models import WORKTREE, Claim, DependencyRef, Evidence, Provenance, Verdict
+from driftwarden.text import decode_text
 
 FIXTURES = Path(__file__).parent / "fixtures" / "judge_repos"
 STATS = Path(os.environ["L007_STATS"]) if os.environ.get("L007_STATS") else None
@@ -93,11 +94,7 @@ HOLE_IDS = "rev-HEAD rev-branch rev-short-sha path-trailing-slash path-dot-slash
 # D-L007-2..6 fixed on L-007-judge; their xfail markers are removed (D1/D7 -> L-023).
 KNOWN: dict[tuple[str, str | None], str] = {
     **{("test_hole_verify_source_quote_non_canonical_provenance", c): D1 for c in HOLE_IDS},
-    # D6 is fixed: the dependency is cited and passes verify_source_quote and
-    # verify_dependency, which decode UTF-16 via text.decode_text. This test's own
-    # oracle_ok() decodes show output as UTF-8 only, so it cannot match any UTF-16
-    # citation. Kept red for Sonnet to decide on the oracle; assertion unchanged.
-    ("test_utf16_requirements_is_evidence", None): D6 + " [fixed in code; oracle_ok is UTF-8 only]",
+    # D6 fixed in code; the oracle (show/oracle_ok) now decodes via text.decode_text (BOM/UTF-16/32 aware).
     ("test_verifier_never_raises_on_nul_in_path", None): D7,
     ("test_verifier_never_raises_on_nul_in_commit", None): D7,
 }
@@ -158,14 +155,14 @@ def show(repo: Path, commit: str, path: str) -> str:
     out = subprocess.run(
         ["git", "show", f"{commit}:{path}"], cwd=repo, capture_output=True, check=True
     ).stdout
-    return out.decode("utf-8", "replace")
+    return decode_text(out)
 
 
 def oracle_ok(repo: Path, prov: Provenance) -> bool:
     """My own check: quote (whitespace-collapsed, case-sensitive) occurs on those lines of that file/commit."""
     try:
         if prov.commit == WORKTREE:
-            text = (repo / prov.path).read_bytes().decode("utf-8", "replace")
+            text = decode_text((repo / prov.path).read_bytes())
         else:
             text = show(repo, prov.commit, prov.path)
     except Exception:
