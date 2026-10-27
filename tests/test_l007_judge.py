@@ -1537,3 +1537,41 @@ def test_l025_rule_library_fields_are_all_audited():
     assert {"forbid", "require", "only", "boundary"} <= set(seen)
     for kind, fields in seen.items():
         assert fields <= HONOURED_FIELDS[kind], (kind, fields - HONOURED_FIELDS[kind])
+
+
+# ------------------------------------------------------------------ actor name variants
+
+
+def test_actor_variants_keep_the_full_name():
+    from driftwarden.judge.evidence import _actor_variants
+
+    v = _actor_variants("billing_service")
+    assert {"billing_service", "billing-service", "billingservice", "billing"} <= v
+    v = _actor_variants("BillingService")
+    assert {"billing_service", "billingservice", "billing"} <= v
+    v = _actor_variants("domain layer")
+    assert {"domain_layer", "domain-layer", "domain"} <= v
+    assert "handler" in _actor_variants("Handlers") and "handlers" in _actor_variants("handler")
+
+
+@pytest.mark.parametrize("actor", ["billing_service", "billing-service", "BillingService"])
+def test_actor_full_name_directory_is_selected(tmp_path, actor):
+    files = {
+        "src/billing_service/pay.py": "import pymongo\n",
+        "src/billing/invoice.py": "import json\n",
+        "src/other/job.py": "import pymongo\n",
+    }
+    repo = _repo_with(tmp_path, files)
+    rule = {"forbid": ["MongoDB"], "actor": [actor]}
+    v = Judge(repo, mode="offline").judge(_claim("forbid", rule))
+    # Both billing_service/ and billing/ are the actor's code (union); other/ is not.
+    assert v.status == "VIOLATED", v.rationale
+    assert [e.ref.path for e in v.evidence] == ["src/billing_service/pay.py"]
+
+
+def test_actor_only_full_name_directory_resolves(tmp_path):
+    repo = _repo_with(tmp_path, {"src/billing_service/pay.py": "import pymongo\n"})
+    v = Judge(repo, mode="offline").judge(
+        _claim("forbid", {"forbid": ["MongoDB"], "actor": ["billing_service"]})
+    )
+    assert v.status == "VIOLATED" and "not resolvable" not in v.rationale

@@ -784,19 +784,30 @@ _ACTOR_TAILS = frozenset(
 
 
 def _actor_variants(actor: str) -> set[str]:
-    words = [w for w in re.split(r"[^a-z0-9]+", actor.lower()) if w]
+    """Directory / module names an actor may go by. The full name is always kept in
+    every spelling (as-is, snake, kebab, joined, camel split), and the tail-stripped
+    form is added ("billing_service" -> billing_service, billing-service,
+    billingservice, billing; "domain layer" -> domain_layer, ..., domain), each with
+    its plural/singular twin. ``resolve_actor`` takes the union of all matches."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", actor.strip())
+    words = [w for w in re.split(r"[^a-z0-9]+", spaced.lower()) if w]
     words = [w for w in words if w not in ("the", "a", "an", "all", "any", "every", "each", "our")]
-    if len(words) > 1 and words[-1] in _ACTOR_TAILS:
-        words = words[:-1]  # "domain layer" -> domain, "billing service" -> billing
     if not words:
         return set()
-    out = {"-".join(words), "_".join(words), "".join(words), words[-1]}
+
+    def forms(ws: list[str]) -> set[str]:
+        return {"_".join(ws), "-".join(ws), "".join(ws)}
+
+    out = forms(words) | {actor.strip().lower()}
+    if len(words) > 1 and words[-1] in _ACTOR_TAILS:
+        out |= forms(words[:-1])  # "billing service" -> billing as well
+    out.add(words[-1] if words[-1] not in _ACTOR_TAILS else words[0])
     for v in list(out):
         if v.endswith("s") and len(v) > 3:
             out.add(v[:-1])
         else:
             out.add(v + "s")
-    return out
+    return {v for v in out if v}
 
 
 _GENERIC_SUBJECTS = frozenset(
