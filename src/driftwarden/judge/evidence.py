@@ -817,20 +817,21 @@ _GENERIC_SUBJECTS = frozenset(
 
 
 def subject_actor(claim: Claim) -> list[str]:
-    """The actor a claim's ``subject`` names, when it names one.
+    """The actor a claim's ``subject`` names, when it certainly names one.
 
-    Rule-library forbid/require claims put the sentence's subject there
-    ("Handlers must not use X" -> subject "handlers"); generic subjects
-    (codebase, services, a category such as "logging") name the whole repo. Model
-    and hint claims use ``subject`` as a free label, so only an explicit
-    ``module:<name>`` / ``dir:<name>`` counts for them.
+    ``subject`` is descriptive ("what the claim is about"), so it is never an
+    actor for boundary/only/free claims, and never when it carries a descriptive
+    prefix (``module:payments``) -- only the explicit ``actor`` field scopes those.
+    For rule-library forbid/require claims the subject is the sentence's subject;
+    it is taken as the actor only when the sentence uses it as the acting subject
+    ("Handlers must not ...", "No handler may ...") and it is not the claim's own
+    target, term or category. In every other case: whole-repo scope.
     """
-    subj = " ".join(claim.subject.lower().split())
-    m = re.match(r"^(?:module|dir|directory|package):\s*(.+)$", subj)
-    if m:
-        return [m.group(1)]
     if claim.origin != "rule" or claim.kind not in ("forbid", "require"):
         return []
+    subj = " ".join(claim.subject.lower().split())
+    if re.match(r"^[a-z]+:", subj):
+        return []  # module:/package:/service:... is a label, not an actor
     bare = re.sub(r"^(?:the|all|every|each|any|our|no)\s+", "", subj)
     if (
         not bare
@@ -839,8 +840,11 @@ def subject_actor(claim: Claim) -> list[str]:
         or catalog.category_for(bare) is not None
     ):
         return []
-    # Only when the decision sentence uses it as the acting subject ("Handlers must
-    # not ...", "No handler may ..."); otherwise the subject is just a label.
+    terms = " ".join(t.lower() for t in _rule_terms(claim.rule))
+    if bare in terms or any(w in terms.split() for w in bare.split()):
+        return []  # the subject is what is restricted, not who acts
+    # Only when the decision sentence uses it as the acting subject; otherwise the
+    # subject is just a label.
     quote = " ".join(claim.source.quote.lower().split())
     word = re.escape(bare)
     acting = re.search(

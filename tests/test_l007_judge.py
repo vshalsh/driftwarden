@@ -1575,3 +1575,41 @@ def test_actor_only_full_name_directory_resolves(tmp_path):
         _claim("forbid", {"forbid": ["MongoDB"], "actor": ["billing_service"]})
     )
     assert v.status == "VIOLATED" and "not resolvable" not in v.rationale
+
+
+# ------------------------------------------------------------------ subject is descriptive
+
+
+@pytest.mark.parametrize("subject", ["payments", "module:payments", "package:payments"])
+def test_boundary_subject_is_never_the_actor(tmp_path, subject):
+    files = {
+        "src/payments/__init__.py": "",
+        "src/payments/core.py": "X = 1\n",
+        "src/billing/charge.py": "from payments import core\n",
+        "src/web/views.py": "from payments import core\n",
+    }
+    repo = _repo_with(tmp_path, files)
+    q = "Payments may only be imported from billing/."
+    claim = _claim("boundary", {"target": ["payments"], "allowed_in": ["billing/"]}, quote=q)
+    v = Judge(repo, mode="offline").judge(claim.model_copy(update={"subject": subject}))
+    assert v.status == "VIOLATED", v.rationale
+    assert [e.ref.path for e in v.evidence] == ["src/web/views.py"]
+
+
+def test_subject_equal_to_the_restricted_term_is_not_an_actor(tmp_path):
+    repo = _repo_with(tmp_path, {"src/jobs/sync.py": "import requests\n"})
+    q = "Requests must not be used."
+    claim = _claim("forbid", {"forbid": ["requests"]}, quote=q).model_copy(
+        update={"subject": "requests"}
+    )
+    v = Judge(repo, mode="offline").judge(claim)
+    assert v.status == "VIOLATED" and "actor" not in v.rationale
+
+
+def test_prefixed_subject_on_forbid_keeps_whole_repo(tmp_path):
+    repo = _repo_with(tmp_path, {"src/jobs/sync.py": "import requests\n"})
+    plain = _claim("forbid", {"forbid": ["requests"]})
+    labelled = plain.model_copy(update={"subject": "module:payments"})
+    a = Judge(repo, mode="offline").judge(plain)
+    b = Judge(repo, mode="offline").judge(labelled)
+    assert a.status == b.status == "VIOLATED"
