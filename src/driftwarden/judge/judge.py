@@ -60,7 +60,7 @@ from typing import Any
 from driftwarden.claims.structure import Mode, resolve_mode
 from driftwarden.config import Config
 from driftwarden.grounding.ledger import Ledger
-from driftwarden.grounding.verify import verify_dependency, verify_source_quote
+from driftwarden.grounding.verify import normalise, verify_dependency, verify_source_quote
 from driftwarden.judge.evidence import EvidenceSet, Snapshot, collect_evidence, load_snapshot
 from driftwarden.llm.base import LLMError, Provider
 from driftwarden.models import (
@@ -68,6 +68,7 @@ from driftwarden.models import (
     Claim,
     Evidence,
     GroundingResult,
+    Provenance,
     Verdict,
     VerdictStatus,
 )
@@ -77,6 +78,10 @@ _FULL_SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 MAX_PROMPT_CANDIDATES = 40
 MAX_SNIPPET_CHARS = 600
 CONTEXT_LINES = 3
+MIN_QUOTE_CHARS = 8
+"""Shortest model quote (non-space characters) accepted as a citation, unless it is the
+whole cited line(s). A 1-character quote such as "e" is "verbatim" on almost any line
+and would let a model back any status with a meaningless citation."""
 
 JUDGE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -221,6 +226,10 @@ def rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
     base = {"claim_id": claim.id, "commit": es.commit, "origin": "rule", "notes": list(es.notes)}
 
     def v(status: VerdictStatus, evidence: list[Evidence], rationale: str) -> Verdict:
+        if status == "HOLDING" and es.skipped:
+            # Policy for files too large to read: the verdict stays HOLDING (a generated
+            # file must not turn every claim UNKNOWN) but says it is incomplete.
+            rationale += f"; incomplete: {len(es.skipped)} large file(s) skipped, see notes"
         return Verdict(status=status, evidence=evidence, rationale=rationale, **base)
 
     if es.undecidable:
@@ -366,29 +375,63 @@ def build_prompt(claim: Claim, es: EvidenceSet, snapshot: Snapshot | None = None
     )
 
 
+def _substantial(quote: str, cand: Evidence, a: int, b: int) -> bool:
+    """A model quote must carry meaning: at least MIN_QUOTE_CHARS non-space characters,
+    or all of the cited lines (a short line such as ``import x`` quoted whole)."""
+    if len("".join(quote.split())) >= MIN_QUOTE_CHARS:
+        return True
+    lines = cand.ref.quote.split("\n")[a - cand.ref.line_start : b - cand.ref.line_start + 1]
+    whole = normalise("\n".join(lines))
+    return bool(whole) and normalise(quote) == whole
+
+
 def llm_verdict(claim: Claim, es: EvidenceSet, reply: dict[str, Any]) -> tuple[Verdict, list[str]]:
     """Turn a schema-valid model reply into a pre-gate verdict, plus citation
     problems the gate must report (unknown ids, ranges outside a candidate, a
     status without citations)."""
     status = reply["status"]
     problems: list[str] = []
+    rejected: list[GroundingResult] = []
     cited: list[Evidence] = []
+
+    def reject(n: int, prov: Provenance, why: str) -> None:
+        # A citation rejected before the verifiers still gets a ledger record, so raw
+        # citation accuracy (S4) counts it.
+        reason = f"citation {n}: {why}"
+        problems.append(reason)
+        rejected.append(
+            GroundingResult(
+                check_id="G2", status="MISMATCH", reason=reason, provenance=prov,
+                subject=f"{claim.id}/citation-{n}",
+            )
+        )  # fmt: skip
+
     for n, c in enumerate(reply.get("citations", []), 1):
         cid = str(c["evidence_id"])
+        a, b = int(c["line_start"]), int(c["line_end"])
+        quote = str(c["quote"])
         cand = es.get(cid)
         if cand is None:
-            problems.append(
-                f"citation {n}: evidence {cid!r} is not among the {len(es.candidates)} candidates"
-            )
+            prov = Provenance(path="", line_start=a, line_end=b, commit=es.commit, quote=quote)
+            reject(n, prov, f"evidence {cid!r} is not among the {len(es.candidates)} candidates")
             continue
-        a, b = int(c["line_start"]), int(c["line_end"])
+        ref = cand.ref.model_copy(update={"line_start": a, "line_end": b, "quote": quote})
         if not (cand.ref.line_start <= a <= b <= cand.ref.line_end):
-            problems.append(
-                f"citation {n}: lines {a}-{b} are outside evidence {cid} "
-                f"({cand.ref.path}:{cand.ref.line_start}-{cand.ref.line_end})"
+            reject(
+                n,
+                ref,
+                f"lines {a}-{b} are outside evidence {cid} "
+                f"({cand.ref.path}:{cand.ref.line_start}-{cand.ref.line_end})",
             )
             continue
-        ref = cand.ref.model_copy(update={"line_start": a, "line_end": b, "quote": c["quote"]})
+        if not _substantial(quote, cand, a, b):
+            reject(
+                n,
+                ref,
+                f"quote {quote!r} is too short to be evidence (needs {MIN_QUOTE_CHARS}+ "
+                "non-space characters, or the whole cited line)",
+            )
+            continue
         ev = cand.model_copy(update={"ref": ref})
         if all(x.model_dump() != ev.model_dump() for x in cited):
             cited.append(ev)
@@ -406,7 +449,7 @@ def llm_verdict(claim: Claim, es: EvidenceSet, reply: dict[str, Any]) -> tuple[V
         proposed_status=status,
         commit=es.commit,
         notes=list(es.notes),
-        checks=[],
+        checks=rejected,
     )
     return pre, problems
 

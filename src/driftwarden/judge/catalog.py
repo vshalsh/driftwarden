@@ -43,6 +43,12 @@ matched literally against every namespace (see :func:`literal_technology`).
 Plain words, programming languages and protocols are never literal matches:
 they yield no resolution, and the judge reports UNKNOWN rather than guess.
 
+Terraform: providers are matched by source (``hashicorp/aws`` -> AWS, ``hashicorp/google``
+-> GCP, ``hashicorp/azurerm`` -> Azure, ``mongodb/mongodbatlas``, ``confluentinc/confluent``,
+``elastic/ec``, ...). Terraform *resources* (``aws_db_instance`` with
+``engine = "postgres"``) are not parsed by the manifest layer, so a datastore created
+only as a managed cloud resource is not seen.
+
 Known limits: the catalog is name-based. It does not see a technology used
 through a generic client (DynamoDB through ``boto3``), through a URL in config
 (``mongodb://`` in an env file), or vendored source code.
@@ -141,6 +147,7 @@ TECHNOLOGIES: list[Technology] = [
         "npm:pg", "npm:pg-promise", "npm:postgres", "maven:org.postgresql:*",
         "java:org.postgresql*", "go:github.com/lib/pq*", "go:github.com/jackc/pgx*",
         "nuget:npgsql*", "docker:postgres", "docker:postgresql",
+        "terraform:*cyrilgdn/postgresql",
     )),
     _T("mysql", "datastore", ("mysql", "mariadb"), (
         "pypi:mysqlclient", "pypi:pymysql", "pypi:mysql-connector-python", "pypi:aiomysql",
@@ -148,6 +155,7 @@ TECHNOLOGIES: list[Technology] = [
         "npm:mysql2", "npm:mariadb", "maven:mysql:mysql-connector-java", "maven:com.mysql:*",
         "maven:org.mariadb.jdbc:*", "java:com.mysql*", "go:github.com/go-sql-driver/mysql*",
         "nuget:mysql.data*", "nuget:mysqlconnector*", "docker:mysql", "docker:mariadb",
+        "terraform:*petoju/mysql",
     )),
     _T("sqlite", "datastore", ("sqlite", "sqlite3"), (
         "py:sqlite3", "pypi:aiosqlite", "py:aiosqlite", "npm:sqlite3", "npm:better-sqlite3",
@@ -159,7 +167,7 @@ TECHNOLOGIES: list[Technology] = [
         "py:motor", "py:mongoengine", "py:beanie", "npm:mongodb", "npm:mongoose",
         "maven:org.mongodb:*", "java:com.mongodb*", "go:go.mongodb.org/mongo-driver*",
         "nuget:mongodb.driver*", "docker:mongo", "docker:mongodb",
-        "docker:mongodb-community-server",
+        "docker:mongodb-community-server", "terraform:*mongodb/mongodbatlas",
     )),
     _T("cassandra", "datastore", ("cassandra", "apache cassandra", "scylladb", "scylla"), (
         "pypi:cassandra-driver", "py:cassandra", "npm:cassandra-driver",
@@ -177,6 +185,7 @@ TECHNOLOGIES: list[Technology] = [
         "java:redis.clients*", "java:io.lettuce*", "go:github.com/redis/go-redis*",
         "go:github.com/go-redis/redis*", "go:github.com/gomodule/redigo*",
         "nuget:stackexchange.redis*", "docker:redis", "docker:valkey", "docker:redis-stack*",
+        "terraform:*redislabs/rediscloud",
     )),
     _T("memcached", "cache", ("memcached", "memcache"), (
         "pypi:pymemcache", "pypi:python-memcached", "pypi:pylibmc", "py:pymemcache",
@@ -191,6 +200,7 @@ TECHNOLOGIES: list[Technology] = [
         "go:github.com/segmentio/kafka-go*", "go:github.com/confluentinc/confluent-kafka-go*",
         "go:github.com/ibm/sarama*", "go:github.com/shopify/sarama*", "nuget:confluent.kafka*",
         "docker:kafka", "docker:cp-kafka", "docker:redpanda",
+        "terraform:*confluentinc/confluent", "terraform:*mongey/kafka",
     )),
     _T("rabbitmq", "queue", ("rabbitmq", "rabbit mq", "amqp"), (
         "pypi:pika", "pypi:aio-pika", "pypi:kombu", "py:pika", "py:aio_pika", "py:kombu",
@@ -266,18 +276,20 @@ TECHNOLOGIES: list[Technology] = [
         "py:aioboto3", "py:boto", "npm:aws-sdk", "npm:@aws-sdk/*",
         "maven:software.amazon.awssdk:*", "maven:com.amazonaws:*",
         "java:software.amazon.awssdk*", "java:com.amazonaws*", "go:github.com/aws/aws-sdk-go*",
-        "nuget:awssdk.*",
+        "nuget:awssdk.*", "terraform:*hashicorp/aws", "terraform:aws",
     )),
     _T("gcp-sdk", "cloud-sdk", ("google cloud sdk", "gcp sdk", "google cloud", "gcp"), (
         "pypi:google-cloud-*", "pypi:google-api-python-client", "py:google.cloud*",
         "py:googleapiclient", "npm:@google-cloud/*", "npm:googleapis",
         "maven:com.google.cloud:*", "java:com.google.cloud*", "go:cloud.google.com/go*",
-        "nuget:google.cloud.*",
+        "nuget:google.cloud.*", "terraform:*hashicorp/google", "terraform:*hashicorp/google-beta",
+        "terraform:google", "terraform:google-beta",
     )),
     _T("azure-sdk", "cloud-sdk", ("azure sdk", "azure"), (
         "pypi:azure-*", "py:azure*", "npm:@azure/*", "maven:com.azure:*",
         "maven:com.microsoft.azure:*", "java:com.azure*", "java:com.microsoft.azure*",
-        "go:github.com/azure/azure-sdk-for-go*", "nuget:azure.*",
+        "go:github.com/azure/azure-sdk-for-go*", "nuget:azure.*", "terraform:*hashicorp/azurerm",
+        "terraform:azurerm",
     )),
     # ---- search
     _T("elasticsearch", "search", ("elasticsearch", "elastic search", "opensearch"), (
@@ -285,7 +297,8 @@ TECHNOLOGIES: list[Technology] = [
         "npm:@elastic/elasticsearch", "npm:@opensearch-project/opensearch",
         "maven:co.elastic.clients:*", "maven:org.elasticsearch*", "java:co.elastic*",
         "java:org.elasticsearch*", "go:github.com/elastic/go-elasticsearch*",
-        "docker:elasticsearch", "docker:opensearch",
+        "docker:elasticsearch", "docker:opensearch", "terraform:*elastic/ec",
+        "terraform:*elastic/elasticstack",
     )),
 ]  # fmt: skip
 

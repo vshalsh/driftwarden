@@ -567,10 +567,10 @@ def test_llm_may_cite_a_sub_range_with_a_partial_quote(judge_repo):
 
     def model(req):
         c = candidates_in(req.prompt)[0]
-        return {"status": "HOLDING", "rationale": "", "citations": [cite(c, "healthz")]}
+        return {"status": "HOLDING", "rationale": "", "citations": [cite(c, "def healthz")]}
 
     v = Judge(repo, mode="llm", provider=scripted(model)).judge(claim)
-    assert v.status == "HOLDING" and v.evidence[0].ref.quote == "healthz"
+    assert v.status == "HOLDING" and v.evidence[0].ref.quote == "def healthz"
 
 
 @pytest.mark.parametrize(
@@ -935,3 +935,142 @@ def test_g2_tamper_every_cited_evidence_is_caught(tmp_path, capsys):
     assert hist_repo is not None
     assert cited_total >= 20 and sample == 100 * cited_total
     assert caught == sample
+
+
+# ------------------------------------------------------------------ Sonnet defects D-L007-2..6
+
+
+def _repo_with(tmp_path: Path, files: dict[str, str | bytes]) -> Path:
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _init(repo)
+    for rel, content in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            p.write_bytes(content)
+        else:
+            p.write_text(content, encoding="utf-8")
+    _commit(repo, "files")
+    return repo
+
+
+MONGO_FORBID = {"forbid": ["MongoDB"]}
+
+
+def test_d2_worktree_reads_requirements_txt_like_the_commit(tmp_path):
+    repo = _repo_with(tmp_path, {"requirements.txt": "pymongo==4\n", "src/a.py": "x = 1\n"})
+    c = _claim("forbid", MONGO_FORBID)
+    head = Judge(repo, mode="offline").judge(c)
+    wt = Judge(repo, mode="offline", commit=WORKTREE).judge(c)
+    assert head.status == wt.status == "VIOLATED"
+    assert [e.ref.path for e in wt.evidence] == ["requirements.txt"]
+    assert all(r.status == "VERIFIED" for r in wt.checks)
+
+
+@pytest.mark.parametrize(
+    "path,nonprod",
+    [
+        ("requirements-dev.txt", True),
+        ("dev-requirements.txt", True),
+        ("requirements/test.txt", True),
+        ("requirements_docs.txt", True),
+        ("docs/requirements.txt", True),
+        ("ci/requirements.txt", True),
+        ("docker-compose.ci.yml", True),
+        ("Dockerfile.test", True),
+        ("requirements.txt", False),
+        ("dev/requirements.txt", False),  # a service directory called dev ships
+        ("services/devices/requirements.txt", False),
+        ("package.json", False),
+    ],
+)
+def test_d3_nonproduction_manifest_names(path, nonprod):
+    from driftwarden.judge.evidence import is_nonproduction_manifest
+
+    assert is_nonproduction_manifest(path) is nonprod
+
+
+def test_d3_dev_requirements_drift_not_violate(tmp_path):
+    repo = _repo_with(tmp_path, {"requirements-dev.txt": "pymongo\n"})
+    v = Judge(repo, mode="offline").judge(_claim("forbid", MONGO_FORBID))
+    assert v.status == "DRIFTING" and not v.evidence[0].production
+
+
+def test_d4_large_file_is_never_a_silent_holding(tmp_path):
+    big = "import pymongo\n" + "x = 1\n" * 400_000  # > 2 MiB
+    repo = _repo_with(tmp_path, {"src/big.py": big, "src/a.py": "x = 1\n"})
+    for commit in ("HEAD", WORKTREE):
+        v = Judge(repo, mode="offline", commit=commit).judge(_claim("forbid", MONGO_FORBID))
+        assert v.status == "HOLDING"
+        assert "incomplete" in v.rationale
+        assert any("src/big.py" in n and "skipped" in n for n in v.notes)
+
+
+def test_d5_rejected_citations_are_in_the_ledger(judge_repo, tmp_path):
+    repo, claim = _free_claim_repo(judge_repo)
+
+    def model(req):
+        c = candidates_in(req.prompt)[0]
+        return {
+            "status": "VIOLATED",
+            "rationale": "",
+            "citations": [
+                {"evidence_id": "e77", "line_start": 1, "line_end": 1, "quote": "whatever text"},
+                {**cite(c), "line_start": 50, "line_end": 50},
+                cite(c, "e"),
+            ],
+        }
+
+    ledger = Ledger(tmp_path / "l", run_id="x")
+    v = Judge(repo, mode="llm", provider=scripted(model), ledger=ledger).judge(claim)
+    assert (v.status, v.grounding) == ("UNKNOWN", "MISMATCH")
+    assert ledger.summary()["by_check"]["G2"]["MISMATCH"] == 3
+    reasons = " | ".join(v.reasons)
+    assert "e77" in reasons and "outside evidence" in reasons and "too short" in reasons
+
+
+def test_tiny_quotes_are_rejected_but_short_whole_lines_are_not(tmp_path):
+    repo = _repo_with(tmp_path, {"src/a.py": "import x\nsecret = 'e'\n"})
+    claim = _claim("free", {"text": "no secret in code"})
+
+    def model_for(quote, line):
+        def model(req):
+            c = next(x for x in candidates_in(req.prompt) if x["line_start"] == line)
+            return {"status": "VIOLATED", "rationale": "", "citations": [cite(c, quote)]}
+
+        return model
+
+    v = Judge(repo, mode="llm", provider=scripted(model_for("e", 2))).judge(claim)
+    assert v.status == "UNKNOWN" and any("too short" in r for r in v.reasons)
+    v = Judge(repo, mode="llm", provider=scripted(model_for("secret = 'e'", 2))).judge(claim)
+    assert v.status == "VIOLATED" and v.grounding == "VERIFIED"
+
+
+def test_d6_utf16_requirements_are_citable(tmp_path):
+    repo = _repo_with(tmp_path, {"requirements.txt": "pymongo==4\r\n".encode("utf-16")})
+    for commit in ("HEAD", WORKTREE):
+        v = Judge(repo, mode="offline", commit=commit).judge(_claim("forbid", MONGO_FORBID))
+        assert v.status == "VIOLATED", (commit, v.rationale, v.notes)
+        assert v.evidence[0].ref.quote == "pymongo==4"
+        assert all(r.status == "VERIFIED" for r in v.checks)
+
+
+def test_terraform_providers_match_the_catalog():
+    aws = catalog.technology("aws-sdk")
+    assert catalog.name_matches(aws, "terraform", ["registry.terraform.io/hashicorp/aws"])
+    assert catalog.name_matches(aws, "terraform", ["hashicorp/aws"])
+    assert not catalog.name_matches(aws, "terraform", ["terraform-aws-modules/vpc/aws"])
+    atlas = catalog.technology("mongodb")
+    assert catalog.name_matches(atlas, "terraform", ["mongodb/mongodbatlas"])
+
+
+def test_terraform_provider_is_infra_evidence(tmp_path):
+    tf = (
+        "terraform {\n  required_providers {\n    aws = {\n"
+        '      source  = "hashicorp/aws"\n      version = "~> 5.0"\n    }\n  }\n}\n'
+    )
+    repo = _repo_with(tmp_path, {"infra/main.tf": tf})
+    v = Judge(repo, mode="offline").judge(_claim("forbid", {"forbid": ["AWS"]}))
+    assert v.status == "VIOLATED" and {e.kind for e in v.evidence} == {"infra"}
+    assert all(r.status == "VERIFIED" for r in v.checks)

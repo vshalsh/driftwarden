@@ -39,8 +39,22 @@ What is collected per rule kind (terms are resolved by ``judge.catalog``):
     candidates are added so the model has something to cite.
 
 Each item is flagged ``production=False`` when it sits in a test file
-(``tests/``, ``test_*.py``, ``*.spec.ts``...) or is a dev/test/build-scoped
-dependency; the rules then call the claim DRIFTING rather than VIOLATED.
+(``tests/``, ``test_*.py``, ``*.spec.ts``...), is a dev/test/build-scoped
+dependency, or comes from a manifest whose name or directory marks it as
+non-shipping (``requirements-dev.txt``, ``requirements/test.txt``,
+``docker-compose.ci.yml``, ``docs/requirements.txt``; see
+``is_nonproduction_manifest``); the rules then call the claim DRIFTING rather
+than VIOLATED.
+
+Commit and WORKTREE snapshots select files the same way (by name, symlinks never
+followed) and decode them like the verifiers (``text.decode_text``), so UTF-16
+manifests are citable and both modes see the same evidence.
+
+Files too large to read (source over ``MAX_PARSE_BYTES``) are listed in
+``Snapshot.skipped``; every rule claim then carries an "incomplete evidence" note,
+and a HOLDING verdict says so in its rationale. Policy: the verdict is not forced
+to UNKNOWN (one generated file would otherwise blank every claim), but the gap
+is never silent.
 
 Known limits: Python imports are matched by module name, so a distribution
 whose import name differs from every catalog/literal pattern is found only
@@ -72,7 +86,14 @@ from driftwarden.index.files import (
     is_binary,
 )
 from driftwarden.index.imports import IMPORT_LANGUAGES, ImportEdge, ImportGraph, build_import_graph
-from driftwarden.index.manifests import ManifestResult, detect, parse_manifest, scan_manifests
+from driftwarden.index.manifests import (
+    ManifestError,
+    ManifestResult,
+    _prepare,
+    detect,
+    parse_manifest,
+    scan_manifests,
+)
 from driftwarden.judge import catalog
 from driftwarden.judge.catalog import Resolution, Technology
 from driftwarden.models import (
@@ -84,7 +105,7 @@ from driftwarden.models import (
     EvidenceRelation,
     Provenance,
 )
-from driftwarden.text import decode_text, read_text_file, split_lines
+from driftwarden.text import decode_text, split_lines
 
 # Languages whose text is kept for snippets and keyword search. Prose (markdown,
 # rst, html) is left out: ADRs and docs are not evidence about the code.
@@ -116,6 +137,9 @@ class Snapshot:
     imports: ImportGraph
     manifests: list[ManifestResult]
     texts: dict[str, str] = field(default_factory=dict)
+    skipped: list[tuple[str, str]] = field(default_factory=list)
+    """``(path, reason)`` for source files that could hold evidence but were not read
+    (over ``MAX_PARSE_BYTES``). Absence verdicts mention them in their notes."""
     _lines: dict[str, list[str]] = field(default_factory=dict, repr=False)
 
     def lines(self, path: str) -> list[str] | None:
@@ -149,6 +173,43 @@ def _wanted(path: str) -> bool:
     return detect_language(path) in TEXT_LANGUAGES or detect(path) is not None
 
 
+def _as_text(data: bytes, path: str) -> str | None:
+    """Decoded text of a file, or None if it is binary. Decoding follows
+    ``text.decode_text`` (the verifiers' rule), so UTF-16/32 files (BOM or NUL
+    pattern) are text too, and their lines are the lines G2 checks."""
+    if is_binary(b"", path):  # binary extension
+        return None
+    text = decode_text(data)
+    return None if "\x00" in text else text
+
+
+def _too_large(path: str, size: int) -> tuple[str, str] | None:
+    if size > MAX_PARSE_BYTES and detect_language(path) in TEXT_LANGUAGES:
+        return path, f"{size} bytes, over the {MAX_PARSE_BYTES} byte parse limit; not read"
+    return None
+
+
+def _manifest_at(path: str, text: str, commit: str) -> ManifestResult | None:
+    """Parse ``path`` the way ``scan_manifests`` does (same detection and sniffing),
+    so commit and WORKTREE snapshots see the same manifests."""
+    if "node_modules/" in f"/{path}":
+        return None
+    parser = detect(path)
+    if parser is None:
+        return None
+    if parser.sniff is not None:
+        try:
+            sniffed = _prepare(text)
+        except ManifestError:
+            return None
+        if not parser.sniff(path, sniffed):
+            return None
+    res = parse_manifest(path, text)
+    res.commit = commit
+    res.refs = [r.model_copy(update={"commit": commit}) for r in res.refs]
+    return res
+
+
 def load_snapshot(repo: str | Path, commit: str = "HEAD", config: Config | None = None) -> Snapshot:
     """The repository at ``commit`` (resolved to a full SHA), or the working tree
     when ``commit`` is WORKTREE. ``config.exclude`` is honoured.
@@ -168,6 +229,7 @@ def load_snapshot(repo: str | Path, commit: str = "HEAD", config: Config | None 
     wanted = {e.path for e in want}
 
     texts: dict[str, str] = {}
+    skipped = [s for s in (_too_large(e.path, e.size) for e in entries if e.mode != "120000") if s]
     file_entries: list[FileEntry] = []
     with tempfile.TemporaryDirectory(prefix="driftwarden-snap-") as tmp:
         base = Path(tmp)
@@ -185,22 +247,29 @@ def load_snapshot(repo: str | Path, commit: str = "HEAD", config: Config | None 
                 file_entries.append(FileEntry(e.path, e.size, lang, binary, tracked=True))
                 continue
             data = blobs[e.sha]
-            binary = is_binary(data[:SNIFF_BYTES], e.path)
+            text = _as_text(data, e.path)
+            binary = text is None
             lang = None if binary else detect_language(e.path, data[:SNIFF_BYTES])
             file_entries.append(FileEntry(e.path, e.size, lang, binary, tracked=True))
-            if binary:
+            if text is None:
                 continue
             dest = base / e.path
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
-            texts[e.path] = decode_text(data)
+            texts[e.path] = text
         file_entries.sort(key=lambda f: f.path)
         graph = build_import_graph(FileIndex(root=base, files=file_entries, source="git"))
 
     manifests = [m for m in scan_manifests(root, sha) if not excludes(m.path)]
     files = FileIndex(root=root, files=file_entries, source=f"git:{sha}")
     return Snapshot(
-        root=root, commit=sha, files=files, imports=graph, manifests=manifests, texts=texts
+        root=root,
+        commit=sha,
+        files=files,
+        imports=graph,
+        manifests=manifests,
+        texts=texts,
+        skipped=skipped,
     )
 
 
@@ -209,23 +278,38 @@ def _worktree_snapshot(root: Path, cfg: Config) -> Snapshot:
     graph = build_import_graph(files)
     texts: dict[str, str] = {}
     manifests: list[ManifestResult] = []
+    skipped: list[tuple[str, str]] = []
+    # Same selection as the commit snapshot: by file name, not by the index's language
+    # (requirements*.txt has none), symlinks never followed.
     for f in files:
-        if not f.parseable or not _wanted(f.path):
+        if f.is_symlink:
+            continue
+        is_manifest = detect(f.path) is not None
+        if f.size > MAX_PARSE_BYTES and not is_manifest:
+            big = _too_large(f.path, f.size)
+            if big:
+                skipped.append(big)
+            continue
+        if not _wanted(f.path):
             continue
         try:
-            text = read_text_file(root / f.path)
+            data = (root / f.path).read_bytes()
         except OSError:
             continue
-        texts[f.path] = text
-        parser = detect(f.path, text)
-        if parser is None or "node_modules/" in f"/{f.path}":
-            continue
-        res = parse_manifest(f.path, text)
-        res.commit = WORKTREE
-        res.refs = [r.model_copy(update={"commit": WORKTREE}) for r in res.refs]
-        manifests.append(res)
+        text = _as_text(data, f.path)
+        if text is not None and f.size <= MAX_PARSE_BYTES:
+            texts[f.path] = text
+        res = _manifest_at(f.path, decode_text(data), WORKTREE)
+        if res is not None:
+            manifests.append(res)
     return Snapshot(
-        root=root, commit=WORKTREE, files=files, imports=graph, manifests=manifests, texts=texts
+        root=root,
+        commit=WORKTREE,
+        files=files,
+        imports=graph,
+        manifests=manifests,
+        texts=texts,
+        skipped=skipped,
     )
 
 
@@ -247,6 +331,28 @@ def is_test_path(path: str) -> bool:
     if any(p.lower() in _TEST_DIRS for p in parts[:-1]):
         return True
     return bool(_TEST_FILE.match(parts[-1]))
+
+
+# Words in a manifest's file name (or a requirements/ file's stem) that mark it as
+# not shipping: requirements-dev.txt, dev-requirements.txt, requirements/test.txt,
+# requirements-docs.txt, docker-compose.ci.yml, Dockerfile.test.
+_NONPROD_NAME_WORDS = frozenset(
+    {"dev", "devel", "develop", "development", "test", "tests", "testing", "ci", "docs", "doc",
+     "lint", "linting", "typing", "bench", "benchmark", "benchmarks"}
+)  # fmt: skip
+# Directories whose manifests do not ship (test directories are covered by is_test_path).
+# A bare "dev/" directory is deliberately NOT in the list: it often holds real
+# service code ("dev/requirements.txt" of a service called dev).
+_NONPROD_DIRS = frozenset({"ci", ".ci", "docs", "doc", "lint", ".github", "benchmarks"})
+
+
+def is_nonproduction_manifest(path: str) -> bool:
+    """True for manifests that by name or directory are dev/test/CI/docs/lint only."""
+    parts = path.lower().split("/")
+    if any(p in _NONPROD_DIRS for p in parts[:-1]):
+        return True
+    words = re.split(r"[-_.]+", parts[-1])
+    return any(w in _NONPROD_NAME_WORDS for w in words)
 
 
 def is_weak_scope(scope: str | None) -> bool:
@@ -342,6 +448,9 @@ class EvidenceSet(BaseModel):
     )
     category: str | None = None
     searched: str = Field(default="", description="What was searched, for absence verdicts.")
+    skipped: list[str] = Field(
+        default_factory=list, description="Source files that were too large to read."
+    )
     notes: list[str] = Field(default_factory=list)
 
     def get(self, evidence_id: str) -> Evidence | None:
@@ -380,7 +489,9 @@ class _Collector:
             ver = f" {d.version_spec}" if d.version_spec else ""
             scope = f" [{d.scope}]" if d.scope else ""
             detail = f"{path}:{start} declares {d.package}{ver}{scope}"
-            production = not is_weak_scope(d.scope) and not is_test_path(path)
+            production = not (
+                is_weak_scope(d.scope) or is_test_path(path) or is_nonproduction_manifest(path)
+            )
             dep = d
         key = (relation, o.kind, path, start, end, dep.package if dep else o.names)
         if key in self.seen:
@@ -705,4 +816,11 @@ def collect_evidence(
         c.keywords(_rule_terms(claim.rule), limit)
     es.candidates = c.build()
     es.notes.extend(c.notes)
+    if snap.skipped and claim.kind != "free":
+        shown = "; ".join(f"{p} ({why})" for p, why in snap.skipped[:5])
+        more = f" (+{len(snap.skipped) - 5} more)" if len(snap.skipped) > 5 else ""
+        es.skipped = [p for p, _ in snap.skipped]
+        es.notes.append(
+            f"incomplete evidence: {len(snap.skipped)} large file(s) skipped: {shown}{more}"
+        )
     return es
