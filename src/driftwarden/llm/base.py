@@ -62,13 +62,23 @@ class TransportError(LLMError):
 class RefusalError(LLMError):
     """The model declined the request. Not retried.
 
-    ``category`` is the provider's machine-readable reason, if any; the model's
-    refusal text is never logged.
+    ``category`` is the provider's machine-readable reason, if any. ``usage`` and
+    ``model`` are what the provider billed for the refused call, so the cost log
+    records real token counts. The model's refusal text is never logged.
     """
 
-    def __init__(self, message: str, *, category: str | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str | None = None,
+        usage: Usage | None = None,
+        model: str | None = None,
+    ):
         super().__init__(message)
         self.category = category
+        self.usage = usage
+        self.model = model
 
 
 class SchemaValidationError(LLMError):
@@ -319,7 +329,17 @@ class BaseProvider:
                 continue
             except RefusalError as exc:
                 category = f"category={exc.category}" if exc.category else None
-                self._log(request, attempt=n, outcome="refusal", started=started, error=category)
+                billed = LLMResponse(
+                    text="",
+                    model=exc.model or self.model,
+                    provider=self.name,
+                    usage=exc.usage or Usage(),
+                    stop_reason="refusal",
+                )
+                self._log(
+                    request, attempt=n, outcome="refusal", started=started, response=billed,
+                    error=category,
+                )  # fmt: skip
                 raise
             return response, started, n
 

@@ -725,3 +725,70 @@ def test_non_finite_numbers_are_invalid_json_and_retried(text):
 )
 def test_nested_json_equality_and_boolean_items(value, schema, ok):
     assert (validate_json(value, schema) == []) is ok
+
+
+# ------------------------------------------------------------------ Codex review round 2
+
+
+@pytest.mark.parametrize("text", ["9" * 5000, '{"n": ' + "1" * 5000 + "}"])
+def test_overlong_integer_is_invalid_json_and_retried(text):
+    with pytest.raises(ValueError) as ei:
+        parse_json_reply(text)
+    assert type(ei.value).__name__ == "JsonSchemaError" and ei.value.kind == "json"
+    t = FakeTransport(anthropic_reply(text), anthropic_reply('{"n": 1}'))
+    p, _ = anthropic(t)
+    assert p.complete_json("x", {"type": "object"}).attempts == 2
+
+
+def test_json_pointer_keeps_empty_tokens_and_escapes():
+    defs = {"": {"type": "integer"}, "a/b": {"type": "string"}, "~x": {"type": "boolean"}}
+    root = {"$defs": defs, "alts": [{"type": "number"}]}
+    cases = [
+        ("#/$defs/", 1, "x"),  # member named "" -- not $defs itself
+        ("#/$defs/a~1b", "s", 1),
+        ("#/$defs/~0x", True, 1),
+        ("#/%24defs/a~1b", "s", 1),  # percent-decoded fragment
+        ("#/alts/0", 1.5, "x"),  # array index
+    ]
+    for ref, good, bad in cases:
+        schema = {**root, "$ref": ref}
+        assert validate_json(good, schema) == [], ref
+        assert validate_json(bad, schema) != [], ref
+    # "#" is the root itself; "#/" is the root's member named "".
+    assert validate_json(1, {"$ref": "#/", "": {"type": "string"}}) != []
+    assert validate_json("s", {"$ref": "#/", "": {"type": "string"}}) == []
+
+
+@pytest.mark.parametrize("ref", ["#/$defs//", "#/$defs/missing", "#/allOf/5", "#$defs", "#/x/01"])
+def test_bad_json_pointers_are_config_errors(ref):
+    from driftwarden.llm.schema import check_schema
+
+    schema = {"$defs": {"": {"type": "integer"}}, "allOf": [{}], "x": [{}, {}], "$ref": ref}
+    assert check_schema(schema)
+
+
+def test_refusal_logs_billed_usage_and_model(tmp_path):
+    reply = anthropic_reply("", inp=1200, out=30, stop="refusal")
+    reply["model"] = "claude-sonnet-5-5"
+    p, sleeps = anthropic(FakeTransport(reply), log=CostLog(tmp_path))
+    with pytest.raises(RefusalError) as ei:
+        p.complete("x")
+    assert ei.value.usage.input_tokens == 1200 and ei.value.model == "claude-sonnet-5-5"
+    (rec,) = p.cost_log.records
+    assert rec["outcome"] == "refusal" and rec["model"] == "claude-sonnet-5-5"
+    assert (rec["input_tokens"], rec["output_tokens"]) == (1200, 30)
+    assert rec["cost_usd"] == pytest.approx((1200 * 2.0 + 30 * 10.0) / 1e6)
+    assert sleeps.calls == []
+
+
+def test_openai_refusal_logs_usage_but_not_text(tmp_path):
+    reply = openai_reply("", inp=40, out=6)
+    reply["choices"][0]["message"]["refusal"] = "REFUSAL-CANARY"
+    p = OpenAICompatProvider(
+        "m", base_url="http://h/v1", transport=FakeTransport(reply), cost_log=CostLog(tmp_path)
+    )
+    with pytest.raises(RefusalError):
+        p.complete("x")
+    (rec,) = p.cost_log.records
+    assert (rec["input_tokens"], rec["output_tokens"]) == (40, 6)
+    assert "REFUSAL-CANARY" not in p.cost_log.path.read_text(encoding="utf-8")

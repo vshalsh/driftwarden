@@ -28,6 +28,7 @@ import math
 import re
 from functools import lru_cache
 from typing import Any, Literal, NamedTuple, Union
+from urllib.parse import unquote
 
 from pydantic import BaseModel, ValidationError
 
@@ -108,8 +109,14 @@ def parse_json_reply(text: str) -> Any:
         raise JsonSchemaError(
             "json", [f"reply is not valid JSON: {exc}"], [f"not valid JSON ({exc.msg})"]
         ) from exc
-    except RecursionError as exc:
+    except (RecursionError, MemoryError) as exc:
         raise JsonSchemaError("json", [f"reply is {_TOO_DEEP}"], [_TOO_DEEP]) from exc
+    except ValueError as exc:  # e.g. an integer longer than sys.get_int_max_str_digits()
+        raise JsonSchemaError(
+            "json",
+            [f"reply is not valid JSON: {str(exc)[:200]}"],
+            ["not valid JSON (unparseable value)"],
+        ) from exc
 
 
 def validate_reply(data: Any, schema: Schema) -> Any:
@@ -166,16 +173,29 @@ def _is_type(value: Any, name: str) -> bool:
 
 
 def _resolve(ref: Any, root: Any) -> Any:
+    """Resolve a local ``$ref`` (a URI fragment holding an RFC 6901 JSON pointer).
+
+    ``#`` is the root. Every ``/``-separated token counts, empty ones included
+    (``#/$defs/`` is the member named "" of ``$defs``); ``~1`` -> ``/`` and
+    ``~0`` -> ``~``, after percent-decoding the fragment. Array members are
+    addressed by decimal index (``#/allOf/0``).
+    """
     if not isinstance(ref, str) or not ref.startswith("#"):
         raise InvalidSchemaError(f"only local $ref is supported: {ref!r}")
+    pointer = unquote(ref[1:])
+    if pointer and not pointer.startswith("/"):
+        raise InvalidSchemaError(f"unsupported $ref (not a JSON pointer): {ref!r}")
     node: Any = root
-    for part in ref[1:].strip("/").split("/"):
-        if not part:
-            continue
+    for part in pointer.split("/")[1:] if pointer else []:
         part = part.replace("~1", "/").replace("~0", "~")
-        if not isinstance(node, dict) or part not in node:
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        elif isinstance(node, list) and re.fullmatch(r"0|[1-9][0-9]{0,8}", part):
+            if int(part) >= len(node):
+                raise InvalidSchemaError(f"unresolvable $ref: {ref}")
+            node = node[int(part)]
+        else:
             raise InvalidSchemaError(f"unresolvable $ref: {ref}")
-        node = node[part]
     if not isinstance(node, (dict, bool)):
         raise InvalidSchemaError(f"$ref does not point at a schema: {ref}")
     return node
