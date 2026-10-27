@@ -1066,6 +1066,84 @@ def test_allowed_alternatives_are_not_cut_short(sentence):
     assert match_sentence(sentence) == [], [(m.pattern, m.rule) for m in match_sentence(sentence)]
 
 
+@pytest.mark.parametrize(
+    "sentence,expected",
+    [
+        (
+            "Services must not import boto3 outside adapters/.",
+            [("boundary", {"target": ["boto3"], "allowed_in": ["adapters/"]})],
+        ),
+        (
+            "Never use boto3 outside of `adapters/`.",
+            [("boundary", {"target": ["boto3"], "allowed_in": ["adapters/"]})],
+        ),
+        (
+            "No module may import boto3 outside adapters/.",
+            [("boundary", {"target": ["boto3"], "allowed_in": ["adapters/"]})],
+        ),
+    ],
+)
+def test_active_ban_outside_z_is_a_boundary(sentence, expected):
+    assert [(m.kind, m.rule) for m in match_sentence(sentence)] == expected
+
+
+# The principle: a match must never silently drop a scope, qualifier or list member
+# that is in the sentence. Each of these used to yield a broader / narrower claim.
+DROPPED_QUALIFIER = [
+    "PostgreSQL and Redis are the only datastores.",  # list head before the subject
+    "PostgreSQL, Redis and Kafka are the only message stores.",
+    "Redis and MongoDB must not be used.",
+    "Services and handlers must not use MongoDB.",
+    "In adapters/, services must not use MongoDB.",  # leading location
+    "Services must use structlog in production.",  # trailing location
+    "No module may import boto3 in handlers.",
+    "Services must not import pandas in handlers in production.",  # second scope
+    "Database drivers may only be imported from the persistence layer in production.",
+    "We will use Kafka as the broker within the payments domain.",
+]
+
+
+@pytest.mark.parametrize("sentence", DROPPED_QUALIFIER)
+def test_no_match_drops_a_qualifier_or_list_member(sentence):
+    assert match_sentence(sentence) == [], [(m.pattern, m.rule) for m in match_sentence(sentence)]
+
+
+def test_qualifier_guards_keep_ordinary_claims():
+    # connectives and clause-level "and" are not list heads; captured scopes are kept
+    for s, kinds_ in [
+        ("Therefore, services must not use MongoDB.", ["forbid"]),
+        ("From today, services must not use MongoDB.", ["forbid"]),
+        ("PostgreSQL is the only datastore and services must not use MongoDB.", ["only", "forbid"]),
+        ("Services must not use MongoDB in domain/.", ["forbid"]),
+        ("Don't use MongoDB, use PostgreSQL.", ["forbid", "require"]),
+    ]:
+        assert [m.kind for m in match_sentence(s)] == kinds_, s
+
+
+def test_indented_code_inside_a_list_item_is_skipped():
+    text = "- Item one.\n\n      Never use Redis.\n\n  Services must not use MongoDB.\n"
+    assert [text[a:b] for a, b in sentence_spans(text)] == [
+        "Item one.",
+        "Services must not use MongoDB.",
+    ]
+    text = "1. Item one.\n\n       Never use Redis.\n"  # content column 3, code at 7
+    assert [text[a:b] for a, b in sentence_spans(text)] == ["Item one."]
+
+
+@pytest.mark.parametrize(
+    "hint",
+    [
+        "driftwarden:\n  forbid: [alpha]\ndriftwarden:\n  forbid: [beta]",
+        "driftwarden:\n  forbid: [alpha]\n'driftwarden':\n  forbid: [beta]",
+        "DriftWarden:\n  forbid: [alpha]\ndriftwarden:\n  forbid: [beta]",
+    ],
+)
+def test_several_root_hint_blocks_are_never_cited_from_the_wrong_block(make_repo, hint):
+    _, cs = _hint_run(make_repo, hint)
+    assert not [c for c in cs.claims if c.origin == "hint"]
+    assert any("blocks in the front-matter" in u.reason for u in cs.unverified)
+
+
 def test_allowed_list_kept_whole_when_captured_whole():
     (m,) = match_sentence("Only adapters/ or infra/ may import boto3.")
     assert m.rule["allowed_in"] == ["adapters/", "infra/"]

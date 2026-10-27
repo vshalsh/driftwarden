@@ -52,6 +52,10 @@ VIOLATED, so the library errs towards no claim):
 * A require/only term that is one of several alternatives or a bound ("Redis or
   Memcached", "Python 3.11 or later", "either ..."), or no choice at all ("Chosen
   option: none"), yields no claim.
+* A match that would drop part of the sentence is ignored: a location qualifier
+  right after it that it did not capture ("must use X in production"), or a list
+  member / leading qualifier right before it ("PostgreSQL and Redis are the only
+  ...", "In adapters/, ..."). The claim would be broader or narrower than the text.
 * Fenced and indented code blocks are not prose.
 
 Known limits (recall gaps, documented rather than guessed at):
@@ -71,6 +75,11 @@ Known limits (recall gaps, documented rather than guessed at):
   ("except", "other than", "apart from", "save for", ...) drops the sentence, including
   real rules with an exception ("must not import X except in tests"); exceptions are
   not modelled.
+* Conjunctive subjects and multiple scopes are not modelled: "PostgreSQL and Redis
+  are the only datastores", "Services and handlers must not use X", "must use X in
+  production", "In adapters/, ..." yield no claim (fail closed).
+* Several root ``driftwarden:`` blocks in one front-matter are reported as
+  unverified (YAML keeps one; which lines it came from is ambiguous).
 * A second verbal clause without its own subject ("Services must not use Redis and
   must use PostgreSQL") ends the first claim but yields no claim of its own.
 * An allowed location, channel or route given as alternatives ("only via Kafka or
@@ -347,10 +356,13 @@ def _b_standardise(g: dict) -> Built:
     return _only(g["x"], g.get("cat"), default_cat="technology")
 
 
+_MODAL_IN_TERM = re.compile(r"\b(?:may|must|shall|can|cannot|should|will|is|are)\b", _I)
+
+
 def _b_no_outside(g: dict) -> Built:
     y, z = clean_term(g["y"]), _paths(g["z"])
-    if not y or not z:
-        return None
+    if not y or not z or _MODAL_IN_TERM.search(y):
+        return None  # "No module may import boto3 outside ...": a clause, not a term
     return y.lower(), {"target": [y], "allowed_in": z}
 
 
@@ -482,12 +494,19 @@ RULES: tuple[RulePattern, ...] = (
         '"Y must not be used/imported outside Z".',
         _rx(
             rf"{_subj('y')}\s+(?:must|shall|may|should|can)\s*(?:not|never|n't)\s+be\s+"
-            rf"(?:{_PASSIVE})\s+outside\s+(?:of\s+)?{_term('z')}{_STOP}"
+            rf"(?:{_PASSIVE})\s+outside\s+(?:of\s+)?{_term('z')}{_STOP}",
+            # active voice: "(A) must not import Y outside Z", "Never use Y outside Z"
+            rf"(?:(?:{_NEG_MODAL})|\bnever|\bno\s+{_term('who')}\s+(?:may|shall|can|must|"
+            rf"should|is allowed to|are allowed to))\s+(?:directly\s+)?(?:{_VERBS})\s+"
+            rf"{_term('y')}\s+outside\s+(?:of\s+)?{_term('z')}{_STOP}",
         ),
         _b_not_outside,
         examples=(
             "Cloud SDKs must not be used outside adapters/.",
             "The ORM may not be imported outside of the persistence package.",
+            "Services must not import boto3 outside adapters/.",
+            "Never import boto3 outside of `adapters/`.",
+            "No module may use the ORM outside the persistence package.",
         ),
         non_examples=("Cloud SDKs must not be used.", "Cloud SDKs must be used outside tests."),
     ),
@@ -836,14 +855,16 @@ def sentence_spans(text: str) -> list[tuple[int, int]]:
     """Character spans ``[start, end)`` of the prose sentences of ``text``.
 
     Blank lines, headings, table rows and list items start a new block; fenced
-    code and indented code (4+ columns after a blank line, outside a list) are
+    code and indented code (4+ columns beyond the enclosing indentation after a blank
+    line: column 4 outside a list, the list item's content column + 4 inside one) are
     skipped; a list marker is not part of the sentence.
     """
     blocks: list[tuple[int, int]] = []
     cur: list[int] | None = None
     fence: str | None = None  # the opening fence run ("```", "~~~~") while inside one
-    in_code = False  # indented code block
+    code_col: int | None = None  # inside an indented code block starting at this column
     in_list = False  # inside a list item (indented lines are its continuation)
+    list_col = 0  # content column of the current list item
     offset = 0
     for line in text.split("\n"):
         start, end = offset, offset + len(line)
@@ -863,22 +884,24 @@ def sentence_spans(text: str) -> list[tuple[int, int]]:
         if not stripped:
             cur = _flush(blocks, cur)
             continue
-        indented = _columns(line) >= 4
-        if in_code and indented:
+        col = _columns(line)
+        if code_col is not None and col >= code_col:
             continue
-        in_code = False
-        if indented and cur is None and not in_list:
-            in_code = True
+        code_col = None
+        m = _BULLET.match(line)
+        if in_list and cur is None and not m and col < list_col:
+            in_list = False  # a new paragraph outside the item
+        base = list_col if in_list else 0
+        if cur is None and col >= base + 4:
+            code_col = base + 4
             continue
         if _HEADING.match(line) or stripped.startswith("|"):
             cur = _flush(blocks, cur)
             in_list = False
             continue
-        m = _BULLET.match(line)
         if m:
             in_list = True
-        elif not indented and cur is None:
-            in_list = False
+            list_col = len(line[: m.end()].expandtabs(4))
         if m:
             cur = _flush(blocks, cur)
             s = start + m.end()
@@ -996,6 +1019,41 @@ def _alternative(clean: str, m: re.Match[str]) -> bool:
     return False
 
 
+# A location / exception qualifier right after a match that the match did not capture
+# ("must not import boto3 | outside adapters/", "must use X | in production"): the claim
+# would be broader than the text, so the match is dropped.
+_UNCAPTURED_QUALIFIER = re.compile(
+    r"\s*,?\s*(?:outside|within|inside|in|under|beyond|from|across|throughout|only)\b", _I
+)
+# A list joiner right before a match ("PostgreSQL and | Redis are the only datastores")
+_LIST_JOIN = re.compile(r"(?:,|\b(?:and|or|and/or)|&)\s*$", _I)
+_CLAUSE_VERB = re.compile(
+    rf"\b(?:is|are|was|were|be|been|am|must|shall|should|may|can|cannot|will|would|could|"
+    rf"do|does|did|has|have|had|need|needs|decided|agreed|chose|choose|prefer|"
+    rf"{_VERBS}|{_PASSIVE})\b|n't\b",
+    _I,
+)
+_CONNECTIVES = _LEAD | {
+    "therefore", "thus", "hence", "however", "moreover", "furthermore", "additionally",
+    "overall", "today", "here", "first", "second", "third", "lastly",
+}  # fmt: skip
+
+
+def _list_head_before(clean: str, start: int) -> bool:
+    """Text before ``start`` ends in "<term> and/or/," with no verb: the match took only
+    the last member of a list ("PostgreSQL and Redis are ..."), or a leading qualifier
+    ("In adapters/, ...") it did not capture."""
+    prefix = clean[:start]
+    j = _LIST_JOIN.search(prefix)
+    if not j:
+        return False
+    seg = re.split(r"[;:()—–]", prefix[: j.start()])[-1]
+    words = re.findall(r"[\w'/.+#@-]+", seg.lower())
+    if not words or all(w in _CONNECTIVES for w in words):
+        return False
+    return not _CLAUSE_VERB.search(seg)
+
+
 def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> list[Match]:
     """Typed matches for one sentence, in priority order, without overlaps."""
     clean = clean_sentence(sentence)
@@ -1013,6 +1071,10 @@ def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> li
                     continue  # "We do not standardise on X", "must not NOT use X"
                 if pat.kind in ("require", "only", "boundary") and _alternative(clean, m):
                     continue
+                if _UNCAPTURED_QUALIFIER.match(clean, span[1]):
+                    continue  # the sentence restricts the rule further than we captured
+                if _list_head_before(clean, span[0]):
+                    continue  # a list member or leading qualifier left uncaptured
                 built = pat.build(m.groupdict())
                 if built is None:
                     continue
@@ -1111,20 +1173,20 @@ def _indent(line: str) -> int:
     return len(line) - len(line.lstrip(" \t"))
 
 
+def _hint_key_lines(lines: list[str], fm_end: int) -> list[int]:
+    """0-based indices of root-level ``driftwarden:`` keys (quoted or not, any case)."""
+    rx = re.compile(rf"^([\"']?){HINT_KEY}\1\s*:", _I)
+    return [i for i in range(1, fm_end) if rx.match(lines[i].lstrip("﻿"))]
+
+
 def _hint_ranges(
     lines: list[str], fm_end: int
 ) -> tuple[tuple[int, int], dict[str, tuple[int, int]]]:
     """0-based inclusive line ranges: the whole ``driftwarden:`` block, and per sub-key."""
-    key_idx = next(
-        (
-            i
-            for i in range(1, fm_end)
-            if re.match(rf"^([\"']?){HINT_KEY}\1\s*:", lines[i].lstrip("﻿"), _I)
-        ),
-        None,
-    )
-    if key_idx is None:
-        return (0, 0), {}
+    roots = _hint_key_lines(lines, fm_end)
+    if len(roots) != 1:
+        return (0, 0), {}  # none, or several blocks (YAML keeps one): not locatable
+    key_idx = roots[0]
     end = fm_end
     for j in range(key_idx + 1, fm_end):
         if lines[j].strip() and not lines[j][0].isspace() and not lines[j].lstrip().startswith("#"):
@@ -1278,18 +1340,20 @@ def extract_hint_claims(decision: Decision, text: str, *, start: int = 0) -> Rul
             quote="\n".join(lines[a : b + 1]),
         )
 
+    has_block = bool(_hint_key_lines(lines, fm_end))
+    where = prov(whole if whole != (0, 0) else (0, fm_end))
     try:
         data, duplicates = _load_front_matter("\n".join(lines[1:fm_end]))
     except yaml.YAMLError as exc:
-        if subs or whole != (0, 0):
+        if has_block:
             msg = (str(exc).splitlines() or [type(exc).__name__])[0]
             reason = f"front-matter is not valid YAML: {msg}"
-            result.rejected.append(RejectedHint("hint", "front-matter", None, prov(whole), reason))
+            result.rejected.append(RejectedHint("hint", "front-matter", None, where, reason))
         return result
     except Exception as exc:  # RecursionError on deep nesting etc.: report, never raise
-        if subs or whole != (0, 0):
+        if has_block:
             reason = f"front-matter could not be read ({type(exc).__name__}): too deeply nested?"
-            result.rejected.append(RejectedHint("hint", "front-matter", None, prov(whole), reason))
+            result.rejected.append(RejectedHint("hint", "front-matter", None, where, reason))
         return result
     if not isinstance(data, dict):
         return result
@@ -1318,7 +1382,14 @@ def extract_hint_claims(decision: Decision, text: str, *, start: int = 0) -> Rul
     if whole == (0, 0):
         # The YAML has the block but its lines cannot be located: never cite the
         # opening '---' (it would verify); report instead.
-        reason = f"cannot locate the '{HINT_KEY}:' block lines in the front-matter"
+        n_roots = len(_hint_key_lines(lines, fm_end))
+        if n_roots > 1:
+            reason = (
+                f"{n_roots} '{HINT_KEY}:' blocks in the front-matter: YAML keeps only one, "
+                "so which lines the hints come from is ambiguous; merge them into one block"
+            )
+        else:
+            reason = f"cannot locate the '{HINT_KEY}:' block lines in the front-matter"
         block = prov((0, fm_end))
         result.rejected.append(RejectedHint("hint", HINT_KEY, hints, block, reason))
         return result
