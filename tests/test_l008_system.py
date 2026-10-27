@@ -582,45 +582,55 @@ def test_rule_decided_verified_runs_once_and_keeps_the_rule_verdict(repo, tmp_pa
     assert runner.summary()["consistency_rate"] is None
 
 
+def _assert_failed_rule_gate_preserved(v, model, runs=3):
+    """Merged L-007: a failed rule gate is never overridden by the model. Every run returns the
+    rule verdict as Could not verify (rule origin, failed evidence and reasons kept, the model's
+    proposal only in notes); the runner therefore still votes (executed == runs, no skip) and the
+    voted verdict is the same Could not verify, never VIOLATED/HOLDING."""
+    assert len(model.requests) == runs
+    assert (v.status, v.grounding, v.origin) == (
+        "UNKNOWN",
+        "MISMATCH",
+        "rule",
+    ) and v.could_not_verify
+    assert v.consistency.basis == "vote" and v.consistency.executed == runs
+    assert len(v.consistency.votes) == runs
+    assert all(
+        (vt.status, vt.grounding, vt.origin) == ("UNKNOWN", "MISMATCH", "rule")
+        for vt in v.consistency.votes
+    )
+    assert v.evidence and any("simulated: rule evidence" in r for r in v.reasons)  # kept
+    # the rules' status is parked (never the model's); on the verdict only when the runs agree
+    assert [vt.proposed_status for vt in v.consistency.votes] == ["VIOLATED"] * runs
+    assert v.proposed_status == ("VIOLATED" if v.consistency.agreement else None)
+
+
 def test_rule_gate_failing_does_not_skip_the_vote(repo, rule_gate_fails):
-    """Criterion (1): rule-decided but gate FAILS -> falls through to the full vote."""
+    """Criterion (1): rule-decided but gate FAILS -> full vote, rule grounding preserved."""
     v, model, _ = run_one(repo, per_run("HOLDING"), claim=violated_claim(repo))
-    assert (
-        len(model.requests) == 3 and v.consistency.basis == "vote" and v.consistency.executed == 3
-    )
-    assert any("rule verdict could not be verified" in n for n in v.notes)
+    _assert_failed_rule_gate_preserved(v, model)
+    assert any("ignored because the rule evidence could not be verified" in n for n in v.notes)
+    assert v.consistency.agreement is True  # three identical Could-not-verify runs
 
 
-def test_rule_gate_failing_flaky_model_is_unknown(repo, rule_gate_fails):
-    v, model, _ = run_one(
-        repo, per_run("HOLDING", "VIOLATED", "HOLDING"), claim=violated_claim(repo)
-    )
-    assert len(model.requests) == 3
-    assert (v.status, v.grounding) == ("UNKNOWN", "VERIFIED")
-    assert v.reasons[0].startswith("inconsistent across runs:")
-
-
-def test_rule_gate_failing_model_error_is_could_not_verify_not_a_violation(repo, rule_gate_fails):
-    v, model, _ = run_one(repo, per_run("ERROR"), claim=violated_claim(repo))
-    assert len(model.requests) == 3
-    assert (v.status, v.grounding) == ("UNKNOWN", "MISMATCH") and v.could_not_verify
-    assert v.consistency.basis == "vote"
-
-
-def test_rule_gate_failing_fabricated_model_violation_is_could_not_verify(repo, rule_gate_fails):
-    v, _, _ = run_one(repo, per_run("FAKE-VIOLATED"), claim=violated_claim(repo))
-    assert (v.status, v.grounding) == ("UNKNOWN", "MISMATCH")
-
-
-def test_rule_gate_failing_stable_grounded_holding_replaces_the_rule_violation_with_a_note(
-    repo, rule_gate_fails
-):
-    """Observation, L-007 area (not L-008): when the rule gate fails, a grounded model HOLDING
-    becomes the verdict and the rules' VIOLATED survives only as a note. The runner passes it
-    through faithfully (3/3 agree, note kept) - it does not add or remove anything."""
-    v, _, _ = run_one(repo, per_run("HOLDING"), claim=violated_claim(repo))
-    assert (v.status, v.grounding, v.origin) == ("HOLDING", "VERIFIED", "llm")
-    assert any("rule verdict could not be verified" in n for n in v.notes)
+@pytest.mark.parametrize(
+    "seq",
+    [
+        ("HOLDING", "VIOLATED", "HOLDING"),  # flaky grounded model
+        ("HOLDING",),  # stable grounded HOLDING must not replace the rule finding
+        ("VIOLATED",),
+        ("FAKE-VIOLATED",),
+        ("ERROR",),
+    ],
+)
+def test_rule_gate_failing_is_could_not_verify_whatever_the_model_does(repo, rule_gate_fails, seq):
+    v, model, runner = run_one(repo, per_run(*seq), claim=violated_claim(repo))
+    _assert_failed_rule_gate_preserved(v, model)
+    assert v.status not in ("VIOLATED", "HOLDING")
+    errored = [vt.error is not None for vt in v.consistency.votes]
+    assert any(errored) == (seq == ("ERROR",))  # a model error is recorded on its run
+    if seq == ("ERROR",):
+        assert v.consistency.agreement is False and "failed" in " ".join(v.reasons)
 
 
 def test_rule_decided_claim_with_flaky_model_is_stable_and_records_the_proposal(repo):
@@ -708,7 +718,7 @@ def test_voted_evidence_order_follows_first_appearance_so_reorders_only_permute(
 
 def test_same_candidate_with_different_subranges_is_kept_distinct_and_valid(repo):
     def fn(req, n):
-        return reply(req, "HOLDING", quote=None if n != 2 else "healthz")
+        return reply(req, "HOLDING", quote=None if n != 2 else "def healthz")
 
     v, _, _ = run_one(repo, fn)
     assert v.status == "HOLDING" and len(v.evidence) == 2

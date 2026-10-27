@@ -219,13 +219,13 @@ def test_unanimous_vote_keeps_status_and_reverifies_the_evidence(judge_repo, tmp
     def fn(req):
         calls["n"] += 1
         c = candidates_in(req.prompt)[0]
-        q = "healthz" if calls["n"] == 2 else None
+        q = "def healthz" if calls["n"] == 2 else None
         return {"status": "HOLDING", "rationale": "ok", "citations": [cite(c, q)]}
 
     runner = ConsistencyRunner(Judge(repo, mode="llm", provider=FakeModel(fn), ledger=ledger))
     v = runner.run(claim)
     assert (v.status, v.grounding) == ("HOLDING", "VERIFIED")
-    assert [e.ref.quote == "healthz" for e in v.evidence] == [False, True]
+    assert [e.ref.quote == "def healthz" for e in v.evidence] == [False, True]
     assert len(seen) == 1 and seen[0].evidence == v.evidence  # voted evidence re-gated
     assert v.checks and all(c.status == "VERIFIED" for c in v.checks)
     assert len(v.checks) == len(v.evidence)  # fresh G2 per voted item, no stale run checks
