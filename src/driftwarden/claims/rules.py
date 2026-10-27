@@ -213,6 +213,7 @@ def _strip_lead(raw: str | None) -> str | None:
 _NOT_ONE_TERM = re.compile(
     r"\b(?:or|nor|and/or|either|neither|rather than|versus|vs|at least|at most)\b|\+$", _I
 )
+_NEGATIVE_NP = re.compile(r"(?:no|none|neither|nothing|never|nobody|not)\b", _I)
 _NO_CHOICE = {
     "none", "nothing", "n/a", "na", "tbd", "tba", "undecided", "no option", "nothing yet",
     "not decided", "not yet decided", "to be decided", "pending", "unknown", "-",
@@ -224,6 +225,8 @@ def _single_term(x: str | None) -> str | None:
     x = clean_term(x)
     if not x or _NOT_ONE_TERM.search(x) or x.lower().strip(" .!") in _NO_CHOICE:
         return None
+    if _NEGATIVE_NP.match(x):
+        return None  # "We use no external database": a prohibition, not a require
     return x
 
 
@@ -406,7 +409,8 @@ def _b_not_be_used(g: dict) -> Built:
 
 
 def _b_never(g: dict) -> Built:
-    return _forbid(None, split_list(g["y"]), action=_base_verb(g["v"]))
+    scope = _paths(g.get("scope"))
+    return _forbid(None, split_list(g["y"]), action=_base_verb(g["v"]), scope=scope)
 
 
 def _require(subject: str | None, x: str | None, cat: str | None) -> Built:
@@ -709,7 +713,10 @@ RULES: tuple[RulePattern, ...] = (
         "forbid-never",
         "forbid",
         '"Never import Y" / "We never use Y".',
-        _rx(rf"\b(?:we\s+|they\s+)?never\s+(?P<v>{_VERBS})\s+{_list('y')}{_LSTOP}"),
+        _rx(
+            rf"\b(?:we\s+|they\s+)?never\s+(?P<v>{_VERBS})\s+{_list('y')}"
+            rf"(?:\s+(?:in|from|within|inside)\s+{_term('scope')})?{_LSTOP}"
+        ),
         _b_never,
         examples=("Never import pandas in request handlers.", "We never use ORMs."),
         non_examples=("We never expected this growth.", "It never rains."),
@@ -807,7 +814,8 @@ PATTERNS: dict[str, RulePattern] = {p.id: p for p in RULES}
 # --------------------------------------------------------------------------- sentences
 
 _BULLET = re.compile(r"^\s*(?:[*+-]|\d+[.)])\s+")
-_FENCE_LINE = re.compile(r"^\s*(```|~~~)")
+# Any indentation (fences nested in list items); skipping too much only costs recall.
+_FENCE_LINE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
 _HEADING = re.compile(r"^\s*#{1,6}(\s|$)")
 _SENT_END = re.compile(r"[.!?]+[\"')\]]*(?=\s|$)")
 _ABBREV = {"e.g", "i.e", "etc", "vs", "cf", "approx", "incl", "esp", "resp", "fig", "no"}
@@ -822,20 +830,25 @@ def sentence_spans(text: str) -> list[tuple[int, int]]:
     """
     blocks: list[tuple[int, int]] = []
     cur: list[int] | None = None
-    in_fence = False
+    fence: str | None = None  # the opening fence run ("```", "~~~~") while inside one
     in_code = False  # indented code block
     in_list = False  # inside a list item (indented lines are its continuation)
     offset = 0
     for line in text.split("\n"):
         start, end = offset, offset + len(line)
         offset = end + 1
-        if _FENCE_LINE.match(line):
-            in_fence = not in_fence
+        fm = _FENCE_LINE.match(line.rstrip("\r"))
+        if fence is not None:
+            # CommonMark: closed only by the same character, at least as long, no info
+            if fm and fm.group(1)[0] == fence[0] and len(fm.group(1)) >= len(fence):
+                if not fm.group(2).strip():
+                    fence = None
+            continue
+        if fm and not (fm.group(1)[0] == "`" and "`" in fm.group(2)):
+            fence = fm.group(1)
             cur = _flush(blocks, cur)
             continue
         stripped = line.strip()
-        if in_fence:
-            continue
         if not stripped:
             cur = _flush(blocks, cur)
             continue
@@ -1055,7 +1068,11 @@ def extract_rule_claims(decision: Decision, text: str | None = None) -> RuleResu
                 )
             )
     if text is not None:
-        hints = extract_hint_claims(decision, text, start=n)
+        try:
+            hints = extract_hint_claims(decision, text, start=n)
+        except Exception as exc:  # last line of defence: one odd ADR never aborts a scan
+            reason = f"front-matter hints could not be read ({type(exc).__name__}: {exc})"
+            hints = RuleResult(rejected=[RejectedHint("hint", HINT_KEY, None, None, reason)])
         result.claims.extend(hints.claims)
         result.rejected.extend(hints.rejected)
     return result
@@ -1076,7 +1093,11 @@ def _hint_ranges(
 ) -> tuple[tuple[int, int], dict[str, tuple[int, int]]]:
     """0-based inclusive line ranges: the whole ``driftwarden:`` block, and per sub-key."""
     key_idx = next(
-        (i for i in range(1, fm_end) if re.match(rf"^{HINT_KEY}\s*:", lines[i].lstrip("﻿"), _I)),
+        (
+            i
+            for i in range(1, fm_end)
+            if re.match(rf"^([\"']?){HINT_KEY}\1\s*:", lines[i].lstrip("﻿"), _I)
+        ),
         None,
     )
     if key_idx is None:
@@ -1098,10 +1119,10 @@ def _hint_ranges(
     if children:
         child_indent = min(_indent(lines[j]) for j in children)
         keys = [
-            (j, m.group(1).lower())
+            (j, m.group(2).lower())
             for j in children
             if _indent(lines[j]) == child_indent
-            and (m := re.match(r"^\s*([A-Za-z_-]+)\s*:", lines[j]))
+            and (m := re.match(r"^\s*([\"']?)([A-Za-z_-]+)\1\s*:", lines[j]))
         ]
         for k, (j, name) in enumerate(keys):
             nxt = keys[k + 1][0] if k + 1 < len(keys) else end
@@ -1129,7 +1150,8 @@ def _hint_specs(kind: str, value: Any) -> list[tuple[str, Any, str | None]]:
             out = []
             for subj, items in value.items():
                 lst = _as_list(items)
-                out.append((str(subj), {kind: lst or items}, None if lst else "expected a list"))
+                name = str(subj).strip() or "codebase"
+                out.append((name, {kind: lst or items}, None if lst else "expected a list"))
             return out or [("codebase", value, "empty mapping")]
         lst = _as_list(value)
         return [("codebase", {kind: lst or value}, None if lst else "expected a list of names")]
@@ -1138,8 +1160,12 @@ def _hint_specs(kind: str, value: Any) -> list[tuple[str, Any, str | None]]:
             out = []
             for cat, items in value.items():
                 lst = _as_list(items)
-                rule = {"only": lst or items, "category": str(cat)}
-                out.append((str(cat), rule, None if lst else "expected a list"))
+                name = str(cat).strip()
+                rule = {"only": lst or items, "category": name}
+                error = None if lst else "expected a list"
+                if not name:
+                    error = "empty category name"
+                out.append((name or "technology", rule, error))
             return out or [("technology", value, "empty mapping")]
         lst = _as_list(value)
         return [("technology", {"only": lst or value}, None if lst else "expected a list")]
@@ -1155,7 +1181,8 @@ def _hint_specs(kind: str, value: Any) -> list[tuple[str, Any, str | None]]:
                 if key in entry:
                     rule[key] = _as_list(entry[key]) or entry[key]
             target = rule.get("target")
-            subj = str(entry.get("subject") or (target[0] if isinstance(target, list) else ""))
+            first = target[0] if isinstance(target, list) and target else ""
+            subj = str(entry.get("subject") or first).strip()
             out.append((subj.lower() or "boundary", rule, None))
         return out
     # free
@@ -1265,6 +1292,14 @@ def extract_hint_claims(decision: Decision, text: str, *, start: int = 0) -> Rul
         )
         return result
 
+    if whole == (0, 0):
+        # The YAML has the block but its lines cannot be located: never cite the
+        # opening '---' (it would verify); report instead.
+        reason = f"cannot locate the '{HINT_KEY}:' block lines in the front-matter"
+        block = prov((0, fm_end))
+        result.rejected.append(RejectedHint("hint", HINT_KEY, hints, block, reason))
+        return result
+
     n = start
     for raw_kind, value in hints.items():
         kind = str(raw_kind).lower()
@@ -1273,16 +1308,21 @@ def extract_hint_claims(decision: Decision, text: str, *, start: int = 0) -> Rul
             reason = f"unknown hint kind {raw_kind!r} (expected one of {', '.join(_HINT_KINDS)})"
             result.rejected.append(RejectedHint(kind, kind, value, p, reason))
             continue
-        for subject, rule, error in _hint_specs(kind, value):
+        try:
+            specs = _hint_specs(kind, value)
+        except Exception as exc:  # odd shapes: report, never raise
+            reason = f"invalid front-matter hint: cannot read ({type(exc).__name__}: {exc})"
+            result.rejected.append(RejectedHint(kind, kind, value, p, reason))
+            continue
+        for subject, rule, error in specs:
             errors = [error] if error else rule_errors(kind, rule)
             if errors:
                 reason = "invalid front-matter hint: " + "; ".join(errors)
                 result.rejected.append(RejectedHint(kind, subject, rule, p, reason))
                 continue
-            n += 1
-            result.claims.append(
-                Claim(
-                    id=f"{decision.id}.c{n}",
+            try:
+                claim = Claim(
+                    id=f"{decision.id}.c{n + 1}",
                     kind=kind,  # type: ignore[arg-type]
                     subject=subject,
                     rule=rule,
@@ -1291,5 +1331,11 @@ def extract_hint_claims(decision: Decision, text: str, *, start: int = 0) -> Rul
                     origin="hint",
                     pattern=f"hint:{kind}",
                 )
-            )
+            except ValueError as exc:  # pydantic ValidationError is a ValueError
+                msg = (str(exc).splitlines() or [""])[-1].strip()
+                reason = f"invalid front-matter hint: {msg or type(exc).__name__}"
+                result.rejected.append(RejectedHint(kind, subject, rule, p, reason))
+                continue
+            n += 1
+            result.claims.append(claim)
     return result

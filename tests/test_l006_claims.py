@@ -867,3 +867,134 @@ def test_schema_allows_out_of_range_lines_so_g1_reports_them():
     for a in (0, -1):
         claims = [{**item, "line_start": a, "line_end": a}]
         assert validate_json({"claims": claims}, CLAIMS_SCHEMA) == []
+
+
+# ------------------------------------------------------------------ PR #13 review (Codex P2s)
+
+
+def test_never_keeps_its_location_qualifier():
+    (m,) = match_sentence("Never import pandas in request handlers.")
+    assert m.rule == {"forbid": ["pandas"], "action": "import", "scope": ["request handlers"]}
+    (m,) = match_sentence("We never use ORMs.")
+    assert m.rule == {"forbid": ["ORMs"], "action": "use"}
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "We use no external database.",
+        "We will use no ORM.",
+        "Services must use none of the cloud SDKs.",
+        "We will use nothing but stdlib.",
+        "PostgreSQL is not the only datastore.",
+    ],
+)
+def test_negative_noun_phrase_is_not_a_require_or_only(sentence):
+    assert [m for m in match_sentence(sentence) if m.kind in ("require", "only")] == []
+
+
+HINT_FM = "---\n{hint}\n---\n# 1. X\n\n## Decision\n\nPostgreSQL is the only datastore.\n"
+
+
+def _hint_run(make_repo, hint, name="h"):
+    repo = make_repo({"docs/adr/0001-x.md": HINT_FM.format(hint=hint)}, name=name)
+    (d,) = scan_adrs(repo).decisions
+    return repo, structure_decision(d, repo, mode="offline")
+
+
+def test_hint_dedup_is_subject_aware(make_repo):
+    _, cs = _hint_run(
+        make_repo, "driftwarden:\n  require: {services: [structlog], handlers: [structlog]}"
+    )
+    assert [(c.subject, c.rule) for c in cs.claims if c.origin == "hint"] == [
+        ("services", {"require": ["structlog"]}),
+        ("handlers", {"require": ["structlog"]}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "hint",
+    [
+        "driftwarden:\n  boundary: [{target: [], allowed_in: [adapters/]}]",
+        "driftwarden:\n  boundary: [{target: [''], allowed_in: [adapters/]}]",
+        "driftwarden:\n  boundary: [{target: boto3, allowed_in: [], subject: '  '}]",
+        "driftwarden:\n  boundary: [{target: {a: 1}, via: null}]",
+        "driftwarden:\n  boundary: []",
+        "driftwarden:\n  boundary: [null, 3, [x]]",
+        "driftwarden:\n  require: {'  ': [structlog]}",
+        "driftwarden:\n  require: {null: [x], 3: [y]}",
+        "driftwarden:\n  only: {'': [pg]}",
+        "driftwarden:\n  only: {datastore: []}",
+        "driftwarden:\n  forbid: {}",
+        "driftwarden:\n  forbid: [[a], {b: c}]",
+        "driftwarden:\n  free: ['', '   ']",
+        "driftwarden:\n  free: []",
+        "driftwarden:\n  ? [complex, key]\n  : [x]",
+        "driftwarden: {forbid: [x]}\n'driftwarden': {forbid: [y]}",
+        "driftwarden: []",
+        "driftwarden: ''",
+    ],
+)
+def test_malformed_hints_never_raise_and_are_reported(make_repo, hint):
+    repo, cs = _hint_run(make_repo, hint)
+    assert [c.kind for c in cs.claims if c.origin == "rule"] == ["only"]
+    for c in cs.claims:
+        assert verify_source_quote(repo, c.source).status == "VERIFIED"
+    for u in cs.unverified:
+        assert u.origin == "hint" and u.reason
+
+
+def test_empty_boundary_target_is_reported_not_raised(make_repo):
+    _, cs = _hint_run(
+        make_repo, "driftwarden:\n  boundary: [{target: [], allowed_in: [adapters/]}]"
+    )
+    (u,) = cs.unverified
+    assert "target" in u.reason
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_quoted_root_key_cites_the_block_lines(make_repo, quote):
+    _, cs = _hint_run(make_repo, f"{quote}driftwarden{quote}:\n  {quote}forbid{quote}: [mongodb]")
+    (h,) = [c for c in cs.claims if c.origin == "hint"]
+    assert (h.source.line_start, h.source.line_end) == (3, 3)
+    assert h.source.quote == f"  {quote}forbid{quote}: [mongodb]"
+
+
+def test_unlocatable_hint_block_is_unverified_not_cited_as_dashes(make_repo):
+    # a flow mapping at the root: the key exists in YAML but not at the start of a line
+    _, cs = _hint_run(make_repo, "{driftwarden: {forbid: [mongodb]}}")
+    assert not [c for c in cs.claims if c.origin == "hint"]
+    (u,) = cs.unverified
+    assert "cannot locate" in u.reason
+    assert all(c.source.quote.strip() != "---" for c in cs.claims)
+
+
+def test_whitespace_subject_from_llm_is_unverified_not_a_crash(make_repo):
+    q = "PostgreSQL is the only datastore."
+    repo = make_repo({"docs/adr/0001-x.md": f"# 1. X\n\n## Decision\n\n{q}\n"})
+    (d,) = scan_adrs(repo).decisions
+    line = d.source.line_start
+    props = [
+        {"kind": "free", "subject": "   ", "rule": {"text": "t"}, "quote": q,
+         "line_start": line, "line_end": line},
+        {"kind": "free", "subject": "ok", "rule": {"text": "u"}, "quote": q,
+         "line_start": line, "line_end": line},
+    ]  # fmt: skip
+    cs = structure_decision(d, repo, mode="llm", provider=scripted(lambda a, r: props))
+    assert [c.subject for c in cs.claims if c.origin == "llm"] == ["ok"]
+    (u,) = cs.unverified
+    assert u.origin == "llm" and "subject" in u.reason
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "````md\n```\nNever use Redis.\n```\n````\n\nNo SQL outside repo/.",
+        "~~~~\n~~~\nNever use Redis.\n~~~\n~~~~\n\nNo SQL outside repo/.",
+        "```\n~~~\nNever use Redis.\n~~~\n```\n\nNo SQL outside repo/.",
+        "```\nNever use Redis.\n``` not a close\nNever use Kafka.\n```\n\nNo SQL outside repo/.",
+    ],
+)
+def test_fences_close_only_on_a_matching_fence(body):
+    spans = [body[a:b] for a, b in sentence_spans(body)]
+    assert spans == ["No SQL outside repo/."], spans

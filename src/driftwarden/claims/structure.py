@@ -25,7 +25,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from driftwarden import git
 from driftwarden.claims.rules import extract_rule_claims
@@ -208,13 +208,16 @@ def dedup_key(claim: Claim) -> str:
 def _duplicate(new: Claim, old: Claim) -> bool:
     """``new`` restates ``old``.
 
-    Two rule-library claims are duplicates only when everything matches (``dedup_key``):
-    "must not use X in domain/" and "... in reports/" are two claims. A hint or model
-    claim names its subject freely and often omits qualifiers, so it restates ``old``
-    when the key terms match and every qualifier both state agrees."""
+    Two rule-library claims, or two hint claims, are duplicates only when everything
+    matches (``dedup_key``): "must not use X in domain/" and "... in reports/" are two
+    claims. Across origins (hint vs rule, model vs anything) subjects are named
+    differently and qualifiers are often omitted, so ``new`` restates ``old`` when the
+    key terms match and every qualifier both state agrees."""
     if claim_key(new.kind, new.rule) != claim_key(old.kind, old.rule):
         return False
-    if new.origin == "rule" and old.origin == "rule":
+    if new.origin == old.origin and new.origin in ("rule", "hint"):
+        # Rule and hint subjects are deterministic (a hint's subject is the team's own
+        # mapping key: ``require: {services: [...], handlers: [...]}`` is two claims).
         return dedup_key(new) == dedup_key(old)
     qn, qo = qualifiers(new.kind, new.rule), qualifiers(old.kind, old.rule)
     return all(qo[k] == v for k, v in qn.items() if k in qo)
@@ -344,15 +347,30 @@ def structure_decision(
                 reason = "malformed rule: " + "; ".join(errors)
                 reject("llm", p["kind"], p["subject"], p["rule"], prov, reason, res)
             else:
-                claim = Claim(
-                    id=f"{decision.id}.llm",
-                    kind=p["kind"],
-                    subject=p["subject"],
-                    rule=p["rule"],
-                    source=prov,
-                    decision_id=decision.id,
-                    origin="llm",
-                )
+                try:
+                    claim = Claim(
+                        id=f"{decision.id}.llm",
+                        kind=p["kind"],
+                        subject=p["subject"],
+                        rule=p["rule"],
+                        source=prov,
+                        decision_id=decision.id,
+                        origin="llm",
+                    )
+                except ValidationError as exc:  # e.g. a whitespace-only subject
+                    bad = "; ".join(
+                        f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()
+                    )
+                    reject(
+                        "llm",
+                        p["kind"],
+                        p["subject"],
+                        p["rule"],
+                        prov,
+                        f"invalid claim: {bad}",
+                        res,
+                    )
+                    continue
                 verified.append((claim, res))
 
     # Merge + de-duplicate (verified only; unverified are always reported), then number.
