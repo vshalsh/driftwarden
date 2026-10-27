@@ -998,3 +998,76 @@ def test_whitespace_subject_from_llm_is_unverified_not_a_crash(make_repo):
 def test_fences_close_only_on_a_matching_fence(body):
     spans = [body[a:b] for a, b in sentence_spans(body)]
     assert spans == ["No SQL outside repo/."], spans
+
+
+# ------------------------------------------------------------------ PR #13 review round 2
+
+
+@pytest.mark.parametrize(
+    "sentence,expected",
+    [
+        (
+            "Services must not use Redis and PostgreSQL is the only datastore.",
+            [
+                ("only", {"only": ["PostgreSQL"], "category": "datastore"}),
+                ("forbid", {"forbid": ["Redis"], "action": "use"}),
+            ],
+        ),
+        (
+            "Services must not use Redis and must use PostgreSQL.",
+            [("forbid", {"forbid": ["Redis"], "action": "use"})],
+        ),
+        (
+            "Services must not use Redis but may use Memcached.",
+            [("forbid", {"forbid": ["Redis"], "action": "use"})],
+        ),
+        # genuine lists stay lists
+        (
+            "Services must not use Redis and MongoDB.",
+            [("forbid", {"forbid": ["Redis", "MongoDB"], "action": "use"})],
+        ),
+        (
+            "Services must not use Redis and MongoDB in domain/.",
+            [("forbid", {"forbid": ["Redis", "MongoDB"], "action": "use", "scope": ["domain/"]})],
+        ),
+    ],
+)
+def test_and_starts_a_new_clause_only_before_a_verb(sentence, expected):
+    assert [(m.kind, m.rule) for m in match_sentence(sentence)] == expected
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Services must not import pandas except in tests.",
+        "Never use Redis except in tests.",
+        "No service may use MongoDB other than the reporting job.",
+        "Do not use boto3 apart from the adapters.",
+        "Services must use structlog, save for legacy jobs.",
+        "MongoDB is forbidden, with the exception of analytics.",
+    ],
+)
+def test_exception_clause_yields_no_unconditional_claim(sentence):
+    assert match_sentence(sentence) == []
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Services communicate only via Kafka or RabbitMQ.",
+        "Services must communicate exclusively through gRPC or REST.",
+        "Cloud SDKs may be imported only from adapters/ or infra/.",
+        "All database access must go through the repository layer or the cache.",
+        "No SQL outside repo/ or db/.",
+        "We use only Redis or Memcached for caching.",
+    ],
+)
+def test_allowed_alternatives_are_not_cut_short(sentence):
+    assert match_sentence(sentence) == [], [(m.pattern, m.rule) for m in match_sentence(sentence)]
+
+
+def test_allowed_list_kept_whole_when_captured_whole():
+    (m,) = match_sentence("Only adapters/ or infra/ may import boto3.")
+    assert m.rule["allowed_in"] == ["adapters/", "infra/"]
+    (m,) = match_sentence("Services communicate only via Kafka.")
+    assert m.rule == {"only": ["Kafka"], "between": "Services"}

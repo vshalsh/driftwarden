@@ -67,8 +67,16 @@ Known limits (recall gaps, documented rather than guessed at):
 * "We decided not to use X", "We are not going to use X" and "We no longer use X"
   yield no claim (only "will not / won't / do not / don't / cannot use X" and
   "(we will) avoid X" are forbid patterns).
-* The conditional guard is lexical: any "if"/"unless"/"whether" drops the sentence,
-  including real rules with an exception clause ("must not use X unless approved").
+* The conditional guard is lexical: any "if"/"unless"/"whether" or exception clause
+  ("except", "other than", "apart from", "save for", ...) drops the sentence, including
+  real rules with an exception ("must not import X except in tests"); exceptions are
+  not modelled.
+* A second verbal clause without its own subject ("Services must not use Redis and
+  must use PostgreSQL") ends the first claim but yields no claim of its own.
+* An allowed location, channel or route given as alternatives ("only via Kafka or
+  RabbitMQ", "only from adapters/ or infra/", "No SQL outside repo/ or db/") yields
+  no claim rather than a stricter one ("Only adapters/ or infra/ may import X" keeps
+  both paths).
 * An "any of" alternative ("We will use Redis or Memcached") is not modelled; it
   yields no claim rather than a stricter require.
 """
@@ -129,8 +137,11 @@ _LSTOP = (
     r"\s*$|"
     # a new clause after a comma ("Don't use MongoDB, use PostgreSQL"): not a list item
     r"\s*,\s*(?:but|instead|rather|use|prefer|we|they|which|so|and\s+(?:use|prefer))\b|"
-    # ", and PostgreSQL is the only datastore": a new clause with its own verb
-    r"\s*,\s*and\s+(?:[\w.+#/@'-]+\s+){1,4}?(?:is|are|must|shall|should|will|may|can)\b)"
+    # "(,) and PostgreSQL is the only datastore", "and must use X", "but never Y":
+    # a new clause with its own verb, with or without a comma (a plain "X and Y" stays a list)
+    r"\s*,?\s+(?:and|but|then)\s+(?:(?:must|shall|should|may|can|cannot|will|won't|do|does|"
+    r"don't|never|always|is|are)\b|"
+    r"(?:[\w.+#/@'-]+\s+){1,4}?(?:is|are|must|shall|should|will|may|can|cannot)\b))"
 )
 
 _VERBS = (
@@ -946,6 +957,9 @@ _NOT_A_DECISION = re.compile(
     r"|\b(?:maybe|perhaps|possibly|probably|potentially|hopefully|ideally|tentatively|"
     r"likely|might)\b"
     r"|\b(?:if|unless|in case|provided that|assuming|whether)\b"
+    # an exception clause makes the rule conditional ("must not import X except in tests")
+    r"|\b(?:except|excepting|excluding|other than|apart from|aside from|save for|"
+    r"with the exception of|barring)\b"
     r"|\b(?:where|when|if|as) (?:possible|feasible|practical|appropriate|needed|necessary)\b"
     r"|\b(?:yet|for now|for the time being|at the moment|at present|temporarily|initially)\b",
     _I,
@@ -965,12 +979,21 @@ def _negated(clean: str, start: int) -> bool:
     return bool(_NEGATOR.search(clause))
 
 
+# Capture groups that name what is allowed / required / the way through: a list cut
+# short at "or" ("only via Kafka or RabbitMQ", "only in adapters/ or infra/") is
+# stricter than the text. (Targets and forbid lists are split on "or" instead.)
+_POSITIVE_GROUPS = ("x", "q", "z", "b")
+
+
 def _alternative(clean: str, m: re.Match[str]) -> bool:
-    """The positive term of ``m`` is one alternative or a bound, not a single choice."""
-    if "x" not in m.re.groupindex or m.group("x") is None:
-        return False
-    a, b = m.span("x")
-    return bool(_ALT_AFTER.match(clean, b) or _ALT_BEFORE.search(clean[:a]))
+    """A positive term of ``m`` is one alternative or a bound, not a single choice."""
+    for g in _POSITIVE_GROUPS:
+        if g not in m.re.groupindex or m.group(g) is None:
+            continue
+        a, b = m.span(g)
+        if _ALT_AFTER.match(clean, b) or _ALT_BEFORE.search(clean[:a]):
+            return True
+    return False
 
 
 def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> list[Match]:
@@ -988,7 +1011,7 @@ def match_sentence(sentence: str, patterns: Iterable[RulePattern] = RULES) -> li
                     continue
                 if _negated(clean, span[0]):
                     continue  # "We do not standardise on X", "must not NOT use X"
-                if pat.kind in ("require", "only") and _alternative(clean, m):
+                if pat.kind in ("require", "only", "boundary") and _alternative(clean, m):
                     continue
                 built = pat.build(m.groupdict())
                 if built is None:
