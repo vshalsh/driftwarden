@@ -100,10 +100,6 @@ def test_meaning_changing_qualifier_never_yields_an_unqualified_claim(sentence):
 # ---------------------------------------------------------------- N1 .. N4 (defects)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="N1: a leading 'When <gerund/clause>,' condition is dropped: 'When running locally, services must not use Redis.' becomes an unconditional forbid",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -125,10 +121,6 @@ def test_N1_leading_when_clause_is_a_condition(sentence):
     assert match_sentence(sentence) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="N2: permission / aspiration with a quantified subject becomes a 'require' with a polluted subject ('Every team can use Django' -> require Django, subject 'team can')",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -150,10 +142,6 @@ def test_N2_permission_is_not_an_obligation(sentence):
     assert [m.kind for m in match_sentence(sentence) if m.kind in ("require", "only")] == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="N3: a trailing decoration is captured as a forbidden TERM: 'Do not use Redis, given our expertise.' -> forbid ['Redis', 'given our expertise']",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
@@ -194,10 +182,6 @@ OVERDROP = [
 ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="N4: _covered() over-drops: harmless leading phrases ('Decision:', 'In summary,', 'Given the above,', 'Note that'), parenthetical refs, purpose/'due to'/'which' clauses and 'as per ...' make a plain rule vanish (68% of decorated sentences the old library emitted)",
-)
 @pytest.mark.parametrize("sentence", OVERDROP)
 def test_N4_harmless_decoration_does_not_drop_the_claim(sentence):
     """1. 'lower recall, very high precision': the Nygard 'Decision:' label, a discourse
@@ -212,10 +196,6 @@ def test_N4_harmless_decoration_does_not_drop_the_claim(sentence):
     assert match_sentence(sentence)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="N5: 'X instead of Y <scope>' drops the trailing scope: 'We will use Redis Streams instead of Kafka in the payments module only.' -> unscoped require Redis Streams",
-)
 @pytest.mark.parametrize(
     "sentence",
     [
