@@ -1,0 +1,6 @@
+psycopg2-binary==2.9.9
+pymongo==4.6.1
+boto3==1.34.0
+structlog==24.1.0
+requests==2.31.0
+kafka-python==2.0.2

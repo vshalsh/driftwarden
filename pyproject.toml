@@ -49,7 +49,7 @@ src = ["src", "tests"]
 # Honour excludes even for paths passed explicitly (pre-commit, editors).
 force-exclude = true
 # Indexer fixtures are deliberately odd source (unused imports, Python 2 syntax).
-extend-exclude = ["tests/fixtures/index_repos"]
+extend-exclude = ["tests/fixtures/index_repos", "tests/fixtures/judge_repos"]
 
 [tool.ruff.format]
 # Docs are hand-written prose; `ruff format` must never rewrite them (or the

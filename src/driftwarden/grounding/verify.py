@@ -4,13 +4,40 @@
 reused for G2 (code evidence). ``verify_dependency`` implements G3 (dependency
 facts) by re-running the non-LLM manifest parsers on the manifest at the cited
 commit. They are plain functions: no model, no network.
+
+Pinned provenance (L-023). A citation is only reproducible if it names one
+immutable object and one file exactly as the repository does, so both
+verifiers accept only:
+
+* ``commit``: a full object name -- 40 hex (SHA-1 repositories) or 64 hex
+  (SHA-256 repositories), **lowercase** as git prints it -- that resolves to
+  itself as a commit, or the ``WORKTREE`` sentinel. Moving or derived names
+  (``HEAD``, branches, tags, ``HEAD~0``, ``main^{commit}``, short SHAs, a 40-hex
+  prefix in a SHA-256 repository, an annotated tag's own id) are MISMATCH.
+  Uppercase hex is rejected rather than normalised: git never emits it, the
+  judge compares commits byte for byte, and a record must round-trip unchanged.
+* ``path``: a canonical repo-relative POSIX path -- no leading ``/`` or ``./``,
+  no ``.`` / ``..`` / empty segment (so no ``//`` and no trailing ``/``), no
+  backslash, no control, line-separator or bidi-override character (NUL
+  included), nothing inside ``.git``. The path is compared byte-exact: no
+  Unicode normalisation and no whitespace trimming, so an NFD spelling of an
+  NFC file name, ``A.py`` for ``a.py`` or ``a.py `` for ``a.py`` is MISMATCH.
+  In WORKTREE mode every segment must appear verbatim in its directory listing,
+  so case-insensitive or normalising file systems (macOS, Windows) cannot alias
+  another spelling onto a real file, and the file must resolve inside the
+  repository.
+
+Both verifiers validate these before calling git and turn any unexpected error
+into a MISMATCH: they never raise for bad provenance, only when ``repo`` itself
+is not a git repository.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from driftwarden import git
 from driftwarden.index.manifests import canonical_package, canonical_version, parse_manifest
@@ -31,7 +58,9 @@ _QUOTE_MAP = {
     "«": '"',  # guillemets
     "»": '"',
 }
-_FULL_SHA = re.compile(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")
+_FULL_SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+# Invisible characters that reorder how a path is displayed (Trojan Source).
+_BIDI = frozenset("؜‎‏‪‫‬‭‮⁦⁧⁨⁩")
 _EMPHASIS = frozenset("*_~")
 
 
@@ -170,11 +199,79 @@ def _find_elsewhere(lines: list[str], needle: str) -> list[tuple[int, int]]:
     return hits
 
 
-def _safe_rel(path: str) -> str | None:
-    p = PurePosixPath(Path(path).as_posix())
-    if p.is_absolute() or ".." in p.parts or str(p) in ("", "."):
+def path_problem(path: object) -> str | None:
+    """Why ``path`` is not a canonical repo-relative POSIX path, or None if it is.
+
+    A pure string check (no file system, no git); rules in the module docstring."""
+    if not isinstance(path, str):
+        return f"path must be a string, got {type(path).__name__}"
+    if not path:
+        return "path is empty"
+    for ch in path:
+        if ch == "\\":
+            return "path contains a backslash (repository paths use '/')"
+        if unicodedata.category(ch) in ("Cc", "Cs", "Zl", "Zp") or ch in _BIDI:
+            return f"path contains control character {ch!r}"
+    if path.startswith("/"):
+        return "path is absolute"
+    segments = path.split("/")
+    if "" in segments:
+        return "path has an empty segment (leading, trailing or doubled '/')"
+    if any(seg in (".", "..") for seg in segments):
+        return "path has a '.' or '..' segment"
+    if any(seg.casefold() == ".git" for seg in segments):
+        return "path points into .git"
+    return None
+
+
+def commit_problem(root: Path, commit: object) -> str | None:
+    """Why ``commit`` is not a pinned commit of the repository at ``root``, or None
+    when it is WORKTREE or a full lowercase SHA that git resolves, as a commit, to
+    itself."""
+    if commit == WORKTREE:
         return None
-    return str(p)
+    if not isinstance(commit, str) or not _FULL_SHA.fullmatch(commit):
+        return (
+            f"unknown commit {commit!r}: not a pinned commit id "
+            f"(need a full 40/64-hex lowercase SHA or {WORKTREE})"
+        )
+    try:
+        resolved = git.resolve_commit(root, commit)
+    except git.NotAGitRepoError:
+        raise
+    except git.GitError:
+        return f"unknown commit {commit!r}"
+    if resolved != commit:
+        return (
+            f"unknown commit {commit!r}: not the full id of a commit (git resolves it to "
+            f"{resolved[:12]}...; an abbreviation or a tag object)"
+        )
+    return None
+
+
+def _show(text: object) -> str:
+    """``text`` for a reason string: as is when printable, else its repr."""
+    s = text if isinstance(text, str) else repr(text)
+    return s if s.isprintable() else repr(s)
+
+
+def _worktree_file(root: Path, rel: str) -> Path | None:
+    """The working-tree file ``rel`` names, every segment matched verbatim against
+    its directory listing, resolving inside ``root``; else None."""
+    cur = root
+    for seg in rel.split("/"):
+        try:
+            names = os.listdir(cur)
+        except OSError:
+            return None
+        if seg not in names:
+            return None
+        cur = cur / seg
+    try:
+        cur.resolve().relative_to(root.resolve())
+    except (OSError, ValueError, RuntimeError):
+        return None
+    return cur if cur.is_file() else None
 
 
 def _result(
@@ -186,6 +283,20 @@ def _result(
         reason=reason,
         provenance=prov,
         subject=subject,
+    )
+
+
+def _crashed(
+    prov: Provenance | DependencyRef,
+    path: object,
+    exc: Exception,
+    check_id: str,
+    subject: str | None,
+) -> GroundingResult:
+    """MISMATCH for an unexpected error while verifying ``prov``."""
+    loc = f"{_show(path)}@{_show(getattr(prov, 'commit', '?'))[:12]}"
+    return _result(
+        prov, False, f"{loc}: could not verify ({type(exc).__name__}: {exc})", check_id, subject
     )
 
 
@@ -204,35 +315,39 @@ def verify_source_quote(
     """Check that ``prov.quote`` lies within lines ``line_start..line_end`` of
     ``prov.path`` at ``prov.commit`` (or the working tree when commit is WORKTREE).
 
+    Only a pinned commit (full lowercase SHA, or WORKTREE) and a canonical
+    repo-relative path can verify; see the module docstring.
+
     Returns VERIFIED, or MISMATCH with a precise reason. Never raises for bad
-    provenance; it raises only if ``repo`` itself is not a git repository.
+    provenance (any unexpected error is a MISMATCH); it raises only if ``repo``
+    itself is not a git repository.
     """
     root = git.repo_root(repo)
-    loc = f"{prov.path}:{prov.line_start}-{prov.line_end}@{prov.commit[:12]}"
+    try:
+        return _verify_source_quote(root, prov, check_id, subject)
+    except git.NotAGitRepoError:
+        raise
+    except Exception as exc:  # the contract: bad provenance is a MISMATCH, never a crash
+        return _crashed(prov, getattr(prov, "path", "?"), exc, check_id, subject)
 
-    rel = _safe_rel(prov.path)
-    if rel is None:
-        return _result(prov, False, f"{loc}: path is not repo-relative", check_id, subject)
 
-    # 1. Load the file at the cited commit.
-    if prov.commit == WORKTREE:
-        f = root / rel
-        if not f.is_file():
-            return _result(prov, False, f"{loc}: file missing in working tree", check_id, subject)
-        text = read_text_file(f)
-    else:
-        if not prov.commit.strip() or not git.commit_exists(root, prov.commit):
-            return _result(prov, False, f"{loc}: unknown commit {prov.commit!r}", check_id, subject)
-        try:
-            text = git.show_file(root, prov.commit, rel)
-        except git.GitError:
-            return _result(
-                prov,
-                False,
-                f"{loc}: file missing at commit {prov.commit[:12]}",
-                check_id,
-                subject,
-            )
+def _verify_source_quote(
+    root: Path, prov: Provenance, check_id: str, subject: str | None
+) -> GroundingResult:
+    loc = f"{_show(prov.path)}:{prov.line_start}-{prov.line_end}@{_show(prov.commit)[:12]}"
+
+    # 1. Canonical path and pinned commit, checked before anything reaches git;
+    #    then load the file at the cited commit.
+    bad = path_problem(prov.path)
+    if bad is not None:
+        reason = f"{loc}: path is not repo-relative and canonical: {bad}"
+        return _result(prov, False, reason, check_id, subject)
+    bad = commit_problem(root, prov.commit)
+    if bad is not None:
+        return _result(prov, False, f"{loc}: {bad}", check_id, subject)
+    text, why = _load_at(root, prov.path, prov.commit)
+    if text is None:
+        return _result(prov, False, f"{loc}: {why}", check_id, subject)
 
     lines = split_lines(text)
     n = len(lines)
@@ -266,14 +381,15 @@ def verify_source_quote(
 
 
 def _load_at(root: Path, rel: str, commit: str) -> tuple[str | None, str]:
-    """(text, "") or (None, reason) for ``rel`` at ``commit`` / the working tree."""
+    """(text, "") or (None, reason) for ``rel`` at ``commit`` / the working tree.
+
+    ``rel`` and ``commit`` must already have passed ``path_problem`` and
+    ``commit_problem``."""
     if commit == WORKTREE:
-        f = root / rel
-        if not f.is_file():
+        f = _worktree_file(root, rel)
+        if f is None:
             return None, "file missing in working tree"
         return read_text_file(f), ""
-    if not commit.strip() or not git.commit_exists(root, commit):
-        return None, f"unknown commit {commit!r}"
     try:
         return git.show_file(root, commit, rel), ""
     except git.GitError:
@@ -304,31 +420,42 @@ def verify_dependency(
     and ``None`` means "declared without a version". ``line``, ``ecosystem`` and
     ``scope`` are checked when the claim states them.
 
+    Only a pinned commit (full lowercase SHA, or WORKTREE) and a canonical
+    repo-relative manifest path can verify; see the module docstring.
+
     Returns VERIFIED, or MISMATCH with a precise reason. Never raises for bad
-    provenance or a malformed manifest; it raises only if ``repo`` itself is not
-    a git repository.
+    provenance or a malformed manifest (any unexpected error is a MISMATCH); it
+    raises only if ``repo`` itself is not a git repository.
     """
     root = git.repo_root(repo)
+    try:
+        return _verify_dependency(root, dep, check_id, subject)
+    except git.NotAGitRepoError:
+        raise
+    except Exception as exc:  # the contract: bad provenance is a MISMATCH, never a crash
+        return _crashed(dep, getattr(dep, "manifest_path", "?"), exc, check_id, subject)
+
+
+def _verify_dependency(
+    root: Path, dep: DependencyRef, check_id: str, subject: str | None
+) -> GroundingResult:
     commit = dep.commit or ""
-    loc = f"{dep.manifest_path}@{commit[:12] or '?'}"
+    loc = f"{_show(dep.manifest_path)}@{_show(commit)[:12] or '?'}"
 
     def fail(reason: str) -> GroundingResult:
         return _result(dep, False, f"{loc}: {reason}", check_id, subject)
 
     if not commit.strip():
         return fail("no commit given")
-    if commit != WORKTREE:
-        # A moving ref (HEAD, branch, tag, short SHA) would make the claim
-        # non-reproducible: only a pinned, full object name is accepted.
-        if not _FULL_SHA.fullmatch(commit):
-            return fail(f"commit must be a full SHA (40/64 hex) or {WORKTREE}, got {commit!r}")
-        if not git.commit_exists(root, commit):
-            return fail(f"unknown commit {commit!r}")
-        if git.resolve_commit(root, commit) != commit.lower():
-            return fail(f"commit must be a full SHA (40/64 hex) or {WORKTREE}, got {commit!r}")
-    rel = _safe_rel(dep.manifest_path)
-    if rel is None:
-        return fail("path is not repo-relative")
+    # A moving ref (HEAD, branch, tag, short SHA) would make the claim
+    # non-reproducible: only a pinned, full object name is accepted.
+    bad = commit_problem(root, commit)
+    if bad is not None:
+        return fail(bad)
+    rel = dep.manifest_path
+    bad = path_problem(rel)
+    if bad is not None:
+        return fail(f"path is not repo-relative and canonical: {bad}")
     if not dep.package.strip():
         return fail("package is empty")
 

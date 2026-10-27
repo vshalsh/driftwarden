@@ -50,7 +50,9 @@ src/driftwarden/
   claims/structure.py    # LLM structuring with JSON-schema output
   llm/base.py            # Provider protocol
   llm/anthropic.py, llm/openai_compat.py, llm/offline.py
-  judge/judge.py         # verdicts with citations
+  judge/evidence.py      # deterministic evidence per claim, at one commit (G2/G3 provenance)
+  judge/catalog.py       # technology/category table (datastore, queue, cloud SDK...)
+  judge/judge.py         # verdicts with citations + grounding gate
   judge/consistency.py   # 3× vote
   undocumented/detect.py, undocumented/draft.py
   timeline/bisect.py
@@ -66,8 +68,11 @@ tests/                   # Sonnet's suite; tests/blackbox/REPORT.md by Haiku
 
 ```python
 class Provenance:      # attached to every AI-produced statement
-    path: str; line_start: int; line_end: int
-    commit: str        # full SHA the quote was taken from
+    path: str          # canonical repo-relative POSIX path, byte-exact (L-023)
+    line_start: int; line_end: int
+    commit: str        # full lowercase 40/64-hex SHA the quote was taken from, or
+                       # "WORKTREE"; HEAD/branches/tags/short or uppercase SHAs never
+                       # verify (L-023; callers resolve refs when they create provenance)
     quote: str         # verbatim text the model relied on
 
 class Claim:           # one testable statement derived from a decision
