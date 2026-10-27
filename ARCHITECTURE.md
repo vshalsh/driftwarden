@@ -50,7 +50,9 @@ src/driftwarden/
   claims/structure.py    # LLM structuring with JSON-schema output
   llm/base.py            # Provider protocol
   llm/anthropic.py, llm/openai_compat.py, llm/offline.py
-  judge/judge.py         # verdicts with citations
+  judge/evidence.py      # deterministic evidence per claim, at one commit (G2/G3 provenance)
+  judge/catalog.py       # technology/category table (datastore, queue, cloud SDK...)
+  judge/judge.py         # verdicts with citations + grounding gate
   judge/consistency.py   # 3× vote
   undocumented/detect.py, undocumented/draft.py
   timeline/bisect.py

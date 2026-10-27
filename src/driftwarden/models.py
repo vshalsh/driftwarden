@@ -1,7 +1,7 @@
 """Core data model (Pydantic v2).
 
-Only the models needed so far are defined here. Evidence, Verdict and the rest
-of ARCHITECTURE.md's model are added by later tickets.
+Only the models needed so far are defined here; Finding, Report and the rest of
+ARCHITECTURE.md's model are added by later tickets.
 """
 
 from __future__ import annotations
@@ -196,3 +196,88 @@ class UnverifiedClaim(BaseModel):
     source: Provenance | None = None
     reason: str
     grounding: GroundingResult | None = None
+
+
+# --------------------------------------------------------------------------- evidence
+
+EvidenceKind = Literal["code", "dependency", "import", "infra", "commit"]
+EvidenceRelation = Literal[
+    "forbidden",  # forbid: a forbidden technology is present
+    "required",  # require: the required technology is present
+    "allowed",  # only: the allowed member is present
+    "alternative",  # only / require: another member of the same category is present
+    "outside_boundary",  # boundary: the target is used outside the allowed paths
+    "inside_boundary",  # boundary: the target is used inside the allowed paths
+    "keyword",  # a source line mentioning a claim term (context for the model only)
+]
+VerdictStatus = Literal["HOLDING", "DRIFTING", "VIOLATED", "UNKNOWN"]
+VerdictGrounding = Literal["VERIFIED", "MISMATCH", "PARTIAL"]
+VerdictOrigin = Literal["rule", "llm"]
+
+
+class Evidence(BaseModel):
+    """One piece of evidence for (or against) a claim, with G2/G3 provenance.
+
+    ``ref`` is the G2 provenance: the exact source lines (``quote`` = snippet) at
+    ``commit``. A dependency or infra item also carries ``dependency``, the G3
+    provenance that ``verify_dependency()`` re-parses.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(description='Id within the claim\'s candidate set, e.g. "e3".')
+    kind: EvidenceKind
+    ref: Provenance
+    dependency: DependencyRef | None = None
+    relation: EvidenceRelation | None = None
+    technology: str | None = Field(default=None, description="Catalog id or literal term.")
+    production: bool = Field(
+        default=True, description="False for test files and dev/test/build-scoped dependencies."
+    )
+    detail: str = Field(default="", description='Human summary, e.g. "imports pymongo".')
+
+
+class Verdict(BaseModel):
+    """The judgement on one claim (ARCHITECTURE.md).
+
+    Invariants (enforced): a verdict whose grounding is not VERIFIED has status
+    UNKNOWN and is shown as *Could not verify*, never as a violation; a HOLDING /
+    DRIFTING / VIOLATED verdict from the model, and every DRIFTING / VIOLATED
+    verdict, cites at least one evidence item.
+    """
+
+    claim_id: str
+    status: VerdictStatus
+    evidence: list[Evidence] = Field(default_factory=list)
+    grounding: VerdictGrounding = "VERIFIED"
+    reasons: list[str] = Field(
+        default_factory=list, description="Verifier messages on mismatch (why not verified)."
+    )
+    rationale: str = Field(default="", description="Why this status (rule text or model).")
+    origin: VerdictOrigin = "rule"
+    proposed_status: VerdictStatus | None = Field(
+        default=None, description="What the rules/model proposed before the grounding gate."
+    )
+    commit: str = Field(default="", description=f"Commit judged (full SHA or {WORKTREE!r}).")
+    notes: list[str] = Field(default_factory=list)
+    checks: list[GroundingResult] = Field(
+        default_factory=list, description="Every G2/G3 verifier result behind this verdict."
+    )
+
+    @property
+    def could_not_verify(self) -> bool:
+        return self.grounding != "VERIFIED"
+
+    @property
+    def display_status(self) -> str:
+        return "Could not verify" if self.could_not_verify else self.status
+
+    @model_validator(mode="after")
+    def _invariants(self) -> Verdict:
+        if self.grounding != "VERIFIED" and self.status != "UNKNOWN":
+            raise ValueError("a verdict that is not VERIFIED must have status UNKNOWN")
+        if self.status in ("DRIFTING", "VIOLATED") and not self.evidence:
+            raise ValueError(f"a {self.status} verdict must cite evidence")
+        if self.grounding != "VERIFIED" and not self.reasons:
+            raise ValueError("a verdict that is not VERIFIED needs reasons")
+        return self
