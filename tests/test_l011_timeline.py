@@ -179,7 +179,8 @@ def test_linear_dependency_added_at_k(tmp_path):
     assert e.subject == f"commit {k}"
     assert e.author_date.startswith("2026-01-01T")
     assert not e.non_monotonic
-    assert e.commits_judged < 30  # sampled + bisected, not linear
+    assert e.search == "exhaustive" and e.commits_judged == 30  # <= 300: every commit
+    assert e.non_monotonic is False
     assert any(ev.dependency and ev.dependency.package == "pymongo" for ev in e.evidence)
     assert all(ev.ref.commit == shas[k] for ev in e.evidence)
 
@@ -442,6 +443,22 @@ def g4_case(tmp_path):
     return h.path, e, claim, shas, k
 
 
+def retarget(repo, e, c: str, p: str):
+    """``e`` moved to boundary ``c`` / parent ``p`` with c's real subject and date, so the
+    tamper reaches the judgement checks (b) and (c)."""
+    from driftwarden import git as dwgit
+
+    log = dwgit.log(repo, max_count=1, rev=c)[0]
+    return e.model_copy(
+        update={
+            "first_violating_commit": c,
+            "parent": p,
+            "subject": log.subject,
+            "author_date": log.date,
+        }
+    )
+
+
 def mismatches(repo, entry, claim) -> list[str]:
     return [r.reason for r in verify_first_violation(repo, entry, claim) if r.status != "VERIFIED"]
 
@@ -454,7 +471,7 @@ def test_g4_clean_entry_verifies(g4_case):
 
 def test_g4_wrong_commit(g4_case):
     repo, e, claim, shas, k = g4_case
-    bad = e.model_copy(update={"first_violating_commit": shas[k + 2], "parent": shas[k + 1]})
+    bad = retarget(repo, e, shas[k + 2], shas[k + 1])
     reasons = mismatches(repo, bad, claim)
     assert any("(c)" in r and "already violated" in r for r in reasons), reasons
 
@@ -486,7 +503,7 @@ def test_g4_wrong_date(g4_case):
 
 def test_g4_commit_where_claim_holds(g4_case):
     repo, e, claim, shas, k = g4_case
-    bad = e.model_copy(update={"first_violating_commit": shas[k - 2], "parent": shas[k - 3]})
+    bad = retarget(repo, e, shas[k - 2], shas[k - 3])
     reasons = mismatches(repo, bad, claim)
     assert any("(b)" in r and "not VERIFIED VIOLATED" in r for r in reasons), reasons
 
@@ -586,6 +603,106 @@ def test_g4_root_claimed_on_shallow_boundary(tmp_path):
     )
     reasons = mismatches(clone, forged, claim)
     assert any("shallow-clone boundary, not a root" in r for r in reasons), reasons
+
+
+# ------------------------------------------------------------------ Sonnet round 1 (Fable)
+
+
+def test_sampled_mode_never_claims_monotonic(tmp_path):
+    h, shas = forbid_history(tmp_path, 60, set(range(41, 60)))
+    claim = the_claim(h.path, "forbid")
+    e = first_violation(h.path, claim, exhaustive=False)
+    found(h.path, e, claim, shas[41], shas[40])
+    assert e.search == "sampled" and e.non_monotonic is None and e.earlier_transitions == []
+    assert e.commits_judged < 30
+    assert any("non_monotonic is not checked" in n for n in e.notes)
+
+
+def test_default_is_exhaustive_up_to_300(tmp_path):
+    v = set(range(5, 9)) | set(range(30, 40))
+    h, shas = forbid_history(tmp_path, 40, v)
+    claim = the_claim(h.path, "forbid")
+    e = first_violation(h.path, claim)
+    found(h.path, e, claim, shas[30], shas[29])
+    assert e.search == "exhaustive" and e.non_monotonic is True
+    assert e.earlier_transitions == [shas[5]]
+
+
+def test_sampled_all_violated_samples_with_missed_dip_is_not_truncated(tmp_path):
+    """D1: every sample violated, one held commit between samples, truncated window."""
+    n, dip = 60, 37
+    v = set(range(n)) - {dip}
+    h, shas = forbid_history(tmp_path, n, v)
+    claim = the_claim(h.path, "forbid")
+    e = first_violation(h.path, claim, max_commits=50, exhaustive=False)
+    found(h.path, e, claim, shas[dip + 1], shas[dip])
+    assert e.search == "sampled" and e.non_monotonic is None
+
+
+def test_sampled_whole_window_violated_is_confirmed_then_truncated(tmp_path):
+    h, shas = forbid_history(tmp_path, 40, set(range(40)))
+    claim = the_claim(h.path, "forbid")
+    e = first_violation(h.path, claim, max_commits=30, exhaustive=False)
+    assert e.status == "TRUNCATED" and e.search == "exhaustive" and e.commits_judged == 30
+    assert e.non_monotonic is False and e.grounding == "VERIFIED"
+
+
+def test_g4_expected_head(g4_case):
+    repo, e, claim, shas, _k = g4_case
+    assert not mismatches(repo, e, claim)
+    res = verify_first_violation(repo, e, claim, head=shas[-2])
+    assert any("not the expected head" in r.reason for r in res if r.status == "MISMATCH")
+    moved = e.model_copy(update={"head": shas[-2]})
+    assert any("commits_in_window" in r for r in mismatches(repo, moved, claim))
+
+
+def test_g4_forged_earlier_transitions(tmp_path):
+    v = set(range(3, 6)) | set(range(12, 20))
+    h, shas = forbid_history(tmp_path, 20, v)
+    claim = the_claim(h.path, "forbid")
+    e = first_violation(h.path, claim)
+    assert e.earlier_transitions == [shas[3]] and e.grounding == "VERIFIED"
+    for forged in ([shas[4]], [shas[1]], [shas[3], shas[3]], [], ["f" * 40]):
+        bad = e.model_copy(update={"earlier_transitions": forged})
+        assert mismatches(h.path, bad, claim), forged
+    assert mismatches(h.path, e.model_copy(update={"non_monotonic": False}), claim)
+    assert mismatches(h.path, e.model_copy(update={"non_monotonic": None}), claim)
+
+
+def test_g4_evidence_reordered_or_duplicated(g4_case):
+    repo, e, claim, _shas, _k = g4_case
+    assert len(e.evidence) >= 1
+    dup = e.model_copy(update={"evidence": [*e.evidence, e.evidence[0]]})
+    assert mismatches(repo, dup, claim)
+    if len(e.evidence) > 1:
+        assert mismatches(repo, e.model_copy(update={"evidence": e.evidence[::-1]}), claim)
+
+
+def test_g4_bookkeeping_fields(g4_case):
+    repo, e, claim, _shas, _k = g4_case
+    for upd in (
+        {"commits_judged": e.commits_judged - 1},
+        {"commits_in_window": e.commits_in_window - 1},
+        {"notes": e.notes[1:]},
+        {"notes": [*e.notes, "bogus"]},
+        {"notes": e.notes[::-1]},
+        {"search": "sampled"},
+        {"oldest_available": e.first_violating_commit},
+        {"truncated_by": "max_commits"},
+    ):
+        assert mismatches(repo, e.model_copy(update=upd), claim), upd
+
+
+def test_g4_stray_fields_on_truncated_and_not_violated(tmp_path):
+    h, shas = forbid_history(tmp_path, 20, set(range(4, 20)))
+    claim = the_claim(h.path, "forbid")
+    tr = first_violation(h.path, claim, max_commits=6)
+    nv = first_violation(h.path, claim, head=shas[2])
+    assert tr.status == "TRUNCATED" and nv.status == "NOT_VIOLATED_AT_HEAD"
+    assert not mismatches(h.path, tr, claim) and not mismatches(h.path, nv, claim)
+    for entry in (tr, nv):
+        for upd in ({"parent": shas[1]}, {"subject": "x"}, {"author_date": "2026-01-01"}):
+            assert mismatches(h.path, entry.model_copy(update=upd), claim), (entry.status, upd)
 
 
 # ------------------------------------------------------------------ G4 over every FOUND entry
