@@ -1,0 +1,2 @@
+pytest==8.1.0
+elasticsearch==8.13.0

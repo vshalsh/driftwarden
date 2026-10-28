@@ -123,6 +123,28 @@ def parse(text: str, path: str) -> list[DependencyRef]:
     return refs
 
 
+def provider_sources(text: str) -> dict[str, str]:
+    """Local provider name -> source address declared in ``required_providers`` blocks
+    of one Terraform file (``cf = { source = "cloudflare/cloudflare" }`` ->
+    ``{"cf": "cloudflare/cloudflare"}``; legacy ``aws = "~> 3.0"`` -> ``hashicorp/aws``).
+    Never raises: unparsable text gives {}."""
+    try:
+        root = parse_hcl(text)
+    except Exception:  # noqa: BLE001 - a bad file simply declares nothing
+        return {}
+    out: dict[str, str] = {}
+    for block in root.blocks:
+        if block.type != "terraform":
+            continue
+        for rp in (b for b in block.blocks if b.type == "required_providers"):
+            for local, attr in rp.attrs.items():
+                if isinstance(attr.value, dict):
+                    out[local] = _str(attr.value.get("source")) or f"hashicorp/{local}"
+                elif isinstance(attr.value, str):
+                    out[local] = f"hashicorp/{local}"
+    return out
+
+
 def _required_providers(rp: Block, add) -> None:
     for local, attr in rp.attrs.items():
         if isinstance(attr.value, str):  # legacy: aws = "~> 3.0"

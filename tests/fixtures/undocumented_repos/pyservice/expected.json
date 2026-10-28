@@ -1,0 +1,25 @@
+{
+  "undocumented": [
+    {
+      "technology": "redis",
+      "category": "cache",
+      "introduced_in": [
+        "02-add-redis"
+      ]
+    },
+    {
+      "technology": "aws-sdk",
+      "category": "cloud-sdk",
+      "introduced_in": [
+        "03-add-boto3"
+      ]
+    }
+  ],
+  "documented": [
+    "datastore/postgresql",
+    "web-framework/fastapi"
+  ],
+  "nonproduction": [
+    "search/elasticsearch"
+  ]
+}

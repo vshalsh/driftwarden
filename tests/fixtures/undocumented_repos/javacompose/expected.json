@@ -1,0 +1,25 @@
+{
+  "undocumented": [
+    {
+      "technology": "rabbitmq",
+      "category": "queue",
+      "introduced_in": [
+        "02-compose"
+      ]
+    },
+    {
+      "technology": "stripe",
+      "category": "vendor-sdk",
+      "introduced_in": [
+        "03-stripe"
+      ]
+    }
+  ],
+  "documented": [
+    "web-framework/spring-boot",
+    "datastore/postgresql"
+  ],
+  "nonproduction": [
+    "cache/memcached"
+  ]
+}

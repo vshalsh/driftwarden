@@ -18,6 +18,7 @@ file is untracked or modified.
 from __future__ import annotations
 
 import fnmatch
+import posixpath
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -458,3 +459,111 @@ def scan_adrs(path: str | Path, config: Config | None = None) -> AdrScan:
             dec = dec.model_copy(update={"id": f"{dec.id}~{n}"})
         decisions.append(dec)
     return AdrScan(root=root, head=head, decisions=decisions, errors=errors, skipped=skipped)
+
+
+def _matches_entry(path: str, entry: str) -> bool:
+    """``path`` is the ADR location ``entry`` names: the file itself, a file under that
+    directory, or (for a glob) a file or directory matching it."""
+    e = entry.strip().strip("/")
+    while e.startswith("./"):
+        e = e[2:]
+    if not e:
+        return False
+    if any(c in e for c in "*?["):
+        # Same semantics as discover_adr_files' Path.glob: the pattern is matched one
+        # path component at a time ("**" = zero or more directories, other wildcards
+        # never cross "/"); a matching directory contributes every file below it.
+        pats = [p for p in e.split("/") if p not in ("", ".")]
+        parts = path.split("/")
+        return any(_glob_parts(tuple(parts[:k]), tuple(pats)) for k in range(1, len(parts) + 1))
+    return path == e or path.startswith(e + "/")
+
+
+def _glob_parts(parts: tuple[str, ...], pats: tuple[str, ...]) -> bool:
+    """``parts`` (path components) match the component pattern ``pats``."""
+    if not pats:
+        return not parts
+    if pats[0] == "**":
+        return _glob_parts(parts, pats[1:]) or (bool(parts) and _glob_parts(parts[1:], pats))
+    return (
+        bool(parts) and fnmatch.fnmatchcase(parts[0], pats[0]) and _glob_parts(parts[1:], pats[1:])
+    )
+
+
+def discover_adr_files_at(root: str | Path, commit: str, config: Config | None = None) -> list[str]:
+    """Like ``discover_adr_files``, but over the files tracked at ``commit`` (the
+    ``.adr-dir`` marker is read at that commit too). Sorted repo-relative paths."""
+    root = git.repo_root(root)
+    cfg = config or Config()
+    candidates: list[str] = [*ADR_DIRS, *cfg.adr_paths]
+    try:
+        marker = git.show_file(root, commit, ".adr-dir").strip()
+    except git.NotAGitRepoError:
+        raise
+    except git.GitError:
+        marker = ""
+    if marker:
+        candidates.append(marker)
+    entries = {e.path: e for e in git.tree_entries(root, commit)}
+    found: set[str] = set()
+    for rel, entry in entries.items():
+        name = rel.rsplit("/", 1)[-1]
+        if not name.lower().endswith(ADR_SUFFIXES) or is_skipped_name(name):
+            continue
+        if not any(_matches_entry(rel, c) for c in candidates):
+            continue
+        # As discover_adr_files does (Path.resolve): a committed symlink is the file it
+        # points to inside the repository at the same commit; links that leave the
+        # repository, dangle or loop are skipped. Never parse the stored target text.
+        target = _symlink_target(root, entries, rel) if entry.mode == "120000" else rel
+        if target is None or _excluded(target, cfg.exclude):
+            continue
+        found.add(target)
+    return sorted(found)
+
+
+def _symlink_target(root: Path, entries: dict, rel: str, hops: int = 16) -> str | None:
+    """The regular file a committed symlink resolves to inside the tree, or None.
+    (Known limit: a symlinked *directory* in the tree is not followed.)"""
+    cur = rel
+    for _ in range(hops):
+        e = entries.get(cur)
+        if e is None:
+            return None
+        if e.mode != "120000":
+            return cur
+        raw = git.read_blobs(root, [e.sha])[e.sha].decode("utf-8", "replace")
+        if raw.startswith("/"):
+            return None
+        nxt = posixpath.normpath(posixpath.join(posixpath.dirname(cur), raw))
+        if nxt == ".." or nxt.startswith("../"):
+            return None
+        cur = nxt
+    return None
+
+
+def scan_adrs_at(path: str | Path, commit: str, config: Config | None = None) -> AdrScan:
+    """Discover and parse every ADR as it is at ``commit`` (resolved to a full SHA):
+    every Decision's provenance names that commit. The working tree is never read."""
+    root = git.repo_root(path)
+    sha = git.resolve_commit(root, commit)
+    decisions: list[Decision] = []
+    errors: list[tuple[str, str]] = []
+    skipped: list[tuple[str, str]] = []
+    seen: dict[str, int] = {}
+    for rel in discover_adr_files_at(root, sha, config):
+        try:
+            text = git.show_file(root, sha, rel)
+            if not text.replace("﻿", "").strip():
+                skipped.append((rel, EMPTY_NOTE))
+                continue
+            dec = parse_adr(text, rel, sha)
+        except (OSError, git.GitError, ValueError) as exc:
+            errors.append((rel, str(exc)))
+            continue
+        n = seen.get(dec.id, 0) + 1
+        seen[dec.id] = n
+        if n > 1:
+            dec = dec.model_copy(update={"id": f"{dec.id}~{n}"})
+        decisions.append(dec)
+    return AdrScan(root=root, head=sha, decisions=decisions, errors=errors, skipped=skipped)

@@ -211,6 +211,82 @@ def read_blobs(repo: str | Path, shas: list[str]) -> dict[str, bytes]:
     return blobs
 
 
+def parents(repo: str | Path, commit: str) -> list[str]:
+    """Full SHAs of ``commit``'s parents (empty for a root commit)."""
+    out = _run(["rev-list", "--parents", "-n", "1", f"{commit}^{{commit}}"], repo).split()
+    return out[1:]
+
+
+def last_commit_touching(repo: str | Path, rev: str, path: str) -> str | None:
+    """Newest commit reachable from ``rev`` that changed ``path``, or None."""
+    out = _run(["log", "-1", "--format=%H", rev, "--", Path(path).as_posix()], repo).strip()
+    return out or None
+
+
+def blob_at(repo: str | Path, commit: str, path: str) -> str | None:
+    """Blob SHA of ``path`` at ``commit``, or None when the path is not a file there."""
+    rel = Path(path).as_posix()
+    out = _run_bytes(["ls-tree", "-z", f"{commit}^{{commit}}", "--", rel], repo)
+    for rec in out.decode("utf-8", "replace").split("\0"):
+        meta, _, name = rec.partition("\t")
+        parts = meta.split()
+        if name == rel and len(parts) == 3 and parts[1] == "blob" and parts[0] != "120000":
+            return parts[2]
+    return None
+
+
+def is_ancestor(repo: str | Path, ancestor: str, descendant: str) -> bool:
+    """True if ``ancestor`` is ``descendant`` or one of its ancestors (False on any error)."""
+    try:
+        _run(["merge-base", "--is-ancestor", ancestor, descendant], repo)
+        return True
+    except NotAGitRepoError:
+        raise
+    except GitError:
+        return False
+
+
+def rev_list_topo(repo: str | Path, tip: str) -> list[str]:
+    """Every commit reachable from ``tip``, in topological order, ancestors first."""
+    out = _run(["rev-list", "--topo-order", "--reverse", f"{tip}^{{commit}}"], repo)
+    return out.split()
+
+
+def shallow_boundary(repo: str | Path) -> frozenset[str]:
+    """Commits whose parents are missing because the clone is shallow (the contents of
+    ``.git/shallow``); empty for a complete repository."""
+    if _run(["rev-parse", "--is-shallow-repository"], repo).strip() != "true":
+        return frozenset()
+    rel = _run(["rev-parse", "--git-path", "shallow"], repo).strip()
+    p = Path(rel) if Path(rel).is_absolute() else Path(repo) / rel
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        return frozenset()
+    return frozenset(line.strip() for line in text.splitlines() if line.strip())
+
+
+def list_dir(repo: str | Path, commit: str, directory: str) -> list[str]:
+    """Repo-relative paths of the blobs directly inside ``directory`` ("" = root) at
+    ``commit`` (not recursive)."""
+    args = ["ls-tree", "-z", f"{commit}^{{commit}}"]
+    if directory:
+        args += ["--", directory.rstrip("/") + "/"]
+    out = _run_bytes(args, repo).decode("utf-8", "replace")
+    paths = []
+    for rec in out.split("\0"):
+        meta, _, name = rec.partition("\t")
+        parts = meta.split()
+        if len(parts) == 3 and parts[1] == "blob":
+            paths.append(name)
+    return paths
+
+
+def commit_time(repo: str | Path, commit: str) -> int:
+    """Committer timestamp (Unix seconds) of ``commit``."""
+    return int(_run(["show", "-s", "--format=%ct", f"{commit}^{{commit}}"], repo).strip())
+
+
 def is_clean(repo: str | Path) -> bool:
     """True if no tracked file has staged or unstaged changes (untracked files ignored)."""
     return _run(["status", "--porcelain", "--untracked-files=no"], repo).strip() == ""
