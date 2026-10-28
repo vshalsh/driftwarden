@@ -177,16 +177,6 @@ def grounding_summary(rows: list[dict[str, Any]]) -> GroundingSummary:
     )
 
 
-def _subject_root(subject: str) -> str:
-    s = subject[len("draft:") :] if subject.startswith("draft:") else subject
-    cut = len(s)
-    for sep in ("/", "@", " ("):
-        i = s.find(sep)
-        if i != -1:
-            cut = min(cut, i)
-    return s[:cut]
-
-
 def _unverified_claim_item(uc: UnverifiedClaim) -> UnverifiedItem:
     g = uc.grounding
     return UnverifiedItem(
@@ -402,15 +392,23 @@ def run_scan(
     for d in failed_drafts:
         items.append(UnverifiedItem(kind="draft", id=d.record_id, reasons=list(d.reasons)))
 
+    # Catch-all (D1): a failed ledger row is "already reported" only when that exact row,
+    # (check_id, subject, reason), is one of the verifier results behind an item above.
+    # Never by subject prefix: a different failure about the same claim is its own item.
+    reported: list[GroundingResult] = [g1s[d.id] for d in decisions]
+    reported += [u.grounding for u in unverified if u.grounding is not None]
+    reported += [c for cr in results if cr.verdict is not None and cr.verdict.could_not_verify
+                 for c in cr.verdict.checks]  # fmt: skip
+    reported += [c for rec in undoc_cnv for c in rec.checks]
+    reported += [c for d in failed_drafts for c in d.checks]
+    seen: set[tuple] = {
+        (g.check_id, g.subject or "", g.reason) for g in reported if g.status != "VERIFIED"
+    }
     rows = _ledger_rows(ledger, start)
-    covered = {i.id for i in items} | {_subject_root(i.id) for i in items}
-    seen: set[tuple] = set()
     for r in rows:
         if r["status"] == "VERIFIED":
             continue
         subject = r.get("subject") or ""
-        if subject in covered or _subject_root(subject) in covered:
-            continue
         key = (r["check_id"], subject, r["reason"])
         if key in seen:
             continue
