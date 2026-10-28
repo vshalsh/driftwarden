@@ -65,8 +65,21 @@ numbers); the ADR directory is where the existing ADRs live, else ``docs/adr``
 written unless ``write=True`` and the draft verified. A write never overwrites a
 file, never follows a symlinked directory or file, never leaves the repository,
 and is idempotent: if an ADR whose front-matter names the same
-``driftwarden-record`` already exists, its path is returned instead. A write that
-cannot happen leaves the draft as is with a note.
+``driftwarden-record`` already exists *and verifies against the record*, its path
+is returned instead (a file that only names the record is reported in a note and
+ignored). The file is published atomically (temporary file in the same
+directory, fsync, hard link that fails if the name exists), so a failed write
+never leaves a partial draft behind. A write that cannot happen leaves the
+draft as is with a note.
+
+**Untrusted values.** Manifest-derived fields (package, version spec, ecosystem,
+scope), paths, evidence ids and the record id are rendered as single-line code
+spans: newlines, control, format and separator characters become visible
+escapes (``\\n``, ``\\uXXXX``) and long values are capped, so a value such as a
+``package.json`` version containing ``"\\n\\n## Security"`` cannot add markdown
+structure. When the detector listed only some occurrences (it always keeps the
+oldest introduction), the context says the cited occurrences were introduced by
+those commits and that further occurrences are not cited.
 """
 
 from __future__ import annotations
@@ -74,6 +87,7 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import re
+import secrets
 import unicodedata
 from collections import Counter
 from collections.abc import Iterable
@@ -170,11 +184,13 @@ def technology_name(technology: str) -> str:
     """Display name: the catalog's first alias (or the id), first letter capitalised."""
     t = catalog.technology(technology)
     name = t.aliases[0] if t is not None and t.aliases else technology
-    return name[:1].upper() + name[1:] if name.islower() else name
+    name = name[:1].upper() + name[1:] if name.islower() else name
+    return _escape(name, 80)
 
 
 def draft_title(technology: str, category: str) -> str:
-    return f"Use {technology_name(technology)} for {CATEGORY_LABELS.get(category, category)}"
+    label = CATEGORY_LABELS.get(category, category)
+    return f"Use {_escape(technology_name(technology), 80)} for {_escape(label, 80)}"
 
 
 def _slug(text: str) -> str:
@@ -278,19 +294,47 @@ def _code(text: str) -> str:
     return f"{ticks} {text} {ticks}"
 
 
+INLINE_CAP = 160
+
+
+def _escape(text: str, cap: int = INLINE_CAP) -> str:
+    """One visible line for an untrusted value (manifest fields, paths, ids): control,
+    format and separator characters become ``\\n`` / ``\\uXXXX`` escapes, and the
+    result is capped at ``cap`` characters."""
+    out: list[str] = []
+    for ch in text:
+        if ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch != " " and unicodedata.category(ch)[0] in "CZ":
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    s = "".join(out)
+    return s if len(s) <= cap else s[:cap] + "..."
+
+
+def _inline(text: str) -> str:
+    """An untrusted value as a single-line, backtick-safe code span."""
+    return _code(_escape(text))
+
+
 def _fence(quote: str) -> str:
     runs = [len(m.group(0)) for m in re.finditer(r"`+", quote)]
     return "`" * max(3, max(runs, default=0) + 1)
 
 
 def _evidence_detail(ev: Evidence) -> str:
+    """Every manifest-derived value is untrusted: each is an escaped code span."""
     d = ev.dependency
+    kind = _inline(ev.kind)
     if d is None:
-        return f", {ev.kind}"
-    spec = d.version_spec if d.version_spec is not None else "unversioned"
-    eco = d.ecosystem or "?"
-    scope = f", scope {d.scope}" if d.scope else ""
-    return f", {ev.kind} {_code(d.package)} {spec} ({eco}{scope})"
+        return f", {kind}"
+    spec = _inline(d.version_spec) if d.version_spec is not None else "unversioned"
+    eco = _inline(d.ecosystem) if d.ecosystem else "?"
+    scope = f", scope {_inline(d.scope)}" if d.scope else ""
+    return f", {kind} {_inline(d.package)} {spec} ({eco}{scope})"
 
 
 INTRO_DETAIL = ", introduced"
@@ -298,7 +342,7 @@ INTRO_DETAIL = ", introduced"
 
 def _cite_line(eid: str, ref: Provenance, detail: str) -> str:
     span = f"lines {ref.line_start}-{ref.line_end}"
-    return f"- [{eid}] {_code(ref.path)} {span} at `{ref.commit}`{detail}:"
+    return f"- [{_escape(eid, 40)}] {_inline(ref.path)} {span} at `{ref.commit}`{detail}:"
 
 
 def _cite_block(eid: str, ref: Provenance, detail: str) -> list[str]:
@@ -325,12 +369,23 @@ def template_context(rec: UndocumentedDecision, infos: dict[str, _CommitInfo]) -
             f"{len(intros)} commits, from `{_short(first)}` ({infos[first].date}) "
             f"to `{_short(last)}` ({infos[last].date})"
         )
+    intro = f"{name} was introduced by {when}."
+    if _sampled(rec):
+        intro = (
+            f"The cited occurrences were introduced by {when}. Further occurrences exist "
+            "in the code and are not cited."
+        )
     return (
         f"The code at commit `{_short(rec.commit)}` uses {name} as {label}: "
         f"{n_ev} production occurrence{'s' if n_ev != 1 else ''} in {n_files} "
         f"file{'s' if n_files != 1 else ''}, cited below. No ADR in this repository "
-        f"records that decision. {name} was introduced by {when}."
+        f"records that decision. {intro}"
     )
+
+
+def _sampled(rec: UndocumentedDecision) -> bool:
+    """True when the detector listed only some of the occurrences (its note says so)."""
+    return any(re.match(r"\d+ further occurrence", n) for n in rec.notes)
 
 
 _NOTICE = (
@@ -351,7 +406,7 @@ def render_markdown(
         "---",
         f"status: {DRAFT_STATUS}",
         f"date: {infos[first].date}",
-        f"driftwarden-record: {rec.id}",
+        f"driftwarden-record: {_escape(rec.id, 120)}",
         f"driftwarden-commit: {rec.commit}",
         "---",
         "",
@@ -555,7 +610,12 @@ def verify_draft(
         data.update(status="UNKNOWN", grounding="MISMATCH", reasons=reasons)
     else:
         data.update(status="DRAFT", grounding="VERIFIED", reasons=[])
-    return DraftADR.model_validate(data)
+    try:
+        return DraftADR.model_validate(data)
+    except ValueError as exc:  # a forged, unvalidated draft (model_copy/model_construct)
+        reason = f"draft is not a valid DraftADR ({type(exc).__name__})"
+        data.update(status="UNKNOWN", grounding="MISMATCH", reasons=[*reasons, reason])
+        return DraftADR.model_construct(**data)
 
 
 def _check_text(rec, md: str, origin: str, infos, fail, result) -> None:
@@ -764,7 +824,12 @@ def _drafted_record(path: Path) -> str | None:
     return None
 
 
-def _existing_draft(root: Path, draft: DraftADR, config: Config | None) -> str | None:
+def _existing_draft(
+    root: Path, draft: DraftADR, config: Config | None
+) -> tuple[str | None, list[str]]:
+    """An ADR file that already holds a draft of this record *and verifies* against it
+    (exactly the rendering, or an LLM-polished rendering that passes the gate), and
+    notes about files that only claim to (truncated, edited, stale)."""
     cands: set[str] = set(discover_adr_files(root, config))
     if draft.path is not None:
         d = root / Path(draft.path).parent
@@ -772,10 +837,47 @@ def _existing_draft(root: Path, draft: DraftADR, config: Config | None) -> str |
             cands.update(
                 p.relative_to(root).as_posix() for p in d.iterdir() if p.suffix.lower() == ".md"
             )
+    notes: list[str] = []
     for rel in sorted(cands):
-        if _drafted_record(root / rel) == draft.record_id:
-            return rel
-    return None
+        if _drafted_record(root / rel) != draft.record_id:
+            continue
+        try:
+            text = (root / rel).read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = None
+        if text is not None and text == draft.markdown:
+            return rel, notes
+        if text is not None:
+            cand = draft.model_copy(update={"markdown": text, "origin": "llm"})
+            if not verify_draft(root, cand, config=config).could_not_verify:
+                return rel, notes
+        notes.append(f"{rel} names {draft.record_id} but does not verify; not treated as a draft")
+    return None, notes
+
+
+def _publish(target: Path, data: bytes) -> None:
+    """Create ``target`` holding ``data`` atomically: write a temporary file in the same
+    directory, fsync it, then hard-link it into place (fails if ``target`` exists, so
+    nothing is ever overwritten). The temporary file is always removed; on failure
+    ``target`` does not exist (unless it existed before)."""
+    tmp = target.with_name(f".{target.name}.{secrets.token_hex(6)}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(tmp, flags, 0o644)
+        try:
+            view = memoryview(data)
+            while view:
+                n = os.write(fd, view)
+                view = view[n:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.link(tmp, target)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def _unsafe_dir(root: Path, rel_dir: str) -> str | None:
@@ -797,11 +899,16 @@ def _unsafe_dir(root: Path, rel_dir: str) -> str | None:
 def _write(root: Path, draft: DraftADR, config: Config | None) -> DraftADR:
     assert draft.path is not None and draft.markdown is not None
 
+    try:
+        existing, found_notes = _existing_draft(root, draft, config)
+    except OSError as exc:
+        existing, found_notes = None, [f"existing drafts not checked ({type(exc).__name__})"]
+    draft = draft.model_copy(update={"notes": [*draft.notes, *found_notes]})
+
     def note(text: str) -> DraftADR:
         return draft.model_copy(update={"notes": [*draft.notes, text]})
 
     try:
-        existing = _existing_draft(root, draft, config)
         if existing is not None:
             return draft.model_copy(
                 update={
@@ -825,10 +932,7 @@ def _write(root: Path, draft: DraftADR, config: Config | None) -> DraftADR:
         target = root / draft.path
         if os.path.lexists(target):
             return note(f"not written: {draft.path} exists; not overwritten")
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(target, flags, 0o644)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(draft.markdown)
+        _publish(target, draft.markdown.encode("utf-8"))
     except FileExistsError:
         return note(f"not written: {draft.path} exists; not overwritten")
     except OSError as exc:

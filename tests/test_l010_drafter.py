@@ -551,3 +551,177 @@ def test_decision_generator_is_read_once_and_coverage_cannot_be_bypassed(tmp_pat
     res = verify_draft(repo, good, decisions=iter([dec]))
     assert res.could_not_verify and any("documented" in r for r in res.reasons)
     assert verify_draft(repo, good, decisions=iter([])).grounding == "VERIFIED"
+
+
+# ------------------------------------------------------------------ Codex round 2 (PR #22)
+
+
+def _mkrepo(tmp_path: Path, name: str, steps: list[tuple[dict[str, str], str]]) -> list[str]:
+    repo = tmp_path / name
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "commit.gpgsign", "false")
+    shas = []
+    for files, msg in steps:
+        for rel, text in files.items():
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(text, encoding="utf-8")
+            git(repo, "add", "--", rel)
+        git(repo, "commit", "-q", "--allow-empty", "-m", msg)
+        shas.append(git(repo, "rev-parse", "HEAD").strip())
+    return shas
+
+
+def _unfenced(md: str) -> list[str]:
+    out, fence = [], None
+    for line in md.split("\n"):
+        m = re.match(r"^(`{3,})", line)
+        if fence is None and m:
+            fence = m.group(1)
+            continue
+        if fence is not None:
+            if line == fence:
+                fence = None
+            continue
+        out.append(line)
+    return out
+
+
+EXPECTED_HEADINGS = [
+    "## Context and Problem Statement",
+    "## Considered Options",
+    "## Decision Outcome",
+    "### Consequences",
+    "## More Information",
+    "### Introducing commits",
+    "### Where it was introduced",
+]
+
+
+def test_truncated_evidence_keeps_the_oldest_introduction(tmp_path):
+    a, b = _mkrepo(
+        tmp_path,
+        "trunc",
+        [
+            ({"z.py": "import redis\n"}, "A: redis in z"),
+            ({f"a{i}.py": "import redis\n" for i in range(10)}, "B: redis everywhere"),
+        ],
+    )
+    repo = tmp_path / "trunc"
+    (rec,) = detect_undocumented(repo).findings
+    assert len(rec.evidence) == 10 and any("further occurrence" in n for n in rec.notes)
+    assert rec.introducing_commits == [a, b]
+    assert "z.py" in {e.ref.path for e in rec.evidence}
+    d = draft_adr(repo, rec)
+    assert d.grounding == "VERIFIED", d.reasons
+    assert f"`{a[:12]}`" in d.markdown and f"- Commit `{a}`" in d.markdown
+    assert "The cited occurrences were introduced by 2 commits" in d.markdown
+    assert "Further occurrences exist in the code and are not cited." in d.markdown
+    # The caveat is pinned: dropping it fails the gate.
+    bad = d.markdown.replace(" Further occurrences exist in the code and are not cited.", "")
+    assert verify_draft(repo, d.model_copy(update={"markdown": bad})).could_not_verify
+
+
+INJECT = "^5.0.0\n\n## Security Policy\n- [click](http://evil.example) <script>x</script>\n# H"
+
+
+def test_manifest_version_injection_cannot_add_structure(tmp_path):
+    import json
+
+    pkg = {"name": "w", "version": "1.0.0", "dependencies": {"redis": INJECT}}
+    _mkrepo(tmp_path, "inj", [({"package.json": json.dumps(pkg, indent=2) + "\n"}, "web")])
+    repo = tmp_path / "inj"
+    recs = [r for r in detect_undocumented(repo).findings if r.technology == "redis"]
+    assert recs, "the injected manifest must still be detected"
+    d = draft_adr(repo, recs[0])
+    assert d.grounding == "VERIFIED", d.reasons
+    lines = _unfenced(d.markdown)
+    assert [x for x in lines if x.startswith("#")][1:-1] == EXPECTED_HEADINGS
+    assert not any(x.startswith(("## Security", "<", "# H")) for x in lines)
+    assert "\\n\\n## Security Policy\\n" in d.markdown  # visible, escaped, one line
+    raw = d.markdown.replace("\\n\\n## Security Policy\\n", "\n\n## Security Policy\n", 1)
+    assert verify_draft(repo, d.model_copy(update={"markdown": raw})).could_not_verify
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("version_spec", INJECT),
+        ("package", "redis\n## Pwned\n- item"),
+        ("scope", "dev\n<img src=x>"),
+        ("ecosystem", "npm\n# Heading"),
+        ("path", "src/app.py\n## Injected\nhttp://evil.example"),
+        ("kind", "import\n## Kind"),
+    ],
+)
+def test_untrusted_fields_render_as_single_line_spans(drafted, field, value):
+    from driftwarden.undocumented.draft import _commit_info, _evidence_detail, render_markdown
+
+    _, _, pairs = drafted["pyservice"]
+    rec = next(r for r, _ in pairs if r.technology == "redis")
+    ev = next(e for e in rec.evidence if e.dependency is not None)
+    if field == "path":
+        ev = ev.model_copy(update={"ref": ev.ref.model_copy(update={"path": value})})
+    elif field == "kind":
+        ev = ev.model_copy(update={"kind": value})
+    else:
+        ev = ev.model_copy(update={"dependency": ev.dependency.model_copy(update={field: value})})
+    assert "\n" not in _evidence_detail(ev)
+    forged = rec.model_copy(update={"evidence": [ev, *rec.evidence[1:]]})
+    infos = {c: _commit_info(drafted["pyservice"][0], c) for c in rec.introducing_commits}
+    md = render_markdown(forged, infos)
+    lines = _unfenced(md)
+    assert [x for x in lines if x.startswith("#")][1:-1] == EXPECTED_HEADINGS
+    assert not any(x.startswith(("<", "http", "- item")) for x in lines)
+    # and a forged record never verifies as a draft
+    d = next(d for r, d in pairs if r.technology == "redis")
+    res = verify_draft(
+        drafted["pyservice"][0], d.model_copy(update={"record": forged, "markdown": md})
+    )
+    assert res.could_not_verify
+
+
+def test_failed_write_leaves_nothing_and_retry_works(tmp_path, monkeypatch):
+    from driftwarden.undocumented import draft as draft_mod
+
+    _mkrepo(
+        tmp_path, "w", [({"README.md": "x\n"}, "init"), ({"requirements.txt": "redis==5\n"}, "r")]
+    )
+    repo = tmp_path / "w"
+    (rec,) = detect_undocumented(repo).findings
+
+    def boom(fd):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(draft_mod.os, "fsync", boom)
+    d = draft_adr(repo, rec, write=True)
+    assert d.grounding == "VERIFIED" and d.written_path is None
+    assert any("not written" in n for n in d.notes), d.notes
+    adr_dir = repo / "docs/adr"
+    assert not adr_dir.exists() or list(adr_dir.iterdir()) == []
+    monkeypatch.undo()
+    d2 = draft_adr(repo, rec, write=True)
+    assert d2.written_path == d.path
+    assert (repo / d2.written_path).read_text(encoding="utf-8") == d2.markdown
+    assert [p.name for p in adr_dir.iterdir()] == [Path(d2.written_path).name]
+
+
+def test_partial_draft_is_not_treated_as_already_drafted(tmp_path):
+    _mkrepo(
+        tmp_path, "p", [({"README.md": "x\n"}, "init"), ({"requirements.txt": "redis==5\n"}, "r")]
+    )
+    repo = tmp_path / "p"
+    (rec,) = detect_undocumented(repo).findings
+    good = draft_adr(repo, rec)
+    stale = repo / "docs/adr" / Path(good.path).name
+    stale.parent.mkdir(parents=True)
+    stale.write_text(good.markdown[: len(good.markdown) // 2], encoding="utf-8")  # truncated
+    d = draft_adr(repo, rec, write=True)
+    assert d.written_path is not None and d.written_path != f"docs/adr/{stale.name}"
+    assert any("does not verify" in n for n in d.notes), d.notes
+    assert (repo / d.written_path).read_text(encoding="utf-8") == d.markdown
+    again = draft_adr(repo, rec, write=True)  # now idempotent on the verified file
+    assert again.written_path == d.written_path
+    assert sorted(p.name for p in stale.parent.iterdir()) == sorted(
+        [stale.name, Path(d.written_path).name]
+    )
