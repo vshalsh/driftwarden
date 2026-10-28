@@ -1,0 +1,25 @@
+{
+  "undocumented": [
+    {
+      "technology": "kafka",
+      "category": "queue",
+      "introduced_in": [
+        "02-add-kafka"
+      ]
+    },
+    {
+      "technology": "axios",
+      "category": "http-client",
+      "introduced_in": [
+        "03-add-axios"
+      ]
+    }
+  ],
+  "documented": [
+    "web-framework/express",
+    "datastore/mongodb"
+  ],
+  "nonproduction": [
+    "datastore/postgresql"
+  ]
+}

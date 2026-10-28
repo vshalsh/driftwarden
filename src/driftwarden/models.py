@@ -97,7 +97,9 @@ class GroundingResult(BaseModel):
     check_id: str = Field(description="Grounding requirement id, e.g. 'G1'.")
     status: GroundingStatus
     reason: str
-    provenance: Provenance | DependencyRef
+    provenance: Provenance | DependencyRef | None = Field(
+        default=None, description="None only for checks on bare commit ids (G5)."
+    )
     subject: str | None = Field(default=None, description="What was checked, e.g. 'ADR-0007'.")
 
 
@@ -318,4 +320,73 @@ class Verdict(BaseModel):
             raise ValueError(f"a {self.status} verdict must cite evidence")
         if self.grounding != "VERIFIED" and not self.reasons:
             raise ValueError("a verdict that is not VERIFIED needs reasons")
+        return self
+
+
+# --------------------------------------------------------------------------- undocumented
+
+UndocumentedStatus = Literal["UNDOCUMENTED", "UNKNOWN"]
+
+
+class Introduction(BaseModel):
+    """Where one evidence item's technology entered its file (G5 provenance).
+
+    ``ref`` is the line(s) at ``commit`` that bring the technology into
+    ``ref.path``; at every one of ``parents`` the file has no such line (or does
+    not exist). ``verify_undocumented`` re-checks all of that.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    evidence_id: str = Field(description="The evidence item this introduction is for.")
+    commit: str = Field(description="Full SHA of the introducing commit.")
+    parents: list[str] = Field(default_factory=list, description="Its parents (full SHAs).")
+    ref: Provenance = Field(description="The introducing line(s), at ``commit``.")
+
+
+class UndocumentedDecision(BaseModel):
+    """A technology choice present in the code that no ADR covers (pipeline step 8).
+
+    ``evidence`` carries G2 (and, for manifest items, G3) provenance at
+    ``commit``; ``introductions`` / ``introducing_commits`` carry the G5
+    provenance a drafted ADR will cite. Invariant (enforced): a record that is not
+    VERIFIED has status UNKNOWN and is shown as *Could not verify* with reasons,
+    never as a finding.
+    """
+
+    id: str = Field(description='E.g. "UD-cache-redis".')
+    technology: str = Field(description="Catalog technology id (or Terraform provider name).")
+    category: str = Field(description='Catalog category, or "iac-provider".')
+    title: str = ""
+    status: UndocumentedStatus = "UNDOCUMENTED"
+    commit: str = Field(description="Full SHA of the commit scanned.")
+    evidence: list[Evidence] = Field(default_factory=list)
+    introductions: list[Introduction] = Field(default_factory=list)
+    introducing_commits: list[str] = Field(
+        default_factory=list, description="Distinct introducing commits, oldest first."
+    )
+    searched_terms: list[str] = Field(
+        default_factory=list, description="Terms looked for in the ADRs (none matched)."
+    )
+    grounding: VerdictGrounding = "VERIFIED"
+    reasons: list[str] = Field(default_factory=list, description="Why not verified.")
+    checks: list[GroundingResult] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+    @property
+    def could_not_verify(self) -> bool:
+        return self.grounding != "VERIFIED"
+
+    @property
+    def display_status(self) -> str:
+        return "Could not verify" if self.could_not_verify else "Undocumented"
+
+    @model_validator(mode="after")
+    def _invariants(self) -> UndocumentedDecision:
+        if self.grounding != "VERIFIED" and self.status != "UNKNOWN":
+            raise ValueError("an undocumented decision that is not VERIFIED must be UNKNOWN")
+        if self.grounding != "VERIFIED" and not self.reasons:
+            raise ValueError("an undocumented decision that is not VERIFIED needs reasons")
+        if self.status == "UNDOCUMENTED" and not (self.evidence and self.introducing_commits):
+            raise ValueError("an UNDOCUMENTED record must cite evidence and introducing commits")
         return self
