@@ -224,3 +224,28 @@ def _parse_json(text: str, path: str) -> list[DependencyRef]:
                 add("terraform-provider", name, _jstr(body.get("version")), take(name, lo),
                     "provider-block")  # fmt: skip
     return refs
+
+
+def required_provider_locals(text: str, path: str) -> set[str]:
+    """Local names declared in ``required_providers`` (``random = { source = ... }``)
+    in one Terraform file, whatever their source. A ``provider "x" {}`` block in the
+    same module configures the provider declared under local name ``x``; only an
+    undeclared ``x`` means Terraform's implicit ``hashicorp/x``. Raises
+    ManifestError (or the HCL parser's error) on unreadable input."""
+    out: set[str] = set()
+    if PurePosixPath(path).name.endswith(".json"):
+        try:
+            data = json.loads(text)
+        except (json.JSONDecodeError, RecursionError) as exc:
+            raise ManifestError(f"JSON: {exc}") from None
+        if not isinstance(data, dict):
+            raise ManifestError("JSON: top level is not an object")
+        for tf in _objects(data.get("terraform")):
+            for rp in _objects(tf.get("required_providers")):
+                out.update(k for k in rp if isinstance(k, str) and k)
+        return out
+    for block in parse_hcl(text).blocks:
+        if block.type == "terraform":
+            for rp in (b for b in block.blocks if b.type == "required_providers"):
+                out.update(rp.attrs)
+    return out

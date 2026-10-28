@@ -117,6 +117,7 @@ from driftwarden.index.manifests import (
     parse_manifest,
     scan_manifests,
 )
+from driftwarden.index.manifests import terraform as terraform_manifest
 from driftwarden.judge import catalog
 from driftwarden.judge.catalog import Resolution, Technology
 from driftwarden.models import (
@@ -535,27 +536,38 @@ class _Occurrence:
     dep: DependencyRef | None = None
 
 
-def _implicit_provider_dirs(snap: Snapshot) -> set[str]:
-    """Directories (Terraform modules) where a ``provider "x" {}`` block certainly
-    means ``hashicorp/x``: every ``required_providers`` source declared there is a
-    ``hashicorp/*`` one. A non-hashicorp source could be declared under any local
-    name, so its directory gets no implicit source (fail closed)."""
-    dirs: set[str] = set()
-    blocked: set[str] = set()
-    for ref in snap.dependency_refs():
-        if ref.ecosystem != "terraform-provider":
+def _declared_provider_locals(snap: Snapshot) -> dict[str, set[str] | None]:
+    """Terraform module directory -> the ``required_providers`` local names declared
+    in it (any source), or None when a Terraform file there could not be read (then
+    nothing is inferred for that directory: fail closed)."""
+    out: dict[str, set[str] | None] = {}
+    for m in snap.manifests:
+        if m.kind != "terraform":
             continue
-        d = posixpath.dirname(ref.manifest_path)
-        if ref.scope == "provider-block":
-            dirs.add(d)
-        elif not ref.package.lower().startswith("hashicorp/"):
-            blocked.add(d)
-    return dirs - blocked
+        d = posixpath.dirname(m.path)
+        text = snap.texts.get(m.path)
+        names: set[str] | None
+        if text is None or m.errors:
+            names = None
+        else:
+            try:
+                names = {
+                    n.lower() for n in terraform_manifest.required_provider_locals(text, m.path)
+                }
+            except Exception:  # noqa: BLE001 - any parse failure means "unknown"
+                names = None
+        prev = out.get(d, set())
+        out[d] = None if prev is None or names is None else prev | names
+    return out
+
+
+def _implicit_source(local: str, declared: set[str] | None) -> bool:
+    return declared is not None and local.lower() not in declared
 
 
 def _occurrences(snap: Snapshot) -> list[_Occurrence]:
     out: list[_Occurrence] = []
-    implicit = _implicit_provider_dirs(snap)
+    declared = _declared_provider_locals(snap)
     for ref in snap.dependency_refs():
         ns = catalog.ECOSYSTEM_NAMESPACE.get(ref.ecosystem or "")
         if ns is None:
@@ -566,10 +578,12 @@ def _occurrences(snap: Snapshot) -> list[_Occurrence]:
             ref.ecosystem == "terraform-provider"
             and ref.scope == "provider-block"
             and "/" not in ref.package
-            and posixpath.dirname(ref.manifest_path) in implicit
+            and _implicit_source(ref.package, declared.get(posixpath.dirname(ref.manifest_path)))
         ):
-            # provider "random" {} with no other source declared is hashicorp/random,
-            # Terraform's implicit default (L-026, D-L025-3).
+            # provider "random" {} whose local name no required_providers entry of the
+            # module declares is hashicorp/random, Terraform's implicit default
+            # (L-026, D-L025-3). A declared "random" (whatever its source, e.g.
+            # hashicorp/null) is that declaration, matched through its own record.
             names = (ref.package, f"hashicorp/{ref.package.lower()}")
         out.append(_Occurrence(kind, ns, names, ref.manifest_path, dep=ref))
     for e in snap.imports:
@@ -1160,7 +1174,7 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
         # A bare name ("payments"): a repo directory wins if it exists and no package
         # of that name is used; if both exist, both are evaluated.
         if d is None and len(_dirs_ci(t, c.snap)) > 1:
-            es.undecidable = (
+            es.undecidable = es.fail_closed = (
                 f"target {t!r} names several directories that differ only in case "
                 f"({', '.join(_dirs_ci(t, c.snap))})"
             )

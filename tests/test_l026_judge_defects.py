@@ -424,3 +424,78 @@ def test_d10_bare_target_naming_a_module_file(make_repo):
     grounded(repo, v)
     inside = make_repo({"payments.py": F_, "app/a.py": F_, "billing/b.py": "import payments\n"})
     assert offline(inside, c).status == "HOLDING"
+
+
+# ------------------------------------------------------------------ PR #20 review (Codex P2s)
+
+
+def test_d1_case_twin_directories_stay_unknown_with_a_model(make_repo):
+    """Payments/ + payments/, target PAYMENTS: the rules fail closed, and a model citing
+    the verifiable `import payments.core` line must not turn that into a verdict."""
+    repo = make_repo(
+        {"Payments/x.py": F_, "payments/core.py": F_, "app/a.py": "import payments.core\n"}
+    )
+    c = claim("boundary", {"target": ["PAYMENTS"], "allowed_in": ["billing/"]})
+    assert offline(repo, c).status == "UNKNOWN"
+    for status in ("VIOLATED", "HOLDING"):
+        v = Judge(repo, mode="llm", provider=_fake(status)).judge(c)
+        assert v.status == "UNKNOWN", (status, v.rationale)
+        assert v.proposed_status in (None, "UNKNOWN", status)
+
+
+TF_RP_LOCAL = (
+    "terraform {\n  required_providers {\n    random = {\n"
+    '      source = "hashicorp/null"\n    }\n  }\n}\n'
+)
+
+
+@pytest.mark.parametrize("split", [False, True])
+def test_d3_declared_local_name_is_never_the_implicit_source(make_repo, split):
+    """`random = { source = "hashicorp/null" }` + `provider "random" {}` configures null."""
+    files = (
+        {"infra/versions.tf": TF_RP_LOCAL, "infra/main.tf": 'provider "random" {}\n'}
+        if split
+        else {"infra/main.tf": TF_RP_LOCAL + 'provider "random" {}\n'}
+    )
+    repo = make_repo(files)
+    v = offline(repo, claim("forbid", {"forbid": ["hashicorp/random"]}))
+    assert v.status == "HOLDING", v.rationale
+    null = offline(repo, claim("forbid", {"forbid": ["hashicorp/null"]}))
+    assert null.status == "VIOLATED"
+    grounded(repo, null)
+
+
+def test_d3_declared_local_name_in_tf_json(make_repo):
+    repo = make_repo(
+        {
+            "infra/versions.tf.json": '{"terraform": {"required_providers": '
+            '{"random": {"source": "hashicorp/null"}}}}\n',
+            "infra/main.tf": 'provider "random" {}\n',
+        }
+    )
+    assert offline(repo, claim("forbid", {"forbid": ["hashicorp/random"]})).status == "HOLDING"
+
+
+def test_d3_undeclared_local_name_next_to_other_declarations_is_implicit(make_repo):
+    """Other required_providers (any source) do not hide an undeclared provider block."""
+    repo = make_repo(
+        {
+            "infra/versions.tf": "terraform {\n  required_providers {\n    acme = {\n"
+            '      source = "mycorp/acme"\n    }\n  }\n}\n',
+            "infra/main.tf": 'provider "random" {}\n',
+        }
+    )
+    v = offline(repo, claim("forbid", {"forbid": ["hashicorp/random"]}))
+    assert v.status == "VIOLATED", v.rationale
+    grounded(repo, v)
+    dep = v.evidence[0].dependency
+    assert dep is not None and dep.package == "random"
+    assert verify_dependency(repo, dep).status == "VERIFIED"
+
+
+def test_d3_unreadable_terraform_file_blocks_inference(make_repo):
+    repo = make_repo(
+        {"infra/versions.tf": "terraform {\n", "infra/main.tf": 'provider "random" {}\n'}
+    )
+    v = offline(repo, claim("forbid", {"forbid": ["hashicorp/random"]}))
+    assert v.status != "VIOLATED"
