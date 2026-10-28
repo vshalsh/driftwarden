@@ -1131,7 +1131,8 @@ def test_default_exhaustive_returns_latest_transition_rate(tmp_path_factory):
 
 
 def _sampled_ok(repo, shas, v, claim, e):
-    """A sampled-mode answer: honest flags; any value it returns is a real, G4-verified transition."""
+    """A sampled-mode answer: honest flags; any value it returns is a real, G4-verified
+    transition."""
     t = transitions(v)
     if e.search == "sampled":
         assert e.non_monotonic is None and e.earlier_transitions == [], (
@@ -1229,8 +1230,12 @@ def test_truncated_and_not_violated_leave_commit_fields_empty(tmp_path):
         assert (e.first_violating_commit, e.parent, e.subject, e.author_date) == (None,) * 4
         g4_ok(repo, e, claim)
         for fld in ("first_violating_commit", "parent", "subject", "author_date"):
-            forged = e.model_copy(update={fld: "bogus" if fld in {"subject", "author_date"} else shas[3]})
-            assert any(r.status == "MISMATCH" for r in verify_first_violation(repo, forged, claim)), fld
+            forged = e.model_copy(
+                update={fld: "bogus" if fld in {"subject", "author_date"} else shas[3]}
+            )
+            assert any(
+                r.status == "MISMATCH" for r in verify_first_violation(repo, forged, claim)
+            ), fld
 
 
 def test_g4_wrong_head_argument_is_mismatch(tmp_path):
@@ -1246,8 +1251,12 @@ def test_g4_wrong_head_argument_is_mismatch(tmp_path):
     tr = first_violation(repo, claim, max_commits=5)
     nv = first_violation(repo, claim, head=shas[3])
     assert tr.status == "TRUNCATED" and nv.status == "NOT_VIOLATED_AT_HEAD"
-    assert any(r.status == "MISMATCH" for r in verify_first_violation(repo, tr, claim, head=shas[-2]))
-    assert any(r.status == "MISMATCH" for r in verify_first_violation(repo, nv, claim, head=shas[4]))
+    assert any(
+        r.status == "MISMATCH" for r in verify_first_violation(repo, tr, claim, head=shas[-2])
+    )
+    assert any(
+        r.status == "MISMATCH" for r in verify_first_violation(repo, nv, claim, head=shas[4])
+    )
 
 
 def test_perf_300_exhaustive_within_20s(tmp_path):
