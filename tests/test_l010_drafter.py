@@ -786,8 +786,38 @@ def test_delimiter_characters_in_subjects_never_raise(tmp_path, ch):
     assert d.grounding == "VERIFIED", d.reasons
     line = next(x for x in d.markdown.split("\n") if x.startswith("- Commit "))
     sep = " " * len(ch)
-    assert line.endswith(f": add{sep}redis{sep}cache")
+    assert line.endswith(f": `add{sep}redis{sep}cache`")
     assert verify_draft(repo, d).grounding == "VERIFIED"
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "add redis ![diagram](https://attacker.example/collect)",
+        "add redis [docs](https://attacker.example)",
+        "add redis <details><summary>open me</summary>hidden</details>",
+        "# add redis",
+        "- add redis",
+        "1. add redis",
+        "add `redis` with ``ticks``",
+    ],
+)
+def test_subject_markdown_is_never_active(tmp_path, subject):
+    repo = _redis_repo(tmp_path, "md", subject)
+    (rec,) = detect_undocumented(repo).findings
+    d = draft_adr(repo, rec)
+    assert d.grounding == "VERIFIED", d.reasons
+    line = next(x for x in d.markdown.split("\n") if x.startswith("- Commit "))
+    head, span = line.split(": ", 1)
+    ticks = re.match(r"`+", span).group(0)
+    assert span == f"{ticks} {subject} {ticks}" if "`" in subject else span == f"`{subject}`"
+    lines = _unfenced(d.markdown)
+    assert [x for x in lines if x.startswith("#")][1:-1] == EXPECTED_HEADINGS
+    assert not any(x.startswith(("<", "!", "[")) for x in lines)
+    # A forged variant with the raw (active) subject fails the gate.
+    forged = d.markdown.replace(line, f"{head}: {subject}")
+    assert forged != d.markdown
+    assert verify_draft(repo, d.model_copy(update={"markdown": forged})).could_not_verify
 
 
 def test_unparsable_commit_metadata_refuses_cleanly(tmp_path, monkeypatch):

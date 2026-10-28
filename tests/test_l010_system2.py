@@ -312,24 +312,34 @@ def test_hole_huge_number_in_existing_adr_name_makes_huge_filename(tmp_path):
 # ------------------------------------------------------------ idempotence vs hostile files
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="pinned pre-fix behaviour (on 1d447dd): since Codex round 2 / D16 a file is "
-    "adopted only when its text verifies against the record, so a forged front-matter "
-    "file is ignored with a note",
-)
-def test_forged_front_matter_file_is_adopted_as_the_draft(tmp_path):
-    """Pins current behaviour: ANY file whose front-matter names the record is returned as
-    written_path with a note, whatever its content or status."""
+def test_forged_front_matter_file_is_not_adopted_as_the_draft(tmp_path):
+    """A file whose front-matter names the record but whose text does not verify against
+    it is NOT adopted: it is left untouched, a note names it, and a new numbered draft
+    is written next to it."""
+    repo, _ = redis_repo(tmp_path)
+    rec, _ = draft_one(repo)
+    forged = repo / "docs/adr/0002-evil.md"
+    body = f"---\nstatus: accepted\ndriftwarden-record: {rec.id}\n---\n\n# Other\n\nHostile.\n"
+    forged.write_text(body)
+    r = draft_adr(repo, rec, write=True)
+    assert r.grounding == "VERIFIED"
+    assert r.written_path == "docs/adr/0003-use-redis-for-cache.md"
+    assert (repo / r.written_path).read_text() == r.markdown
+    assert forged.read_text() == body
+    assert any("0002-evil.md" in n and "does not verify" in n for n in r.notes), r.notes
+
+
+def test_verified_existing_draft_is_adopted(tmp_path):
     repo, _ = redis_repo(tmp_path)
     rec, d = draft_one(repo)
-    forged = repo / "docs/adr/0002-evil.md"
-    forged.write_text(
-        f"---\nstatus: accepted\ndriftwarden-record: {rec.id}\n---\n\n# Other\n\nHostile.\n"
-    )
+    kept = repo / "docs/adr/0007-kept.md"
+    kept.write_text(d.markdown)
     r = draft_adr(repo, rec, write=True)
-    assert r.written_path == "docs/adr/0002-evil.md"
-    assert not (repo / d.path).exists()
+    assert r.written_path == "docs/adr/0007-kept.md" and r.markdown == kept.read_text()
+    assert sorted(p.name for p in (repo / "docs/adr").iterdir()) == [
+        "0001-logging.md",
+        "0007-kept.md",
+    ]
 
 
 def test_hole_forged_front_matter_adoption_has_no_content_check(tmp_path):
@@ -346,18 +356,22 @@ def test_hole_forged_front_matter_adoption_has_no_content_check(tmp_path):
     assert on_disk == r.markdown or r.grounding != "VERIFIED" or "differs" in " ".join(r.notes)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="pinned pre-fix behaviour (on 1d447dd): a file holding only front-matter does "
-    "not verify against the record, so it is not adopted (Codex round 2 / D16)",
-)
 @pytest.mark.parametrize("name", ["9999-x.MD", "9999-x.md"])
 def test_existing_draft_found_case_insensitive_suffix(tmp_path, name):
+    """The suffix is matched case-insensitively (``.md`` and ``.MD`` alike, as ADR
+    discovery does): a *verified* draft with either suffix is adopted, while a file that
+    only carries the record's front-matter is not (a new numbered draft is written)."""
     repo, _ = redis_repo(tmp_path)
-    rec, _ = draft_one(repo)
-    (repo / "docs/adr" / name).write_text(f"---\ndriftwarden-record: {rec.id}\n---\n")
+    rec, d = draft_one(repo)
+    stub = repo / "docs/adr" / name
+    stub.write_text(f"---\ndriftwarden-record: {rec.id}\n---\n")
     r = draft_adr(repo, rec, write=True)
-    assert r.written_path == f"docs/adr/{name}"
+    assert r.written_path == "docs/adr/10000-use-redis-for-cache.md", r.written_path
+    assert any(name in n and "does not verify" in n for n in r.notes), r.notes
+    (repo / r.written_path).unlink()
+    stub.write_text(d.markdown)
+    r = draft_adr(repo, rec, write=True)
+    assert r.written_path == f"docs/adr/{name}" and r.markdown == stub.read_text()
 
 
 def test_second_write_is_idempotent(tmp_path):

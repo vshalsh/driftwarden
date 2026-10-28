@@ -18,6 +18,9 @@ citations:
   sanitised: control / format / separator characters become spaces, and runs of
   7+ hex digits and ``path:line``-like tokens become ``[ref removed]``, so a
   commit message cannot put a foreign SHA or source reference into the draft;
+  it is then rendered as a single-line, backtick-safe code span (NFKC-normalised,
+  capped), so markdown or HTML in it (images, links, ``<details>``, headings,
+  list markers) is never active;
 * ``- [<evidence id>] <path> lines <a>-<b> at `<sha>`<detail>:`` (the path as a
   backtick code span long enough for any backticks in it) followed by a fenced
   block holding the verbatim quote, once for each introducing line (at its
@@ -372,7 +375,10 @@ def _cite_block(eid: str, ref: Provenance, detail: str) -> list[str]:
 
 
 def _commit_line(sha: str, info: _CommitInfo) -> str:
-    return f"- Commit `{sha}`, {info.date}: {info.subject}"
+    # The subject is untrusted text: a single-line code span, so no markdown or HTML in
+    # it (images, links, <details>, headings) is ever active.
+    subject = _inline(info.subject) if info.subject.strip() else "(no subject)"
+    return f"- Commit `{sha}`, {info.date}: {subject}"
 
 
 def template_context(rec: UndocumentedDecision, infos: dict[str, _CommitInfo]) -> str:
