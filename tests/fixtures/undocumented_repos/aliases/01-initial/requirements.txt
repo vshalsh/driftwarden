@@ -1,0 +1,4 @@
+flask==3.0.3
+psycopg2==2.9.9
+celery==5.4.0
+kafka-python==2.0.2

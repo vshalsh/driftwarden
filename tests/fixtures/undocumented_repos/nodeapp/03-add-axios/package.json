@@ -1,0 +1,14 @@
+{
+  "name": "nodeapp",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.19.0",
+    "mongoose": "^8.3.0",
+    "kafkajs": "^2.2.4",
+    "axios": "^1.6.8"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "pg": "^8.11.0"
+  }
+}

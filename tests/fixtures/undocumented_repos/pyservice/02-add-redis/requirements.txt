@@ -1,0 +1,5 @@
+fastapi==0.110.0
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.29
+structlog==24.1.0
+redis==5.0.0

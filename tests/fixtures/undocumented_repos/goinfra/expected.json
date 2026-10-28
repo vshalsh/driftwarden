@@ -1,0 +1,30 @@
+{
+  "undocumented": [
+    {
+      "technology": "nats",
+      "category": "queue",
+      "introduced_in": [
+        "02-add-nats"
+      ]
+    },
+    {
+      "technology": "cloudflare",
+      "category": "iac-provider",
+      "introduced_in": [
+        "03-add-providers"
+      ]
+    },
+    {
+      "technology": "gcp-sdk",
+      "category": "iac-provider",
+      "introduced_in": [
+        "03-add-providers"
+      ]
+    }
+  ],
+  "documented": [
+    "web-framework/gin",
+    "iac-provider/aws-sdk"
+  ],
+  "nonproduction": []
+}

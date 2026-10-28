@@ -3,7 +3,8 @@
 ``verify_source_quote`` implements G1 (decision quotes from ADRs) and will be
 reused for G2 (code evidence). ``verify_dependency`` implements G3 (dependency
 facts) by re-running the non-LLM manifest parsers on the manifest at the cited
-commit. They are plain functions: no model, no network.
+commit. ``verify_commits_exist`` implements the commit half of G5 (introducing
+commits of an undocumented decision). They are plain functions: no model, no network.
 
 Pinned provenance (L-023). A citation is only reproducible if it names one
 immutable object and one file exactly as the repository does, so both
@@ -275,7 +276,11 @@ def _worktree_file(root: Path, rel: str) -> Path | None:
 
 
 def _result(
-    prov: Provenance | DependencyRef, ok: bool, reason: str, check_id: str, subject: str | None
+    prov: Provenance | DependencyRef | None,
+    ok: bool,
+    reason: str,
+    check_id: str,
+    subject: str | None,
 ):
     return GroundingResult(
         check_id=check_id,
@@ -511,3 +516,48 @@ def _verify_dependency(
         vmatch = lmatch
 
     return _result(dep, True, f"{loc}: {_fmt_dep(vmatch[0])} verified", check_id, subject)
+
+
+def verify_commits_exist(
+    repo: str | Path,
+    commits: list[str],
+    *,
+    ancestor_of: str | None = None,
+    check_id: str = "G5",
+    subject: str | None = None,
+) -> list[GroundingResult]:
+    """G5: every id in ``commits`` is a pinned commit of ``repo`` (full lowercase
+    40/64-hex SHA that resolves to itself; WORKTREE is *not* accepted, an
+    introducing commit must be a real commit) and, when ``ancestor_of`` is given,
+    is that commit or one of its ancestors. One result per commit; an empty list
+    gives one MISMATCH ("no commits given"). Never raises for bad ids; raises only
+    if ``repo`` is not a git repository.
+    """
+    root = git.repo_root(repo)
+    if not commits:
+        return [_result(None, False, "no commits given", check_id, subject)]
+    out: list[GroundingResult] = []
+    for c in commits:
+        shown = _show(c)[:12]
+        try:
+            bad = (
+                f"unknown commit {c!r}: the working tree is not a commit"
+                if c == WORKTREE
+                else commit_problem(root, c)
+            )
+            if (
+                bad is None
+                and ancestor_of is not None
+                and not git.is_ancestor(root, c, ancestor_of)
+            ):
+                bad = f"commit {c[:12]} is not an ancestor of {str(ancestor_of)[:12]}"
+        except git.NotAGitRepoError:
+            raise
+        except Exception as exc:  # bad provenance is a MISMATCH, never a crash
+            bad = f"could not verify ({type(exc).__name__}: {exc})"
+        ok = bad is None
+        reason = f"{shown}: commit exists" if ok else f"{shown}: {bad}"
+        if ok and ancestor_of is not None:
+            reason += f" and is in the history of {str(ancestor_of)[:12]}"
+        out.append(_result(None, ok, reason, check_id, subject))
+    return out

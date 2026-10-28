@@ -135,6 +135,9 @@ CATEGORIES: dict[str, tuple[str, ...]] = {
         "cloud sdk", "cloud provider sdk", "cloud client", "cloud library", "cloud api client",
     ),
     "search": ("search engine", "search index", "full-text search engine"),
+    "vendor-sdk": (
+        "vendor sdk", "third-party sdk", "third party sdk", "saas sdk", "vendor api client",
+    ),
 }  # fmt: skip
 
 _T = Technology
@@ -299,6 +302,34 @@ TECHNOLOGIES: list[Technology] = [
         "java:org.elasticsearch*", "go:github.com/elastic/go-elasticsearch*",
         "docker:elasticsearch", "docker:opensearch", "terraform:*elastic/ec",
         "terraform:*elastic/elasticstack",
+    )),
+    # ---- vendor (SaaS) SDKs
+    _T("stripe", "vendor-sdk", ("stripe",), (
+        "pypi:stripe", "py:stripe", "npm:stripe", "maven:com.stripe:*", "java:com.stripe*",
+        "go:github.com/stripe/stripe-go*", "nuget:stripe.net",
+    )),
+    _T("twilio", "vendor-sdk", ("twilio",), (
+        "pypi:twilio", "py:twilio", "npm:twilio", "maven:com.twilio.sdk:*", "java:com.twilio*",
+        "go:github.com/twilio/twilio-go*", "nuget:twilio",
+    )),
+    _T("sendgrid", "vendor-sdk", ("sendgrid",), (
+        "pypi:sendgrid", "py:sendgrid", "npm:@sendgrid/*", "maven:com.sendgrid:*",
+        "java:com.sendgrid*", "go:github.com/sendgrid/*", "nuget:sendgrid*",
+    )),
+    _T("sentry", "vendor-sdk", ("sentry",), (
+        "pypi:sentry-sdk", "py:sentry_sdk", "npm:@sentry/*", "maven:io.sentry:*", "java:io.sentry*",
+        "go:github.com/getsentry/sentry-go*", "nuget:sentry*", "terraform:*jianyuan/sentry",
+    )),
+    _T("datadog", "vendor-sdk", ("datadog",), (
+        "pypi:ddtrace", "pypi:datadog", "py:ddtrace", "py:datadog", "npm:dd-trace",
+        "maven:com.datadoghq:*", "go:github.com/datadog/*", "go:gopkg.in/datadog/*",
+        "terraform:*datadog/datadog",
+    )),
+    _T("openai", "vendor-sdk", ("openai",), (
+        "pypi:openai", "py:openai", "npm:openai", "go:github.com/sashabaranov/go-openai*",
+    )),
+    _T("anthropic", "vendor-sdk", ("anthropic",), (
+        "pypi:anthropic", "py:anthropic", "npm:@anthropic-ai/sdk",
     )),
 ]  # fmt: skip
 

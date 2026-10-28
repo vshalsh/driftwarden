@@ -1,0 +1,31 @@
+{
+  "undocumented": [
+    {
+      "technology": "flask",
+      "category": "web-framework",
+      "introduced_in": [
+        "01-initial"
+      ]
+    },
+    {
+      "technology": "httpx",
+      "category": "http-client",
+      "introduced_in": [
+        "02-more"
+      ]
+    },
+    {
+      "technology": "mongodb",
+      "category": "datastore",
+      "introduced_in": [
+        "02-more"
+      ]
+    }
+  ],
+  "documented": [
+    "datastore/postgresql",
+    "queue/celery",
+    "queue/kafka"
+  ],
+  "nonproduction": []
+}
