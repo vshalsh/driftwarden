@@ -1301,7 +1301,11 @@ def test_round_trip_scan_json_report_equals_direct_scan_output(repo, tmp_path):
     assert (tmp_path / "jo.json").read_bytes() == (direct / "driftwarden.json").read_bytes()
     saved = direct / "driftwarden.json"
     rt = tmp_path / "rt"
-    r2 = cli("report", str(saved), "--format", "json,md,sarif", "--out", str(rt))
+    # Codex 4403806790 (Opus): md links are relative to the report file, so `report` needs
+    # the repo root (--repo) to write the same links `scan` did.
+    r2 = cli(
+        "report", str(saved), "--format", "json,md,sarif", "--out", str(rt), "--repo", str(repo)
+    )
     assert r2.exit_code == 0, out_text(r2)
     for ext in ("json", "md", "sarif"):
         a = (direct / f"driftwarden.{ext}").read_bytes()
@@ -1319,7 +1323,8 @@ def test_round_trip_of_the_rich_fixture_is_identical_and_idempotent(tmp_path):
     r = rep(fx())
     a = tmp_path / "a"
     assert cli("report", str(j), "--format", "json,md,sarif", "--out", str(a)).exit_code == 0
-    assert (a / "driftwarden.md").read_text("utf-8") == render_markdown(r)
+    # Codex 4403806790 (Opus): no repo root is known here, so ADR locations are plain text.
+    assert (a / "driftwarden.md").read_text("utf-8") == render_markdown(r, links=False)
     assert (a / "driftwarden.sarif").read_text("utf-8") == render_sarif(r)
     b = tmp_path / "b"
     assert (

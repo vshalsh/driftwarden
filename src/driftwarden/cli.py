@@ -8,7 +8,7 @@ import re
 import tempfile
 import unicodedata
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import typer
 from rich.console import Console
@@ -32,6 +32,7 @@ from driftwarden.report import (
     render_json,
     renderer_available,
 )
+from driftwarden.report.markdown import NO_LINKS, render_markdown
 from driftwarden.report.model import REPORT_SCHEMA_VERSION, Report, rule_text
 from driftwarden.report.view import regate
 
@@ -88,13 +89,30 @@ def _atomic_write(path: Path, text: str) -> None:
         raise
 
 
-def _write_reports(report: Report, fmts: list[str], out_dir: Path) -> list[Path]:
+def _link_base(root: Path | None, out_dir: Path) -> str:
+    """Relative POSIX path from ``out_dir`` to the repo root, so the Markdown report's ADR
+    links resolve from where the file is written; plain text when the root is unknown."""
+    if root is None:
+        return NO_LINKS
+    try:
+        rel = os.path.relpath(root.resolve(), out_dir.resolve())
+    except ValueError:  # different drives (Windows)
+        return NO_LINKS
+    return PurePath(rel).as_posix()
+
+
+def _write_reports(
+    report: Report, fmts: list[str], out_dir: Path, *, repo_root: Path | None = None
+) -> list[Path]:
     """Render each format and write ``out_dir/driftwarden.<ext>``; exit 2 on failure."""
     written: list[Path] = []
     for f in fmts:
         target = out_dir / f"driftwarden.{EXTENSIONS[f]}"
         try:
-            text = RENDERERS[f](report)
+            if f == "md":
+                text = render_markdown(report, link_base=_link_base(repo_root, out_dir))
+            else:
+                text = RENDERERS[f](report)
         except RendererUnavailable as exc:
             err.print(f"[red]error:[/red] {safe(exc)}")
             raise typer.Exit(2) from exc
@@ -502,10 +520,26 @@ def scan(
             raise typer.Exit(2) from exc
         console.print(f"Report JSON: {safe(json_out)}", highlight=False, soft_wrap=True)
     if fmts:
-        _write_reports(report, fmts, ledger_base)
+        _write_reports(report, fmts, ledger_base, repo_root=root)
     if not report.timeline:
         console.print("[dim]Not yet implemented: drift timeline (L-011).[/dim]", highlight=False)
     raise typer.Exit(report.summary.exit_code)
+
+
+def _default_repo(report: Report) -> Path | None:
+    """The current directory, when it is a git root that holds every ADR file the report
+    cites; otherwise None (Markdown locations are then plain text)."""
+    cwd = Path.cwd()
+    try:
+        root = git.repo_root(cwd)
+    except git.GitError:
+        return None
+    if root.resolve() != cwd.resolve():
+        return None
+    paths = {d.source.path for d in report.decisions}
+    if not paths or not all((root / p).is_file() for p in paths):
+        return None
+    return root
 
 
 @app.command("report")
@@ -521,6 +555,12 @@ def report_cmd(
         False,
         "--exit-code",
         help="Exit with the re-checked report's exit code (0/1/3, as scan) instead of 0.",
+    ),
+    repo: Path | None = typer.Option(
+        None,
+        "--repo",
+        help="Repository root, for Markdown ADR links relative to OUT. Default: the current "
+        "directory when it is the git root holding the report's ADR files, else plain text.",
     ),
 ) -> None:
     """Re-render report files from a saved Report JSON, without rescanning.
@@ -567,8 +607,12 @@ def report_cmd(
             "are reported as Could not verify",
             highlight=False,
         )
+    if repo is not None and not repo.is_dir():
+        err.print(f"[red]error:[/red] --repo is not a directory: {safe(repo)}")
+        raise typer.Exit(2)
+    root = repo if repo is not None else _default_repo(gated)
     out_dir = out if out is not None else report_json.parent
-    _write_reports(gated, fmts, out_dir)
+    _write_reports(gated, fmts, out_dir, repo_root=root)
     if exit_code:
         raise typer.Exit(gated.summary.exit_code)
 

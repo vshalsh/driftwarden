@@ -58,6 +58,14 @@ evidence has no matching VERIFIED verifier record inside the file becomes `UNKNO
 "re-render: no matching VERIFIED ledger record", and the summary, drift score and exit
 code are recomputed, so every format, JSON included, agrees.
 
+ADR links in `driftwarden.md` are relative to the file itself (for example
+`../docs/adr/0001-x.md#L13` from `.driftwarden/`). `report` needs the repository root
+for that: `--repo PATH`, or by default the current directory when it is the git root
+holding the report's ADR files; otherwise the locations are plain text. The PR comment
+(`render_pr_comment`) links only to `https://<server>/<owner>/<repo>/blob/<sha>/...`
+(`github_blob_base`, from `GITHUB_SERVER_URL` and `GITHUB_REPOSITORY`), because relative
+links do not resolve in a comment; without those it shows plain text.
+
 **Known limit:** `report` can only check a saved file against itself. A JSON whose verifier
 records were forged along with its findings cannot be detected without re-scanning:
 `report` re-renders, `scan` verifies.

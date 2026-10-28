@@ -345,27 +345,80 @@ def _dump(doc: dict[str, Any]) -> str:
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 
 
+MAX_UNLOCATED = 1_000
+UNLOCATED_TEXT = 500
+
+
+def _clip(value: object, limit: int) -> str:
+    t = str(value)
+    return t if len(t) <= limit else t[: limit - 1] + "…"
+
+
+def _unlocated(items: list[str], count: int, length: int) -> dict[str, Any]:
+    """The unlocated diagnostics within a budget (count and per-item length), with a note."""
+    shown = [_clip(x, length) for x in items[:count]]
+    out: dict[str, Any] = {"unlocated": shown} if shown else {}
+    clipped = sum(1 for x in items[:count] if len(x) > length)
+    if len(shown) < len(items) or clipped:
+        out["unlocatedTruncated"] = {
+            "total": len(items),
+            "emitted": len(shown),
+            "shortened": clipped,
+            "maxLength": length,
+        }
+    return out
+
+
+def _minimal(report: Report, note: dict[str, Any]) -> str:
+    """The smallest valid SARIF: the driver's name and version, no rules, no results."""
+    return _dump(
+        {
+            "$schema": SARIF_SCHEMA_URI,
+            "version": SARIF_VERSION,
+            "runs": [
+                {
+                    "tool": {
+                        "driver": {
+                            "name": "DriftWarden",
+                            "version": _clip(report.metadata.tool_version, 64),
+                            "informationUri": INFORMATION_URI,
+                        }
+                    },
+                    "results": [],
+                    "properties": {"driftwarden": {"truncated": note}},
+                }
+            ],
+        }
+    )
+
+
 def render_sarif(
     report: Report, *, max_results: int = MAX_RESULTS, max_bytes: int = MAX_BYTES
 ) -> str:
-    """SARIF 2.1.0 text for ``report`` (see the module docstring)."""
+    """SARIF 2.1.0 text for ``report`` (see the module docstring).
+
+    Size cap (``max_bytes``): results are dropped first (least important last in the list),
+    then the unlocated diagnostics are cut (fewer, then shorter, then none, each with a
+    note in ``properties.driftwarden.unlocatedTruncated``). If even a document with no
+    results is over the cap, a minimal valid SARIF with only the truncation note is
+    emitted.
+    """
     m = report.metadata
     results, unlocated = _build(report)
-    props: dict[str, Any] = {
+    base: dict[str, Any] = {
         "reportSchemaVersion": m.schema_version,
-        "repo": m.repo,
-        "commit": m.commit,
+        "repo": _clip(m.repo, 200),
+        "commit": _clip(m.commit, 80),
         "mode": m.mode,
         "driftScore": report.summary.drift_score,
         "exitCode": report.summary.exit_code,
         "resultsTotal": len(results),
     }
-    if unlocated:
-        props["unlocated"] = unlocated
     total = len(results)
+    size_reason = f"SARIF larger than {max_bytes} bytes (GitHub upload limit)"
 
-    def emit(k: int, reason: str | None) -> str:
-        p = dict(props)
+    def emit(k: int, reason: str | None, ucount: int, ulen: int) -> str:
+        p = {**base, **_unlocated(unlocated, ucount, ulen)}
         if reason is not None:
             p["truncated"] = {
                 "reason": reason,
@@ -375,20 +428,38 @@ def render_sarif(
             }
         return _dump(_document(report, results[:k], p))
 
+    def fits(text: str) -> bool:
+        return len(text.encode("utf-8")) <= max_bytes
+
+    ucount, ulen = MAX_UNLOCATED, UNLOCATED_TEXT
     k = min(total, max_results)
     reason = f"more than {max_results} results (GitHub limit per run)" if k < total else None
-    text = emit(k, reason)
-    if len(text.encode("utf-8")) <= max_bytes:
+    text = emit(k, reason, ucount, ulen)
+    if fits(text):
         return text
+    # Make room for the unlocated diagnostics first: they never take more than they need.
+    for ucount, ulen in ((MAX_UNLOCATED, UNLOCATED_TEXT), (100, 200), (10, 120), (0, 0)):
+        if fits(emit(0, size_reason, ucount, ulen)):
+            break
+    else:
+        return _minimal(
+            report,
+            {
+                "reason": size_reason + "; even a document without results is too large",
+                "resultsTotal": total,
+                "resultsEmitted": 0,
+                "resultsDropped": total,
+                "unlocatedTotal": len(unlocated),
+            },
+        )
     lo, hi = 0, k  # largest k whose document fits
-    size_reason = f"SARIF larger than {max_bytes} bytes (GitHub upload limit)"
     while lo < hi:
         mid = (lo + hi + 1) // 2
-        if len(emit(mid, size_reason).encode("utf-8")) <= max_bytes:
+        if fits(emit(mid, size_reason, ucount, ulen)):
             lo = mid
         else:
             hi = mid - 1
-    return emit(lo, size_reason)
+    return emit(lo, size_reason, ucount, ulen)
 
 
 __all__ = [
@@ -397,6 +468,7 @@ __all__ = [
     "MAX_BYTES",
     "MAX_RELATED",
     "MAX_RESULTS",
+    "MAX_UNLOCATED",
     "RULE_IDS",
     "SARIF_SCHEMA_URI",
     "SARIF_VERSION",

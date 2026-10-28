@@ -788,7 +788,17 @@ def test_report_subcommand_round_trip(pyshop_tmp, tmp_path):
     assert res.exit_code == 1, res.output
     b = tmp_path / "b"
     res2 = runner.invoke(
-        app, ["report", str(a / "driftwarden.json"), "--format", "md,sarif,json", "--out", str(b)]
+        app,
+        [
+            "report",
+            str(a / "driftwarden.json"),
+            "--format",
+            "md,sarif,json",
+            "--out",
+            str(b),
+            "--repo",  # md links are relative to OUT, so report needs the repo root
+            str(pyshop_tmp),
+        ],
     )
     assert res2.exit_code == 0, res2.output
     for ext in ("json", "md", "sarif"):
@@ -844,6 +854,90 @@ def test_report_exit_code_flag_follows_the_recomputed_exit_code(tmp_path):
     res = runner.invoke(app, ["report", str(p), "--out", str(tmp_path), "--exit-code"])
     assert res.exit_code == 1  # recomputed: no G1 left, other claims still VIOLATED
     assert runner.invoke(app, ["report", str(p), "--out", str(tmp_path)]).exit_code == 0
+
+
+def _adr_targets(md: str) -> list[str]:
+    return re.findall(r"\]\(([^)]*docs/adr/[^)#]*)#L\d+", md)
+
+
+def test_scan_md_links_resolve_from_the_report_file(pyshop_tmp, tmp_path):
+    """Codex 4403806790: links in OUT/driftwarden.md must resolve from OUT."""
+    res = runner.invoke(app, ["scan", str(pyshop_tmp), "--format", "md"])
+    assert res.exit_code == 1, res.output
+    md_file = pyshop_tmp / ".driftwarden" / "driftwarden.md"
+    targets = _adr_targets(md_file.read_text(encoding="utf-8"))
+    assert targets and all(t.startswith("../docs/adr/") for t in targets)
+    for t in targets:
+        assert (md_file.parent / t).resolve().is_file(), t
+    out = tmp_path / "deep" / "out"
+    res = runner.invoke(app, ["scan", str(pyshop_tmp), "--format", "md", "--out", str(out)])
+    targets = _adr_targets((out / "driftwarden.md").read_text(encoding="utf-8"))
+    assert targets and all((out / t).resolve().is_file() for t in targets)
+
+
+def test_report_md_links_need_a_repo(pyshop_tmp, tmp_path, monkeypatch):
+    a = tmp_path / "a"
+    runner.invoke(app, ["scan", str(pyshop_tmp), "--format", "json", "--out", str(a)])
+    saved = a / "driftwarden.json"
+    monkeypatch.chdir(tmp_path)  # not a git root: plain text
+    res = runner.invoke(app, ["report", str(saved), "--out", str(tmp_path / "b")])
+    assert res.exit_code == 0, res.output
+    plain = (tmp_path / "b" / "driftwarden.md").read_text(encoding="utf-8")
+    assert not _adr_targets(plain) and "docs/adr/0001-postgresql-only.md\\#L13 @" in plain
+    res = runner.invoke(
+        app, ["report", str(saved), "--out", str(tmp_path / "c"), "--repo", str(pyshop_tmp)]
+    )
+    targets = _adr_targets((tmp_path / "c" / "driftwarden.md").read_text(encoding="utf-8"))
+    assert targets and all((tmp_path / "c" / t).resolve().is_file() for t in targets)
+    monkeypatch.chdir(pyshop_tmp)  # the git root holding the ADRs: links by default
+    res = runner.invoke(app, ["report", str(saved), "--out", str(tmp_path / "d")])
+    targets = _adr_targets((tmp_path / "d" / "driftwarden.md").read_text(encoding="utf-8"))
+    assert targets and all((tmp_path / "d" / t).resolve().is_file() for t in targets)
+    bad = runner.invoke(app, ["report", str(saved), "--repo", str(tmp_path / "missing")])
+    assert bad.exit_code == 2 and "--repo" in bad.output
+
+
+def test_pr_comment_links_only_with_a_github_blob_base():
+    from driftwarden.report.markdown import github_blob_base
+
+    r = load_fixture()
+    plain = render_pr_comment(r)
+    assert "](" not in plain.split("### Grounding")[0].replace("](javascript", "")
+    env = {"GITHUB_SERVER_URL": "https://github.com", "GITHUB_REPOSITORY": "o/r"}
+    base = github_blob_base(r, env)
+    assert base == f"https://github.com/o/r/blob/{r.metadata.commit}"
+    linked = render_pr_comment(r, link_base=base)
+    assert f"({base}/docs/adr/0001-postgresql-only.md#L13)" in linked
+    assert render_pr_comment(r, link_base="../x") == plain  # relative: no link in a comment
+    assert github_blob_base(r, {}) is None
+    assert github_blob_base(r, {**env, "GITHUB_REPOSITORY": "o/r) [x](javascript:1"}) is None
+    assert github_blob_base(r, {**env, "GITHUB_SERVER_URL": "javascript:"}) is None
+
+
+def test_sarif_size_cap_with_one_huge_unlocated_diagnostic(monkeypatch):
+    """Codex 4403806799: unlocated diagnostics must be budgeted too."""
+    import driftwarden.report.view as view_mod
+
+    data = json.loads(render_json(load_fixture()))
+    data["undocumented"][0]["evidence"][0]["ref"]["quote"] = "nothing"  # demoted, unlocated
+    r = Report.model_validate(data)
+    rid = r.undocumented[0].id
+    real = view_mod.evidence_verified
+
+    def huge_reason(ev, checks, subject, commit):
+        why = real(ev, checks, subject, commit)
+        return why + " " + "x" * 2_000_000 if why else why
+
+    monkeypatch.setattr(view_mod, "evidence_verified", huge_reason)
+    full = render_sarif(r)
+    assert rid in full and len(full) < 200_000  # clipped to the per-item budget
+    note = validate_sarif(full)["runs"][0]["properties"]["driftwarden"]["unlocatedTruncated"]
+    assert note["shortened"] == 1 and note["total"] == 1
+    for cap in (60_000, 20_000, 3_000, 800):
+        text = render_sarif(r, max_bytes=cap)
+        assert len(text.encode("utf-8")) <= cap, cap
+        validate_sarif(text)
+        assert "runcated" in text  # unlocatedTruncated and/or truncated, always a note
 
 
 def test_report_subcommand_errors(tmp_path):

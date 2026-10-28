@@ -124,6 +124,49 @@ def _anchor(a: int, b: int) -> str:
     return f"#L{a}" if a >= b else f"#L{a}-L{b}"
 
 
+NO_LINKS = ""
+"""``link_base`` value for plain-text ADR locations (no link)."""
+
+_HTTPS_BASE = re.compile(r"^https://[A-Za-z0-9.-]+(?::\d+)?(?:/[A-Za-z0-9._~%/-]*)?$")
+_REL_BASE = re.compile(r"^(?:\.|[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*)$")
+
+
+def _link_prefix(link_base: str | None) -> str | None:
+    """What goes before the repo path in a link target, or None for no link.
+
+    ``None``: repo-relative links (``path#Lline``). An ``https://`` URL (for example
+    ``https://github.com/o/r/blob/<sha>``) makes them absolute. A relative POSIX path
+    (``..``, ``../repo``; from the report file to the repo root) prefixes them. Anything
+    else (another scheme, spaces, brackets) gives no link at all.
+    """
+    if link_base is None:
+        return ""
+    if _HTTPS_BASE.match(link_base):
+        return link_base.rstrip("/") + "/"
+    if _REL_BASE.match(link_base) and ":" not in link_base:
+        return "" if link_base == "." else link_base.rstrip("/") + "/"
+    return None
+
+
+def github_blob_base(report: Report, env: dict[str, str] | None = None) -> str | None:
+    """``<server>/<owner>/<repo>/blob/<sha>`` from ``GITHUB_SERVER_URL`` and
+    ``GITHUB_REPOSITORY`` (set in GitHub Actions) and the report's commit, for
+    ``render_pr_comment``: plain relative links do not resolve in a PR comment. None when
+    the variables are missing or malformed, or the commit is not a full SHA."""
+    import os
+
+    env = os.environ if env is None else env
+    server = (env.get("GITHUB_SERVER_URL") or "").rstrip("/")
+    repo = env.get("GITHUB_REPOSITORY") or ""
+    commit = report.metadata.commit
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit or ""):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        return None
+    base = f"{server}/{repo}/blob/{commit}"
+    return base if _HTTPS_BASE.match(base) else None
+
+
 def adr_link(p: Provenance, link_base: str | None = None) -> str:
     """``[path#Lline](path#Lline) @ `sha``` for an ADR source line."""
     # The path is user text; the #Lline anchor is ours (escaped, no joiner needed).
@@ -131,10 +174,13 @@ def adr_link(p: Provenance, link_base: str | None = None) -> str:
     sha = code(short_sha(p.commit))
     if not canonical_path(p.path):
         return f"{text} @ {sha}"
+    if link_base == NO_LINKS:
+        return f"{text} @ {sha}"
     target = quote(p.path, safe="/-._~") + _anchor(p.line_start, p.line_end)
-    if link_base and re.match(r"^https://[^\s()<>]+$", link_base):
-        target = link_base.rstrip("/") + "/" + target
-    return f"[{text}]({target}) @ {sha}"
+    base = _link_prefix(link_base)
+    if base is None:
+        return f"{text} @ {sha}"
+    return f"[{text}]({base}{target}) @ {sha}"
 
 
 def _loc(path: str, a: int, b: int, commit: str | None) -> str:
@@ -599,12 +645,18 @@ def _fit(render, view: ReportView, link_base: str | None, budget: int) -> str:
     return cut + note
 
 
-def render_markdown(report: Report, *, compact: bool = False, link_base: str | None = None) -> str:
+def render_markdown(
+    report: Report, *, compact: bool = False, link_base: str | None = None, links: bool = True
+) -> str:
     """The Markdown report. ``compact=True`` keeps it within ``COMPACT_BUDGET`` characters.
 
-    ``link_base`` (an ``https://`` URL such as ``https://github.com/o/r/blob/<sha>``)
-    makes ADR links absolute; by default they are repo-relative ``path#Lline``.
+    ADR links: by default repo-relative ``path#Lline``. ``link_base`` is either an
+    ``https://`` URL (``https://github.com/o/r/blob/<sha>``) or the relative path from the
+    report file's directory to the repo root (``..``; what the CLI passes, so links resolve
+    from ``.driftwarden/driftwarden.md``). ``links=False`` shows plain text locations.
     """
+    if not links:
+        link_base = NO_LINKS
     view = build_view(report)
     if not compact:
         return _full(view, _FULL, link_base)
@@ -613,7 +665,13 @@ def render_markdown(report: Report, *, compact: bool = False, link_base: str | N
 
 def render_pr_comment(report: Report, *, link_base: str | None = None) -> str:
     """Compact PR comment (for L-014): violations and could-not-verify first, with the
-    hidden marker ``<!-- driftwarden-report -->`` so the Action can find and update it."""
+    hidden marker ``<!-- driftwarden-report -->`` so the Action can find and update it.
+
+    Relative links do not resolve in a PR comment, so ADR locations are links only when
+    ``link_base`` is an ``https://`` blob URL (``github_blob_base(report)`` in Actions);
+    otherwise they are plain text."""
+    if not (link_base and _HTTPS_BASE.match(link_base)):
+        link_base = NO_LINKS
     return _fit(_comment, build_view(report), link_base, COMPACT_BUDGET)
 
 
@@ -625,6 +683,7 @@ __all__ = [
     "code",
     "esc",
     "fenced",
+    "github_blob_base",
     "render_markdown",
     "render_pr_comment",
 ]

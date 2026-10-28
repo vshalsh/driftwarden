@@ -7,20 +7,20 @@
 
 - **ADR-0001.c1** (ADR-0001: PostgreSQL is the only datastore)
   - Rule: `only(datastore) = [PostgreSQL]`
-  - ADR: [docs/adr/0001-postgresql-only.md\#L13](docs/adr/0001-postgresql-only.md#L13) @ `c80cc5a`: PostgreSQL is the only datastore.
+  - ADR: docs/adr/0001-postgresql-only.md\#L13 @ `c80cc5a`: PostgreSQL is the only datastore.
   - Why: other datastore mongodb used (e1, e2)
   - Evidence:
     - `requirements.txt:2` @ `c80cc5a` declares pymongo ==4.6.1: `pymongo==4.6.1`
     - `src/shop/legacy/catalog.py:3` @ `c80cc5a` imports pymongo: `from pymongo import MongoClient`
 - **ADR-0002.c1** (ADR-0002: Cloud SDKs live in adapters)
   - Rule: `boundary [cloud SDK] allowed_in [adapters/]`
-  - ADR: [docs/adr/0002-cloud-sdk-in-adapters.md\#L13](docs/adr/0002-cloud-sdk-in-adapters.md#L13) @ `c80cc5a`: No cloud SDK outside adapters/.
+  - ADR: docs/adr/0002-cloud-sdk-in-adapters.md\#L13 @ `c80cc5a`: No cloud SDK outside adapters/.
   - Why: aws-sdk imported outside the allowed paths (e1)
   - Evidence:
     - `src/shop/reports.py:5` @ `c80cc5a` imports boto3: `import boto3 # TODO: move behind the storage adapter`
 - **ADR-0005.c1** (ADR-0005: Message broker)
   - Rule: `require [RabbitMQ]`
-  - ADR: [docs/adr/0005-message-broker.md\#L13](docs/adr/0005-message-broker.md#L13) @ `c80cc5a`: We will use RabbitMQ as the message broker.
+  - ADR: docs/adr/0005-message-broker.md\#L13 @ `c80cc5a`: We will use RabbitMQ as the message broker.
   - Why: required technology not found; queue kafka used instead
   - Evidence:
     - `requirements.txt:6` @ `c80cc5a` declares kafka-python ==2.0.2: `kafka-python==2.0.2`
@@ -31,18 +31,18 @@
 These items failed a deterministic verifier. They are not findings and are never shown as violations.
 
 - **decision ADR-0006** \[G1\]
-  - ADR: [docs/adr/0006-no-celery.md\#L13](docs/adr/0006-no-celery.md#L13) @ `c80cc5a`
+  - ADR: docs/adr/0006-no-celery.md\#L13 @ `c80cc5a`
   - Reason: docs/adr/0006-no-celery.md:13-13@‍c80cc5a0effc: quote not found in cited range or anywhere in the file
 - **verdict ADR-0003.c1** (proposed DRIFTING, not shown as a finding)
-  - ADR: [docs/adr/0003-no-requests.md\#L13](docs/adr/0003-no-requests.md#L13) @ `c80cc5a`
+  - ADR: docs/adr/0003-no-requests.md\#L13 @ `c80cc5a`
   - Reason: e1: requirements.txt:5-5@‍c80cc5a0effc: quote not found in cited range or anywhere in the file
   - Reason: e2: tests/db\_check.py:3-3@‍c80cc5a0effc: quote not found in cited range or anywhere in the file
 - **evidence ADR-0003.c1/e1** \[G2\]
-  - ADR: [docs/adr/0003-no-requests.md\#L13](docs/adr/0003-no-requests.md#L13) @ `c80cc5a`
+  - ADR: docs/adr/0003-no-requests.md\#L13 @ `c80cc5a`
   - Cited (not verified): `requirements.txt:5` @ `c80cc5a`
   - Reason: requirements.txt:5-5@‍c80cc5a0effc: quote not found in cited range or anywhere in the file
 - **evidence ADR-0003.c1/e2** \[G2\]
-  - ADR: [docs/adr/0003-no-requests.md\#L13](docs/adr/0003-no-requests.md#L13) @ `c80cc5a`
+  - ADR: docs/adr/0003-no-requests.md\#L13 @ `c80cc5a`
   - Cited (not verified): `tests/db_check.py:3` @ `c80cc5a`
   - Reason: tests/db\_check.py:3-3@‍c80cc5a0effc: quote not found in cited range or anywhere in the file
 
@@ -79,7 +79,7 @@ Draft ADRs are left out of this compact view; see the full report.
 
 - **ADR-0004.c1** (ADR-0004: Structured logging)
   - Rule: `require [structlog]`
-  - ADR: [docs/adr/0004-structured-logging.md\#L13](docs/adr/0004-structured-logging.md#L13) @ `c80cc5a`: We will use structlog for logging.
+  - ADR: docs/adr/0004-structured-logging.md\#L13 @ `c80cc5a`: We will use structlog for logging.
   - Why: required structlog present (e1, e2)
   - Evidence:
     - `requirements.txt:4` @ `c80cc5a` declares structlog ==24.1.0: `structlog==24.1.0`
@@ -91,7 +91,7 @@ Draft ADRs are left out of this compact view; see the full report.
 
 - **ADR-0007.c1** (ADR-0007: Health endpoint)
   - Rule: `free "Every service exposes /healthz"`
-  - ADR: [docs/adr/0007-health-endpoint.md\#L4](docs/adr/0007-health-endpoint.md#L4) @ `c80cc5a`: free: "Every service exposes /healthz"
+  - ADR: docs/adr/0007-health-endpoint.md\#L4 @ `c80cc5a`: free: "Every service exposes /healthz"
   - Why: rules cannot decide: free-form claim: no deterministic rule
 
 ### Grounding summary
