@@ -790,53 +790,68 @@ def test_madr_front_matter_statuses_are_filtered_too(tmp_path):
 # --------------------------------------------------------------------------- changed_paths
 
 
-def test_changed_paths_only_touched_claims_are_judged(pyshop, tmp_path):
+# L-028 round 2 (Fable design decision on Codex P2 #3/#4): PR mode judges EVERY accepted
+# claim exactly as a full scan; changed_paths only sets ClaimResult.in_change. The tests
+# below were rewritten from "only touched claims are judged" to that rule.
+
+
+def _tagged(r) -> set[str]:
+    return {c.id for c in r.claims if c.in_change}
+
+
+def _absence_safe(r) -> set[str]:
+    """Claims whose in_change is not set conservatively by a deleted path / manifest."""
+    return {c.id for c in r.claims if c.claim.kind not in ("require", "only")}
+
+
+def test_changed_paths_judge_everything_and_tag_touched_claims(pyshop, tmp_path):
     full, _ = run(pyshop, tmp_path)
     r, _ = run(pyshop, tmp_path, changed_paths=["src/shop/legacy/catalog.py"])
-    judged = {c.id for c in r.claims if c.judged}
-    assert "ADR-0001.c1" in judged  # evidence for the datastore claim lives there
-    assert judged < {c.id for c in r.claims}
-    assert {c.id for c in r.claims} == {c.id for c in full.claims}
-    for c in r.claims:
-        if not c.judged:
-            assert c.verdict is None and c.not_judged_reason
-        else:
-            assert c.status == by_id(full)[c.id].status
-    assert r.summary.claims_judged == len(judged)
+    assert all(c.judged and c.verdict is not None for c in r.claims)
+    assert {c.id: c.status for c in r.claims} == {c.id: c.status for c in full.claims}
+    assert "ADR-0001.c1" in _tagged(r)  # evidence for the datastore claim lives there
+    assert _tagged(r) < {c.id for c in r.claims}
+    assert all(c.in_change is None for c in full.claims)
+    assert r.summary.claims_judged == full.summary.claims_judged
+    assert r.summary.exit_code == full.summary.exit_code
 
 
-def test_changed_paths_adr_file_rejudges_its_claims(pyshop, tmp_path):
+def test_changed_paths_adr_file_tags_its_claims(pyshop, tmp_path):
     for variant in (
         "docs/adr/0004-structured-logging.md",
         "./docs/adr/0004-structured-logging.md",
         "docs//adr/0004-structured-logging.md",
     ):
         r, _ = run(pyshop, tmp_path, changed_paths=[variant])
-        assert "ADR-0004.c1" in {c.id for c in r.claims if c.judged}, variant
+        assert "ADR-0004.c1" in _tagged(r), variant
 
 
 def test_changed_paths_directory_rule_and_case_sensitivity(pyshop, tmp_path):
     # the rule is allowed_in ["adapters/"]; the documented comparison is against the
     # repo-relative path, so a root-level adapters/ directory matches by prefix
     r, _ = run(pyshop, tmp_path, changed_paths=["adapters/new.py"])
-    assert "ADR-0002.c1" in {c.id for c in r.claims if c.judged}
+    assert "ADR-0002.c1" in _tagged(r)
     r, _ = run(pyshop, tmp_path, changed_paths=["src/shop/reports.py"])  # its evidence file
-    assert "ADR-0002.c1" in {c.id for c in r.claims if c.judged}
+    assert "ADR-0002.c1" in _tagged(r)
     r2, _ = run(
         pyshop,
         tmp_path,
         changed_paths=["SRC/SHOP/ADAPTERS/new.py", "DOCS/ADR/0004-structured-logging.md"],
     )
-    assert not any(c.judged for c in r2.claims)  # documented: case-sensitive
+    # documented: case-sensitive (require/only are tagged conservatively: absent paths)
+    assert not (_tagged(r2) & _absence_safe(r2))
 
 
 def test_changed_paths_unrelated_empty_and_garbage(pyshop, tmp_path):
+    full, _ = run(pyshop, tmp_path, changed_paths=None)
+    assert all(c.judged and c.in_change is None for c in full.claims)
     for paths in (["README.md"], [], ["", "  ", "/"], ["../outside.py"]):
         r, _ = run(pyshop, tmp_path, changed_paths=paths)
-        assert not any(c.judged for c in r.claims), paths
-        assert r.summary.exit_code == 0, paths
-    r, _ = run(pyshop, tmp_path, changed_paths=None)
-    assert all(c.judged for c in r.claims)
+        assert all(c.judged for c in r.claims), paths
+        assert not (_tagged(r) & _absence_safe(r)), paths
+        assert r.summary.exit_code == full.summary.exit_code, paths  # never hides a violation
+    r, _ = run(pyshop, tmp_path, changed_paths=[])
+    assert _tagged(r) == set()
 
 
 def test_changed_paths_do_not_filter_undocumented_detection(pyshop, tmp_path):
@@ -846,9 +861,11 @@ def test_changed_paths_do_not_filter_undocumented_detection(pyshop, tmp_path):
     assert r.metadata.changed_paths == ["README.md"]
 
 
-def test_changed_paths_decision_reason_when_nothing_touched(pyshop, tmp_path):
+def test_changed_paths_never_unjudge_decisions(pyshop, tmp_path):
+    full, _ = run(pyshop, tmp_path)
     r, _ = run(pyshop, tmp_path, changed_paths=["README.md"])
-    assert all(not d.judged and "PR mode" in (d.not_judged_reason or "") for d in r.decisions)
+    assert [(d.id, d.judged) for d in r.decisions] == [(d.id, d.judged) for d in full.decisions]
+    assert not any("PR mode" in (d.not_judged_reason or "") for d in r.decisions)
 
 
 # --------------------------------------------------------------------------- edge repos
@@ -1085,7 +1102,7 @@ def test_drift_score_excludes_not_judged_and_unverified(pyshop, tmp_path, monkey
         (s.by_status["DRIFTING"] + s.by_status["VIOLATED"]) / decided
     )
     pr, _ = run(pyshop, tmp_path, changed_paths=["README.md"])
-    assert pr.summary.drift_score is None  # nothing judged: zero denominator
+    assert pr.summary.drift_score == s.drift_score  # PR mode judges everything (L-028 r2)
     t_evidence_wrong_lines(monkeypatch, pyshop)
     bad, _ = run(pyshop, tmp_path)
     b = bad.summary.by_status

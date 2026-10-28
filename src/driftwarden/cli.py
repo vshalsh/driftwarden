@@ -5,13 +5,16 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+import unicodedata
 from enum import Enum
 from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.markup import escape
+from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from driftwarden import __version__, git
 from driftwarden.config import ConfigError, load_config
@@ -149,6 +152,20 @@ def _loc(path: str, a: int, b: int, commit: str) -> str:
     return f"{path}:{lines}@{sha}"
 
 
+def terminal_safe(text: str) -> str:
+    """``text`` with every control, format or separator character except newline and tab
+    replaced by a visible ``\\uXXXX`` escape, so it cannot drive the terminal."""
+    out = []
+    for ch in text:
+        if ch in "\n\t":
+            out.append(ch)
+        elif unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") or ch == "\x7f":
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _detail(ev) -> str:
     """An evidence item's detail without its leading ``path:line`` (already shown)."""
     head, _, rest = ev.detail.partition(" ")
@@ -221,6 +238,13 @@ def _print_report(report: Report) -> None:
             f"Draft ADR for {escape(d.record_id)}: {escape(d.title)} -> suggested path "
             f"{escape(d.path or '?')} (shown only, not written)",
             highlight=False,
+        )
+        # The verified markdown, as inert text: never parsed as rich markup, and any
+        # control / format character (ANSI escapes included) shown as a visible escape.
+        console.print(
+            Panel(Text(terminal_safe(d.markdown or "")), title=escape(d.path or d.record_id)),
+            highlight=False,
+            soft_wrap=False,
         )
     gs = report.grounding_summary
     parts = []

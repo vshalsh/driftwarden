@@ -234,23 +234,76 @@ def test_only_accepted_decisions_are_judged(make_repo, tmp_path):
 # ------------------------------------------------------------------ PR mode
 
 
-def test_changed_paths_filtering(pyshop, tmp_path):
-    full = by_id(scan(pyshop, tmp_path / "a"))
+def test_changed_paths_judge_everything_and_only_tag(pyshop, tmp_path):
+    """Fable decision (Codex P2 #3/#4): PR mode judges every accepted claim; changed_paths
+    only sets in_change."""
+    full = scan(pyshop, tmp_path / "a")
     r = scan(pyshop, tmp_path / "b", changed_paths=["./docs/adr/0007-health-endpoint.md"])
-    judged = {c.id for c in r.claims if c.judged}
-    assert judged == {"ADR-0007.c1"}
-    assert set(by_id(r)) == set(full)  # every claim still listed
-    other = by_id(r)["ADR-0001.c1"]
-    assert other.verdict is None and "changed paths" in other.not_judged_reason
+    assert all(c.judged and c.verdict is not None for c in r.claims)
+    assert {c.id: c.status for c in r.claims} == {c.id: c.status for c in full.claims}
+    assert {c.id for c in r.claims if c.in_change} == {"ADR-0007.c1"}
+    assert all(c.in_change is False for c in r.claims if c.id != "ADR-0007.c1")
+    assert all(c.in_change is None for c in full.claims)
+    assert r.summary.exit_code == full.summary.exit_code == 1  # nothing hidden
     assert r.metadata.changed_paths == ["docs/adr/0007-health-endpoint.md"]
 
     r2 = scan(pyshop, tmp_path / "c", changed_paths=["requirements.txt"])
-    judged2 = {c.id for c in r2.claims if c.judged}
-    assert "ADR-0001.c1" in judged2 and "ADR-0007.c1" not in judged2
-    assert by_id(r2)["ADR-0001.c1"].status == full["ADR-0001.c1"].status
+    assert by_id(r2)["ADR-0001.c1"].in_change and not by_id(r2)["ADR-0007.c1"].in_change
 
     r3 = scan(pyshop, tmp_path / "d", changed_paths=[])
-    assert not any(c.judged for c in r3.claims) and r3.summary.exit_code == 0
+    assert not any(c.in_change for c in r3.claims) and r3.summary.exit_code == 1
+
+
+def test_changed_file_beyond_the_evidence_cap_is_in_change(make_repo, tmp_path):
+    """Codex P2: 51 files import celery; the judge caps a group at 50, so one file is not
+    in the verdict's evidence. Changing exactly that file must still tag the claim."""
+    files = {f"app/w{i:02d}.py": "import celery\n" for i in range(51)}
+    files["docs/adr/0001-a.md"] = ADR.format(n=1, title="No Celery", status="Accepted")
+    repo = make_repo(files)
+    full = scan(repo, tmp_path / "a")
+    v = by_id(full)["ADR-0001.c1"].verdict
+    assert v.status == "VIOLATED"
+    cited = {e.ref.path for e in v.evidence}
+    hidden = sorted(set(f for f in files if f.startswith("app/")) - cited)
+    assert hidden, "the test needs a file the capped evidence leaves out"
+    r = scan(repo, tmp_path / "b", changed_paths=[hidden[0]])
+    c = by_id(r)["ADR-0001.c1"]
+    assert c.judged and c.status == "VIOLATED" and c.in_change is True
+    assert r.summary.exit_code == 1
+
+
+def test_deleting_the_last_required_occurrence_is_in_change(tmp_path):
+    """Codex P2: the change deletes the only structlog import (and its requirement) while
+    loguru is used elsewhere. The full scan says VIOLATED; PR mode must judge it too and tag
+    it, although the deleted file is not among the evidence any more."""
+    repo = copy_repo(tmp_path, FIXTURES / "judge_repos" / "pyshop", "pyshop-del")
+    (repo / "src/shop/audit.py").write_text("import loguru\n", encoding="utf-8")
+    req = repo / "requirements.txt"
+    req.write_text(req.read_text(encoding="utf-8") + "loguru==0.7.2\n", encoding="utf-8")
+    _commit(repo)
+    (repo / "src/shop/log.py").unlink()
+    lines = req.read_text(encoding="utf-8").splitlines(True)
+    req.write_text("".join(x for x in lines if "structlog" not in x), encoding="utf-8")
+    _commit(repo)
+    full = scan(repo, tmp_path / "a")
+    assert by_id(full)["ADR-0004.c1"].status == "VIOLATED"
+    r = scan(repo, tmp_path / "b", changed_paths=["src/shop/log.py"])
+    c = by_id(r)["ADR-0004.c1"]
+    assert c.judged and c.status == "VIOLATED" and c.in_change is True
+    assert "src/shop/log.py" not in {e.ref.path for e in c.verdict.evidence}
+    assert not by_id(r)["ADR-0006.c1"].in_change  # forbid: a deletion cannot break it
+    assert r.summary.exit_code == 1
+
+
+def test_drafts_of_one_scan_get_distinct_consecutive_numbers(pyshop, tmp_path):
+    r = scan(pyshop, tmp_path, draft_adrs=True)
+    assert len(r.drafts) == 3
+    numbers = [d.number for d in r.drafts]
+    assert sorted(numbers) == [8, 9, 10]
+    assert len({d.path for d in r.drafts}) == 3
+    for d in r.drafts:
+        assert d.path.startswith(f"docs/adr/{d.number:04d}-")
+    assert all(d.grounding == "VERIFIED" for d in r.drafts)
 
 
 def test_claim_touches_rule_paths():
@@ -377,7 +430,16 @@ def test_cli_draft_adrs_shown_not_written(pyshop, tmp_path):
     res = runner.invoke(app, ["scan", str(pyshop), "--out", str(tmp_path / "o"), "--draft-adrs"])
     assert res.exit_code == 1, res.output
     assert "Draft ADR for UD-queue-kafka" in res.output and "not written" in res.output
+    assert res.output.count("status: proposed (draft)") == 3  # the markdown itself is shown
+    assert "## Decision Outcome" in res.output
     assert git(pyshop, "status", "--porcelain", "--untracked-files=all").strip() == ""
+
+
+def test_terminal_safe_neutralises_control_characters():
+    from driftwarden.cli import terminal_safe
+
+    assert terminal_safe("a\n\tb") == "a\n\tb"
+    assert terminal_safe("x\x1b[31my\u202ez\x07") == "x\\u001b[31my\\u202ez\\u0007"
 
 
 def test_cli_format_writes_nothing(pyshop, tmp_path):
@@ -412,7 +474,12 @@ def test_cli_llm_mode_without_key_exits_2(pyshop, tmp_path):
 
 
 def test_cli_help_documents_exit_codes():
+    import re
+
     res = runner.invoke(app, ["scan", "--help"])
     assert res.exit_code == 0
+    # Under GITHUB_ACTIONS / FORCE_COLOR typer forces a rich terminal and styles the help
+    # (ANSI codes split "--json-out"); compare the plain text. This was the CI failure.
+    plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", res.output)
     for text in ("--json-out", "--draft-adrs", "Exit codes", "VIOLATED", "mismatch"):
-        assert text in res.output
+        assert text in plain

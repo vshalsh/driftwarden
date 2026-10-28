@@ -26,15 +26,31 @@ The repository is indexed once: the same Snapshot serves the judge and the
 detector. Every verifier result of every stage goes to ``ledger``, and the
 Report's ``grounding_summary`` is computed from the rows this call appended.
 
-**PR mode (``changed_paths``).** Claims are still structured for every judged
-decision, but only these claims are judged (the rest are listed with
-``judged=False``): a claim whose ADR file is in ``changed_paths``; a claim with
-a candidate evidence item (``Evidence.ref.path`` or its manifest path) in
-``changed_paths``; a claim whose rule names a path (``target``, ``allowed_in``,
-``via``, ``scope``, ``actor`` values) that a changed path is, or lies under.
-Paths are compared as canonical repo-relative POSIX strings (``./`` and
-trailing ``/`` removed), case-sensitively. Undocumented-decision detection and
-drafting are not filtered.
+**PR mode (``changed_paths``).** Every accepted claim is judged exactly as in a
+full scan: ``changed_paths`` never decides *what* is judged, so PR mode can never
+hide a violation, and the exit code counts every verified violation. It only
+tags each judged claim with ``ClaimResult.in_change`` (``None`` outside PR mode)
+so reporters can lead with the findings the change touches. ``in_change`` is
+true when (see :func:`claim_touches`):
+
+* the claim's ADR file is in ``changed_paths``; or
+* a changed path is, or lies under, a path or term the rule names (any string
+  value of the rule: ``target``, ``allowed_in``, ``via``, ``scope``, ``actor``,
+  the forbid / require / only terms ...); or
+* a changed path is the file or manifest of any of the claim's evidence items,
+  collected **without** the per-group cap the judge uses (a 51st file importing
+  a forbidden package still counts); or
+* conservatively, for ``require`` and ``only`` claims (whose verdict can change
+  when something disappears): a changed path is not in the scanned tree (it was
+  deleted, or is the old name of a rename), or is a dependency manifest.
+
+Paths are compared as canonical repo-relative POSIX strings (``./`` and trailing
+``/`` removed), case-sensitively. Undocumented-decision detection and drafting
+are not filtered.
+
+**Draft numbering.** Drafts of one scan reserve their suggested paths in turn
+(passed to ``draft_adr`` as ``existing_adrs``), so three drafts get three
+consecutive ADR numbers, never the same one.
 """
 
 from __future__ import annotations
@@ -52,8 +68,9 @@ from driftwarden.config import Config
 from driftwarden.discover.adr import AdrScan, scan_adrs, scan_adrs_at
 from driftwarden.grounding.ledger import Ledger
 from driftwarden.grounding.verify import verify_source_quote
+from driftwarden.index.manifests import detect as detect_manifest
 from driftwarden.judge.consistency import DEFAULT_RUNS, ConsistencyRunner
-from driftwarden.judge.evidence import EvidenceSet, load_snapshot
+from driftwarden.judge.evidence import EvidenceSet, collect_evidence, load_snapshot
 from driftwarden.judge.judge import Judge
 from driftwarden.llm.base import Provider
 from driftwarden.models import (
@@ -79,8 +96,11 @@ from driftwarden.report.model import (
 )
 from driftwarden.undocumented.detect import detect_undocumented
 from driftwarden.undocumented.draft import DraftADR, draft_adr
+from driftwarden.undocumented.draft import _existing_adrs as existing_adr_paths
 
 RULE_PATH_KEYS = ("target", "allowed_in", "via", "scope", "actor")
+UNCAPPED = 10**9
+"""``max_per_relation`` for PR-mode relevance: every evidence item, no cap."""
 
 _KIND_ORDER = {
     k: i
@@ -105,25 +125,40 @@ def _under(path: str, base: str) -> bool:
     return bool(base) and (path == base or path.startswith(base + "/"))
 
 
-def claim_touches(claim: Claim, es: EvidenceSet | None, changed: set[str]) -> bool:
-    """The PR-mode rule (module docstring): does ``claim`` touch any of ``changed``?"""
+def _rule_strings(rule: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for value in rule.values():
+        for v in value if isinstance(value, list) else [value]:
+            if isinstance(v, str):
+                out.append(v)
+    return out
+
+
+def claim_touches(
+    claim: Claim,
+    es: EvidenceSet | None,
+    changed: set[str],
+    *,
+    absent: set[str] | None = None,
+    manifests: set[str] | None = None,
+) -> bool:
+    """The PR-mode ``in_change`` rule (module docstring). ``es`` should be the claim's
+    UNCAPPED evidence; ``absent`` are the changed paths missing from the scanned tree
+    (deleted or renamed away); ``manifests`` the changed paths that are manifests."""
     if _canon(claim.source.path) in changed:
         return True
+    for v in _rule_strings(claim.rule):
+        base = _canon(v)
+        if base and any(_under(p, base) for p in changed):
+            return True
     if es is not None:
         for ev in es.candidates:
             if _canon(ev.ref.path) in changed:
                 return True
             if ev.dependency is not None and _canon(ev.dependency.manifest_path) in changed:
                 return True
-    for key in RULE_PATH_KEYS:
-        value = claim.rule.get(key)
-        values = value if isinstance(value, list) else [value]
-        for v in values:
-            if not isinstance(v, str):
-                continue
-            base = _canon(v)
-            if base and any(_under(p, base) for p in changed):
-                return True
+    if claim.kind in ("require", "only") and (absent or manifests):
+        return True
     return False
 
 
@@ -316,20 +351,23 @@ def run_scan(
     changed = (
         {p for p in (_canon(x) for x in changed_paths) if p} if changed_paths is not None else None
     )
+    absent: set[str] = set()
+    manifests: set[str] = set()
+    if changed is not None:
+        present = {f.path for f in snap.files}
+        absent = {p for p in changed if p not in present}
+        manifests = {p for p in changed if detect_manifest(p) is not None}
     results: list[ClaimResult] = []
     for claim in claims:
         es = judge.evidence(claim)
-        if changed is not None and not claim_touches(claim, es, changed):
-            results.append(
-                ClaimResult(
-                    claim=claim,
-                    judged=False,
-                    not_judged_reason="not touched by the changed paths (PR mode)",
-                )
-            )
-            continue
         verdict = runner.run(claim, es) if runner is not None else judge.judge(claim, es)
-        results.append(ClaimResult(claim=claim, judged=True, verdict=verdict))
+        in_change = None
+        if changed is not None:
+            # Relevance uses the UNCAPPED evidence: the judge's per-group cap must never
+            # hide the changed file (it only tags; everything is judged regardless).
+            full = collect_evidence(claim, snap, max_per_relation=UNCAPPED, max_keywords=0)
+            in_change = claim_touches(claim, full, changed, absent=absent, manifests=manifests)
+        results.append(ClaimResult(claim=claim, judged=True, verdict=verdict, in_change=in_change))
 
     # 5. Undocumented decisions (needs a commit).
     at_commit_claims = [c for c in claims if c.source.commit == snap.commit]
@@ -356,10 +394,14 @@ def run_scan(
     drafts: list[DraftADR] = []
     failed_drafts: list[DraftADR] = []
     if draft_adrs:
+        # One shared list of taken ADR paths: each verified draft reserves its suggested
+        # path before the next is numbered, so drafts of one scan never share a number.
+        reserved = existing_adr_paths(root, snap.commit, config)
         for rec in found:
             d = draft_adr(
                 root,
                 rec,
+                existing_adrs=list(reserved),
                 decisions=decisions if at_commit else None,
                 claims=at_commit_claims,
                 config=config,
@@ -367,6 +409,8 @@ def run_scan(
                 ledger=ledger,
             )
             (failed_drafts if d.could_not_verify else drafts).append(d)
+            if not d.could_not_verify and d.path:
+                reserved.append(d.path)
 
     # 7. Assemble.
     items: list[UnverifiedItem] = []
@@ -427,14 +471,11 @@ def run_scan(
     claim_ids: dict[str, list[str]] = {}
     for c in claims:
         claim_ids.setdefault(c.decision_id, []).append(c.id)
-    judged_by_decision: Counter[str] = Counter(cr.claim.decision_id for cr in results if cr.judged)
     decision_results: list[DecisionResult] = []
     for dec in decisions:
         why = reasons[dec.id]
         if why is None and not claim_ids.get(dec.id):
             why = "no testable claim was extracted from the decision text"
-        elif why is None and not judged_by_decision[dec.id]:
-            why = "no claim touched by the changed paths (PR mode)"
         decision_results.append(
             DecisionResult(
                 id=dec.id,

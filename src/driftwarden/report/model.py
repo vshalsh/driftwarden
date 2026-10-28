@@ -112,6 +112,11 @@ class ClaimResult(BaseModel):
     judged: bool
     not_judged_reason: str | None = None
     verdict: Verdict | None = None
+    in_change: bool | None = Field(
+        default=None,
+        description="PR mode only: the change touches this claim (see pipeline docstring). "
+        "Every claim is judged either way; None outside PR mode.",
+    )
 
     @property
     def id(self) -> str:
