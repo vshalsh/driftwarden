@@ -725,3 +725,75 @@ def test_partial_draft_is_not_treated_as_already_drafted(tmp_path):
     assert sorted(p.name for p in stale.parent.iterdir()) == sorted(
         [stale.name, Path(d.written_path).name]
     )
+
+
+# ------------------------------------------------------------------ Codex round 3 (PR #22)
+
+
+def _redis_repo(tmp_path: Path, name: str, subject: str = "r") -> Path:
+    _mkrepo(
+        tmp_path,
+        name,
+        [({"README.md": "x\n"}, "init"), ({"requirements.txt": "redis==5\n"}, subject)],
+    )
+    return tmp_path / name
+
+
+@pytest.mark.parametrize("ch", ["\x1e", "\x1f", "\x1d", "\x1e\x1f\x1e"])
+def test_delimiter_characters_in_subjects_never_raise(tmp_path, ch):
+    from driftwarden import git as dgit
+
+    subject = f"add{ch}redis{ch}cache"
+    repo = _redis_repo(tmp_path, "d", subject)
+    head = git(repo, "rev-parse", "HEAD").strip()
+    (entry,) = dgit.log(repo, max_count=1, rev=head)
+    assert (entry.sha, entry.subject) == (head, subject)
+    (rec,) = detect_undocumented(repo).findings
+    d = draft_adr(repo, rec)
+    assert d.grounding == "VERIFIED", d.reasons
+    line = next(x for x in d.markdown.split("\n") if x.startswith("- Commit "))
+    sep = " " * len(ch)
+    assert line.endswith(f": add{sep}redis{sep}cache")
+    assert verify_draft(repo, d).grounding == "VERIFIED"
+
+
+def test_unparsable_commit_metadata_refuses_cleanly(tmp_path, monkeypatch):
+    from driftwarden import git as dgit
+
+    repo = _redis_repo(tmp_path, "u")
+    (rec,) = detect_undocumented(repo).findings
+    good = draft_adr(repo, rec)
+
+    def broken(*_a, **_k):
+        raise ValueError("not enough values to unpack")
+
+    monkeypatch.setattr(dgit, "log", broken)
+    d = draft_adr(repo, rec, write=True)
+    assert d.status == "UNKNOWN" and d.markdown is None and d.written_path is None
+    assert any("ValueError" in r for r in d.reasons)
+    assert verify_draft(repo, good).could_not_verify
+
+
+def test_reused_draft_reports_the_file_on_disk(tmp_path):
+    repo = _redis_repo(tmp_path, "re")
+    (rec,) = detect_undocumented(repo).findings
+    first = draft_adr(repo, rec, write=True)
+    assert first.origin == "template" and first.written_path
+    ctx = _template_context(first.markdown)
+    p = FakeProvider(_json("In short: " + ctx))
+    again = draft_adr(repo, rec, provider=p, write=True)
+    assert p.calls == 1
+    assert again.written_path == first.written_path
+    on_disk = (repo / again.written_path).read_text(encoding="utf-8")
+    assert again.markdown == on_disk == first.markdown
+    assert again.origin == "template" and "In short: " not in again.markdown
+    assert again.grounding == "VERIFIED" and again.number == first.number
+    # and the other way round: an LLM draft on disk is reported as such
+    repo2 = _redis_repo(tmp_path, "re2")
+    (rec2,) = detect_undocumented(repo2).findings
+    ctx2 = _template_context(draft_adr(repo2, rec2).markdown)
+    llm = draft_adr(repo2, rec2, provider=FakeProvider(_json("In short: " + ctx2)), write=True)
+    assert llm.origin == "llm" and llm.written_path
+    plain = draft_adr(repo2, rec2, write=True)
+    assert plain.written_path == llm.written_path and plain.origin == "llm"
+    assert plain.markdown == (repo2 / plain.written_path).read_text(encoding="utf-8")

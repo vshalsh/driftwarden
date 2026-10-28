@@ -764,8 +764,8 @@ def draft_adr(
         infos = {c: _commit_info(root, c) for c in record.introducing_commits}
     except git.NotAGitRepoError:
         raise
-    except git.GitError as exc:
-        return refused([f"introducing commit unreadable: {exc}"])
+    except Exception as exc:  # unreadable or unparsable commit metadata: refuse, never raise
+        return refused([f"introducing commit unreadable ({type(exc).__name__}: {exc})"])
 
     notes: list[str] = []
     template = template_context(record, infos)
@@ -826,10 +826,11 @@ def _drafted_record(path: Path) -> str | None:
 
 def _existing_draft(
     root: Path, draft: DraftADR, config: Config | None
-) -> tuple[str | None, list[str]]:
+) -> tuple[str | None, DraftADR | None, list[str]]:
     """An ADR file that already holds a draft of this record *and verifies* against it
-    (exactly the rendering, or an LLM-polished rendering that passes the gate), and
-    notes about files that only claim to (truncated, edited, stale)."""
+    (exactly the template rendering, or an LLM-polished rendering that passes the
+    gate), the verified draft *of that file's text*, and notes about files that only
+    claim to (truncated, edited, stale)."""
     cands: set[str] = set(discover_adr_files(root, config))
     if draft.path is not None:
         d = root / Path(draft.path).parent
@@ -845,14 +846,16 @@ def _existing_draft(
             text = (root / rel).read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError):
             text = None
-        if text is not None and text == draft.markdown:
-            return rel, notes
         if text is not None:
-            cand = draft.model_copy(update={"markdown": text, "origin": "llm"})
-            if not verify_draft(root, cand, config=config).could_not_verify:
-                return rel, notes
+            if text == draft.markdown:
+                return rel, draft, notes
+            for origin in ("template", "llm"):
+                cand = draft.model_copy(update={"markdown": text, "origin": origin})
+                res = verify_draft(root, cand, config=config)
+                if not res.could_not_verify:
+                    return rel, res, notes
         notes.append(f"{rel} names {draft.record_id} but does not verify; not treated as a draft")
-    return None, notes
+    return None, None, notes
 
 
 def _publish(target: Path, data: bytes) -> None:
@@ -900,22 +903,27 @@ def _write(root: Path, draft: DraftADR, config: Config | None) -> DraftADR:
     assert draft.path is not None and draft.markdown is not None
 
     try:
-        existing, found_notes = _existing_draft(root, draft, config)
+        existing, on_disk, found_notes = _existing_draft(root, draft, config)
     except OSError as exc:
-        existing, found_notes = None, [f"existing drafts not checked ({type(exc).__name__})"]
+        existing, on_disk = None, None
+        found_notes = [f"existing drafts not checked ({type(exc).__name__})"]
     draft = draft.model_copy(update={"notes": [*draft.notes, *found_notes]})
 
     def note(text: str) -> DraftADR:
         return draft.model_copy(update={"notes": [*draft.notes, text]})
 
     try:
-        if existing is not None:
-            return draft.model_copy(
+        if existing is not None and on_disk is not None:
+            # Report the file as it is on disk (its text, origin and checks), not the
+            # draft generated this time: markdown == the bytes at written_path.
+            m = _NUM.match(Path(existing).name)
+            return on_disk.model_copy(
                 update={
                     "path": existing,
                     "written_path": existing,
-                    "notes": [*draft.notes, f"{existing} already drafts {draft.record_id}; "
-                              "not written again"],
+                    "number": int(m.group(1)) if m else None,
+                    "notes": [*draft.notes, f"{existing} already drafts {draft.record_id} "
+                              f"({on_disk.origin}); not written again"],
                 }
             )  # fmt: skip
         bad = path_problem(draft.path)
