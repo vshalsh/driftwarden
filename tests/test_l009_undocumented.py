@@ -862,3 +862,97 @@ def test_terraform_source_change_in_another_file_moves_the_introduction(tmp_path
     assert (rec.technology, rec.category) == ("gcp-sdk", "iac-provider")
     assert {e.ref.path for e in rec.evidence} == {"infra/main.tf", "infra/versions.tf"}
     assert rec.introducing_commits == [swap]
+
+
+# ------------------------------------------------------------------ PR #21 review, round 3
+
+
+def test_import_resolution_follows_the_tree_at_each_commit(tmp_path):
+    """A: app.py imports redis and redis.py is local; B deletes redis.py, so the import
+    becomes external Redis at B. B is the introduction, never A."""
+    from driftwarden.models import Introduction
+
+    repo = tmp_path / "localmod"
+    _init(repo)
+    a = _commit(repo, {"app.py": "import redis\n", "redis.py": "X = 1\n"}, "A local redis")
+    b = _commit(repo, {"redis.py": None}, "B delete local module")
+    assert {_label(r) for r in detect_undocumented(repo, a).records} == set()
+    scan = detect_undocumented(repo)
+    (rec,) = scan.findings
+    assert (rec.technology, rec.introducing_commits) == ("redis", [b])
+    ev = rec.evidence[0]
+    ref = ev.ref.model_copy(update={"commit": a})
+    forged = rec.model_copy(
+        update={
+            "introductions": [Introduction(evidence_id=ev.id, commit=a, parents=[], ref=ref)],
+            "introducing_commits": [a],
+        }
+    )
+    assert verify_undocumented(repo, forged).could_not_verify
+
+
+def test_unparsable_manifest_at_a_parent_is_not_proof_of_absence(tmp_path):
+    from driftwarden.index.manifests import MAX_MANIFEST_BYTES
+
+    repo = tmp_path / "bigparent"
+    _init(repo)
+    filler = "# " + "x" * 98 + "\n"
+    big = "redis==5.0.0\n" + filler * (MAX_MANIFEST_BYTES // len(filler) + 10)
+    assert MAX_MANIFEST_BYTES < len(big) < 2 * 1024 * 1024
+    _commit(repo, {"requirements.txt": big}, "A oversized manifest (not parsable)")
+    _commit(repo, {"requirements.txt": "redis==5.0.0\n"}, "B small manifest")
+    scan = detect_undocumented(repo)
+    assert scan.findings == []
+    (rec,) = scan.could_not_verify
+    assert rec.technology == "redis" and rec.status == "UNKNOWN"
+    assert any("could not be parsed" in n for n in rec.notes), rec.notes
+
+
+def test_provider_alias_is_not_an_adr_coverage_term(tmp_path):
+    """provider "cloud" maps to hashicorp/google: an ADR saying "cloud" does not document
+    GCP, in detection and in verification alike."""
+    repo = tmp_path / "alias"
+    _init(repo)
+    _commit(
+        repo,
+        {
+            "versions.tf": (
+                "terraform {\n  required_providers {\n    cloud = {\n"
+                '      source = "hashicorp/google"\n    }\n  }\n}\n'
+            ),
+            "main.tf": 'provider "cloud" {\n  project = "p"\n}\n',
+            "docs/adr/0001-hosting.md": _adr("We run in the cloud, region by region."),
+        },
+        "tf",
+    )
+    scan = detect_undocumented(repo)
+    (rec,) = scan.findings
+    assert (rec.technology, rec.category) == ("gcp-sdk", "iac-provider")
+    decisions = scan_adrs(repo).decisions
+    out = verify_undocumented(repo, rec, decisions=decisions)
+    assert out.grounding == "VERIFIED", out.reasons
+
+
+def test_committed_adr_symlink_resolves_to_its_target(tmp_path):
+    """scan_adrs_at follows an in-repo ADR symlink like the working-tree discovery does,
+    instead of parsing the stored link text; links leaving the repo are skipped."""
+    import os
+
+    from driftwarden.discover.adr import discover_adr_files, scan_adrs_at
+
+    repo = tmp_path / "links"
+    _init(repo)
+    (repo / "notes").mkdir()
+    (repo / "notes" / "0001-cache.md").write_text(_adr("Sessions are kept in Redis."))
+    (repo / "docs" / "adr").mkdir(parents=True)
+    os.symlink("../../notes/0001-cache.md", repo / "docs" / "adr" / "0001-cache.md")
+    os.symlink("../../../outside.md", repo / "docs" / "adr" / "0002-out.md")
+    (repo / "requirements.txt").write_text("redis==5.0.0\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "links")
+    head = git(repo, "rev-parse", "HEAD").strip()
+    at = scan_adrs_at(repo, head)
+    assert [d.source.path for d in at.decisions] == ["notes/0001-cache.md"]
+    assert discover_adr_files(repo) == ["notes/0001-cache.md"]
+    assert "Redis" in at.decisions[0].decision_text
+    assert detect_undocumented(repo).records == []  # documented through the link
