@@ -36,6 +36,13 @@ Two paths:
   free       UNKNOWN (no deterministic rule).
   =========  ===============================================================
 
+  Vendored third-party code (``vendor/``, ``third_party/``, ``node_modules/``,
+  ``external/`` ...; ``driftwarden.index.vendored.is_vendored``) is not evidence
+  (L-030): "only in vendored code" is HOLDING with a "not counted" note, never
+  DRIFTING or VIOLATED, and no verdict cites a vendored file. DRIFTING stays
+  reserved for the team's own non-production code (tests, dev/test scopes, dev
+  manifests). See ``judge.evidence`` for the reasoning.
+
   Anything the rules cannot map (``EvidenceSet.undecidable``) is UNKNOWN, and so
   is a claim with ``between`` (communication scope) or an actor that names
   nothing in the repository.
@@ -97,6 +104,7 @@ from driftwarden.claims.structure import Mode, resolve_mode
 from driftwarden.config import Config
 from driftwarden.grounding.ledger import Ledger
 from driftwarden.grounding.verify import normalise, verify_dependency, verify_source_quote
+from driftwarden.index.vendored import is_vendored
 from driftwarden.judge.evidence import (
     EvidenceSet,
     Snapshot,
@@ -227,10 +235,19 @@ def verify_evidence(
 
 def gate(verdict: Verdict, repo: str | Path, *, extra_reasons: list[str] | None = None) -> Verdict:
     """Re-verify every evidence item ``verdict`` cites. Any failure (or any
-    ``extra_reasons``) turns it into UNKNOWN / MISMATCH with the reasons."""
+    ``extra_reasons``) turns it into UNKNOWN / MISMATCH with the reasons.
+
+    Also refuses (MISMATCH) a citation of vendored third-party code: evidence
+    collection never offers one (L-030), so such a citation is a defect, never a
+    fact about this repository's code, even when its quote is verbatim."""
     checks: list[GroundingResult] = list(verdict.checks)
     reasons: list[str] = list(extra_reasons or [])
     for ev in verdict.evidence:
+        if is_vendored(ev.ref.path):
+            reasons.append(
+                f"{ev.id}: {ev.ref.path} is vendored third-party code, not evidence about "
+                "this repository's code"
+            )
         for r in verify_evidence(
             repo, ev, commit=verdict.commit, subject=f"{verdict.claim_id}/{ev.id}"
         ):

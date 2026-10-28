@@ -724,7 +724,9 @@ def test_report_to_predictions_mapping():
 
 # Known judge defects (reported in the L-015 handover): vendored third-party code is treated as
 # production, so a forbidden import that exists only under vendor/ or third_party/ is VIOLATED.
-KNOWN_VENDORED_DEFECTS = {("nodeapi", "ADR-0016"), ("datahub", "ADR-0008")}
+# L-030 fixed the two vendored-code false VIOLATED verdicts (nodeapi ADR-0016,
+# datahub ADR-0008); the allowance is now empty so a regression fails here.
+KNOWN_VENDORED_DEFECTS: set[tuple[str, str]] = set()
 
 
 def test_labels_agree_with_the_offline_library(corpus):
