@@ -39,6 +39,16 @@ from test_l009_undocumented import NAMES, build_fixture
 SHA40 = re.compile(r"[0-9a-f]{40}")
 
 
+@pytest.fixture(scope="module", autouse=True)
+def fixed_commit_identity():
+    """Reproducible SHAs: fixed identities (conftest) and fixed dates for every commit
+    this module makes, so no assertion can depend on what a random SHA contains."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GIT_AUTHOR_DATE", "2026-10-24T12:00:00+00:00")
+        mp.setenv("GIT_COMMITTER_DATE", "2026-10-24T12:00:00+00:00")
+        yield
+
+
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     def blocked(*_a, **_k):
@@ -198,6 +208,29 @@ def test_polish_checks_are_token_based(drafted):
         " Used in \u0665\u0660 places.",
     ):
         assert polish_problems(ctx + bad, ctx, rec), bad  # fmt: skip
+
+
+def test_all_digit_commit_abbreviation_is_a_number_unless_backticked(drafted):
+    """CI flake on 7948ecb: a commit starting 1319686fe045 made the bare number
+    1319686 pass as a commit reference. Bare digits are numbers; only a backticked
+    abbreviation is a commit reference."""
+    _, _, pairs = drafted["pyservice"]
+    rec = next(r for r, _ in pairs if r.technology == "redis")
+    sha = "1319686fe045" + "a" * 28
+    forged = rec.model_copy(update={"commit": sha, "introducing_commits": [sha]})
+    template = (
+        f"The code at commit `{sha[:12]}` uses Redis as cache: 1 production occurrence "
+        f"in 1 file, cited below. Redis was introduced by commit `{sha[:12]}` (2026-10-24)."
+    )
+    assert polish_problems(template, template, forged) == []
+    for bad in (
+        " It has 1319686 users.",  # all-digit abbreviation, bare: a number
+        " See 1319686fe045.",  # bare abbreviation with letters: not a reference
+        " See `1319686fe046`.",  # backticked, but not a record commit
+        " See `1319686FE045`.",  # uppercase is never a pinned reference
+    ):
+        assert polish_problems(template + bad, template, forged), bad
+    assert polish_problems(template + f" See `{sha[:7]}`.", template, forged) == []
 
 
 def test_numbering_follows_discovered_adrs(drafted):

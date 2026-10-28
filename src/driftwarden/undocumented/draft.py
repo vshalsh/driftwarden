@@ -47,9 +47,10 @@ passes a non-offline ``provider`` may the model rewrite the context paragraph
 template draft returned with a note, when it is not a single plain ASCII
 paragraph; when it contains markdown structure (headings, lists, ordered lists,
 quotes, tables, fences), HTML or ``<``/``>``, links or URLs, a ``status:``; when
-it has any run of 7+ hex digits that does not abbreviate one of the record's
-commits, or any ``path:line``-like token; when it has any number that is not one
-of the template paragraph's own count / date tokens (digits inside SHAs never
+it has any run of 7+ hex digits that is not a backticked abbreviation of one of
+the record's commits (a bare all-digit run is a number, never a commit
+reference), or any ``path:line``-like token; when it has any number that is not
+one of the template paragraph's own count / date tokens (digits inside SHAs never
 count); when the provider raises anything; or when the assembled draft fails the
 gate. **Known limit:** the gate checks structure, references and numbers, not
 meaning; a model sentence that invents a reason, a benefit, a person or an
@@ -461,19 +462,37 @@ def _record_commits(rec: UndocumentedDecision) -> list[str]:
     return list(dict.fromkeys([*rec.introducing_commits, rec.commit]))
 
 
+_TICKED = re.compile(r"`([^`\s]+)`")
+
+
 def _strip_record_shas(text: str, commits: list[str]) -> tuple[str, list[str]]:
-    """``text`` with every SHA token that abbreviates a record commit removed, and the
-    SHA tokens that do not."""
+    """``text`` with every commit reference removed, and the hex runs that are not one.
+
+    A commit reference is a backtick code span holding a lowercase abbreviation (7+
+    hex) of a record commit, the way the template writes them. Any other hex run is
+    not a reference: inside backticks it is foreign; bare in the prose, a run of
+    decimal digits only is a *number* (left for the number check: it is allowed only
+    if it is one of the template's own count / date tokens) and any other run is
+    foreign, even when it happens to abbreviate a record commit."""
     foreign: list[str] = []
 
-    def sub(m: re.Match[str]) -> str:
-        tok = m.group(0)
-        if tok == tok.lower() and any(c.startswith(tok) for c in commits):
+    def ticked(m: re.Match[str]) -> str:
+        tok = m.group(1)
+        if _SHA_TOKEN.fullmatch(tok):
+            if tok == tok.lower() and any(c.startswith(tok) for c in commits):
+                return " "
+            foreign.append(tok)
             return " "
+        return m.group(0)
+
+    def bare(m: re.Match[str]) -> str:
+        tok = m.group(0)
+        if tok.isdigit():
+            return tok
         foreign.append(tok)
         return " "
 
-    return _SHA_TOKEN.sub(sub, text), foreign
+    return _SHA_TOKEN.sub(bare, _TICKED.sub(ticked, text)), foreign
 
 
 def polish_problems(text: str, template: str, rec: UndocumentedDecision) -> list[str]:
