@@ -256,6 +256,8 @@ def check_sampled(repo, shas, v, claim, e):
     assert e.parent == (shas[idx - 1] if idx else None)
     if len(t) == 1:  # monotonic truth: must be exact, no false alarm
         assert idx == t[0] and not e.non_monotonic and e.earlier_transitions == []
+    if e.non_monotonic is None:  # sampled: never claims to have checked
+        assert e.search == "sampled" and e.earlier_transitions == []
     if e.non_monotonic:  # linear scan: latest transition, truthful list of earlier ones
         assert idx == t[-1] and len(t) > 1
         assert e.earlier_transitions == [shas[x] for x in t[:-1]]
@@ -277,11 +279,20 @@ def test_property_random_history(tmp_path, seed):
     assert ex.non_monotonic == (len(t) > 1)
     assert ex.earlier_transitions == [shas[x] for x in t[:-1]]
 
-    sa = first_violation(repo, claim)
+    # default mode: windows of <= 300 commits are exhaustive, so the cost is the window size
+    de = first_violation(repo, claim)
+    assert de.search == "exhaustive" and de.commits_judged == len(v) == de.commits_in_window
+    assert_found(repo, de, claim, shas, t[-1])
+    assert de.non_monotonic == (len(t) > 1)
+
+    # forced sampled mode: real transition, honest flags, cost bound only here
+    sa = first_violation(repo, claim, exhaustive=False)
     check_sampled(repo, shas, v, claim, sa)
     g4_ok(repo, sa, claim)
-    if len(t) == 1 and len(v) >= 100:
-        assert sa.commits_judged <= 3 * (len(v) ** 0.5) + 12  # ~sqrt(n) + log2(n), not n
+    if sa.search == "sampled":
+        assert sa.non_monotonic is None and sa.earlier_transitions == []
+        if len(t) == 1 and len(v) >= 100:
+            assert sa.commits_judged <= 3 * (len(v) ** 0.5) + 12  # ~sqrt(n) + log2(n), not n
 
 
 def test_sampled_non_latest_rate(tmp_path_factory):
@@ -294,13 +305,13 @@ def test_sampled_non_latest_rate(tmp_path_factory):
         v = gen_history(rng)
         repo, shas = make(tmp_path_factory.mktemp(f"rate{seed}"), "r", linear(len(v), v))
         claim = claim_of(repo)
-        e = first_violation(repo, claim)
+        e = first_violation(repo, claim, exhaustive=False)
         non_latest = check_sampled(repo, shas, v, claim, e)
         total += 1
         nm_truth += len(transitions(v)) > 1
-        flagged += e.non_monotonic
+        flagged += bool(e.non_monotonic)
         nonlatest += non_latest
-        nonlatest_unflagged += non_latest and not e.non_monotonic
+        nonlatest_unflagged += non_latest and not e.non_monotonic and e.search == "sampled"
         assert non_latest <= (len(transitions(v)) > 1)
     report = {
         "histories": total,
@@ -850,6 +861,8 @@ def all_mutations(entry: TimelineEntry, pool: list[str]):
         m["evidence"][ev_i]["id"] = "e999"
         yield f"evidence.{ev_i}", "foreign_id", m
     for status in ("NOT_VIOLATED_AT_HEAD", "TRUNCATED", "UNKNOWN", "BOGUS"):
+        if status == base["status"]:  # a no-op is not a mutation
+            continue
         m = json.loads(json.dumps(base))
         m["status"] = status
         yield "status", f"to_{status}", m
@@ -1063,3 +1076,196 @@ def test_perf_500_commits(tmp_path):
     loads = cache.loads
     first_violation(repo, claim, cache=cache)
     assert cache.loads == loads and cache.hits > 0
+
+
+# ------------------------------------------------- retest: exhaustive default (L-011 r2)
+
+
+def gen_nonmono(rng: random.Random, lo: int = 12, hi: int = 120) -> list[bool]:
+    """Always >= 2 held -> violated transitions, ends violated. Dips of 1..8 commits."""
+    n = rng.randint(lo, hi)
+    v = [False] * n
+    pos = rng.randint(0, n // 4)
+    for i in range(pos, n):
+        v[i] = True
+    dips = rng.randint(1, 3)
+    for _ in range(dips):
+        if pos >= n - 3:
+            break
+        j = rng.randint(pos + 1, n - 3)
+        m = rng.randint(j + 1, min(n - 1, j + rng.choice([1, 2, 5, 8])))
+        for i in range(j, m):
+            v[i] = False
+        pos = m
+    return v
+
+
+def test_default_exhaustive_returns_latest_transition_rate(tmp_path_factory):
+    """>= 200 random NON-monotonic histories, default mode, window <= 300: the answer must be
+    the LATEST held->violated transition every time (rate 100%) and the entry honest."""
+    total = latest = 0
+    for seed in range(210):
+        rng = random.Random(31000 + seed)
+        v = gen_nonmono(rng)
+        t = transitions(v)
+        if len(t) < 2:
+            continue
+        repo, shas = make(tmp_path_factory.mktemp(f"lat{seed}"), "r", linear(len(v), v))
+        claim = claim_of(repo)
+        e = first_violation(repo, claim)
+        total += 1
+        assert e.status == "FOUND" and e.search == "exhaustive", (seed, e.status, e.search)
+        latest += e.first_violating_commit == shas[t[-1]]
+        assert e.first_violating_commit == shas[t[-1]], (seed, v)
+        assert e.parent == shas[t[-1] - 1]
+        assert e.non_monotonic is True
+        assert e.earlier_transitions == [shas[x] for x in t[:-1]]
+        assert e.commits_judged == len(v) == e.commits_in_window
+        g4_ok(repo, e, claim)
+    rate = latest / total
+    print(f"\nLATEST_RATE {latest}/{total} = {rate:.4f}")
+    out = os.environ.get("SONNET_LATEST_FILE")
+    if out:
+        Path(out).write_text(json.dumps({"total": total, "latest": latest, "rate": rate}))
+    assert total >= 200 and rate == 1.0
+
+
+def _sampled_ok(repo, shas, v, claim, e):
+    """A sampled-mode answer: honest flags; any value it returns is a real, G4-verified transition."""
+    t = transitions(v)
+    if e.search == "sampled":
+        assert e.non_monotonic is None and e.earlier_transitions == [], (
+            e.non_monotonic,
+            e.earlier_transitions,
+        )
+    else:  # the documented fallback: samples disagreed, whole window judged, so it is checked
+        assert e.search == "exhaustive" and e.non_monotonic is not None
+        assert e.commits_judged == e.commits_in_window
+    assert e.status == "FOUND", (e.status, e.reasons)
+    idx = shas.index(e.first_violating_commit)
+    assert idx in t, "returned value is not a real held->violated transition"
+    assert e.parent == (shas[idx - 1] if idx else None)
+    g4_ok(repo, e, claim)
+    return idx == t[-1]
+
+
+def test_sampled_mode_never_claims_monotonicity(tmp_path_factory):
+    fallbacks = sampled_n = 0
+    # (a) exhaustive=False on <= 300-commit windows
+    for seed in range(60):
+        rng = random.Random(51000 + seed)
+        v = gen_nonmono(rng, 40, 200) if seed % 2 else gen_history(rng)
+        repo, shas = make(tmp_path_factory.mktemp(f"sa{seed}"), "r", linear(len(v), v))
+        claim = claim_of(repo)
+        e = first_violation(repo, claim, exhaustive=False)
+        _sampled_ok(repo, shas, v, claim, e)
+        sampled_n += e.search == "sampled"
+        fallbacks += e.search == "exhaustive"
+    # (b) window > 300 with the default mode (sampled by design)
+    for seed in range(4):
+        rng = random.Random(52000 + seed)
+        n = rng.randint(310, 380)
+        k = rng.randint(50, n - 20)
+        v = [i >= k for i in range(n)]
+        if seed % 2:  # one short dip, shorter than the sample spacing
+            j = rng.randint(k + 2, n - 4)
+            v[j] = False
+        repo, shas = make(tmp_path_factory.mktemp(f"big{seed}"), "r", linear(n, v))
+        claim = claim_of(repo)
+        e = first_violation(repo, claim)
+        assert e.commits_in_window == n
+        _sampled_ok(repo, shas, v, claim, e)
+        sampled_n += e.search == "sampled"
+        fallbacks += e.search == "exhaustive"
+        assert e.search == "sampled" or e.commits_judged == n
+    print(f"\nSAMPLED_MODE sampled={sampled_n} fallback_to_exhaustive={fallbacks}")
+    assert sampled_n >= 20
+
+
+@pytest.mark.parametrize("exhaustive", [None, False, True])
+def test_truncated_window_with_a_held_commit_is_never_truncated(tmp_path_factory, exhaustive):
+    """Whole-window-violated is the only TRUNCATED. Any held commit inside the window, even a
+    one-commit dip in the middle, must give FOUND, whatever the mode."""
+    seen_found = seen_trunc = 0
+    for seed in range(30):
+        rng = random.Random(61000 + seed)
+        n = rng.randint(30, 120)
+        cap = rng.randint(8, n - 5)
+        w = n - cap  # window = commits w..n-1
+        v = [True] * n
+        for i in range(0, w - rng.randint(0, 3) if seed % 3 else w):  # older history: held
+            v[max(i, 0)] = False
+        if seed % 3 != 2:  # put 1..3 held commits (dips) inside the window, not at head
+            for _ in range(rng.randint(1, 3)):
+                v[rng.randint(w, n - 2)] = False
+        window_has_held = not all(v[w:])
+        repo, shas = make(tmp_path_factory.mktemp(f"tr{exhaustive}{seed}"), "r", linear(n, v))
+        claim = claim_of(repo)
+        e = first_violation(repo, claim, max_commits=cap, exhaustive=exhaustive)
+        if window_has_held:
+            assert e.status == "FOUND", (seed, e.status, v)
+            t = transitions(v)
+            idx = shas.index(e.first_violating_commit)
+            assert idx in t and idx >= w
+            seen_found += 1
+        else:
+            assert e.status == "TRUNCATED", (seed, e.status)
+            assert e.first_violating_commit is None and e.parent is None
+            assert e.subject is None and e.author_date is None
+            seen_trunc += 1
+        g4_ok(repo, e, claim)
+    print(f"\nTRUNC_HELD mode={exhaustive} found={seen_found} truncated={seen_trunc}")
+    assert seen_found >= 15 and seen_trunc >= 3
+
+
+def test_truncated_and_not_violated_leave_commit_fields_empty(tmp_path):
+    repo, shas = make(tmp_path, "r", linear(20, [i >= 4 for i in range(20)]))
+    claim = claim_of(repo)
+    for e in (
+        first_violation(repo, claim, max_commits=6),
+        first_violation(repo, claim, head=shas[2]),
+    ):
+        assert e.status in {"TRUNCATED", "NOT_VIOLATED_AT_HEAD"}
+        assert (e.first_violating_commit, e.parent, e.subject, e.author_date) == (None,) * 4
+        g4_ok(repo, e, claim)
+        for fld in ("first_violating_commit", "parent", "subject", "author_date"):
+            forged = e.model_copy(update={fld: "bogus" if fld in {"subject", "author_date"} else shas[3]})
+            assert any(r.status == "MISMATCH" for r in verify_first_violation(repo, forged, claim)), fld
+
+
+def test_g4_wrong_head_argument_is_mismatch(tmp_path):
+    repo, shas = make(tmp_path, "r", linear(24, [i >= 9 for i in range(24)]))
+    claim = claim_of(repo)
+    e = first_violation(repo, claim)
+    assert all(r.status == "VERIFIED" for r in verify_first_violation(repo, e, claim, head=e.head))
+    assert all(r.status == "VERIFIED" for r in verify_first_violation(repo, e, claim, head="HEAD"))
+    for wrong in (shas[-2], shas[12], shas[0], "main~3"):
+        rs = verify_first_violation(repo, e, claim, head=wrong)
+        assert any(r.status == "MISMATCH" for r in rs), wrong
+    # same for a TRUNCATED and a NOT_VIOLATED entry
+    tr = first_violation(repo, claim, max_commits=5)
+    nv = first_violation(repo, claim, head=shas[3])
+    assert tr.status == "TRUNCATED" and nv.status == "NOT_VIOLATED_AT_HEAD"
+    assert any(r.status == "MISMATCH" for r in verify_first_violation(repo, tr, claim, head=shas[-2]))
+    assert any(r.status == "MISMATCH" for r in verify_first_violation(repo, nv, claim, head=shas[4]))
+
+
+def test_perf_300_exhaustive_within_20s(tmp_path):
+    n, k = 300, 211
+    v = [i >= k for i in range(n)]
+    for i in (60, 61, 140):  # earlier violation + dip so the full scan matters
+        v[i] = True
+    repo, shas = make(tmp_path, "r", linear(n, v))
+    claim = claim_of(repo)
+    t0 = time.perf_counter()
+    e = first_violation(repo, claim)
+    dt = time.perf_counter() - t0
+    assert e.search == "exhaustive" and e.commits_judged == n == e.commits_in_window
+    assert_found(repo, e, claim, shas, k)
+    assert e.non_monotonic is True and len(e.earlier_transitions) == 2
+    print(f"\nPERF n=300 exhaustive seconds={dt:.2f}")
+    assert dt < 20, dt
+    # 301 commits crosses to sampled
+    repo2, shas2 = make(tmp_path, "r2", linear(301, [i >= 250 for i in range(301)]))
+    e2 = first_violation(repo2, claim_of(repo2))
+    assert e2.search == "sampled" and e2.non_monotonic is None and e2.commits_judged < 80
