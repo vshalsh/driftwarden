@@ -1288,3 +1288,372 @@ def test_llm_mode_g6_disagreement_is_reported_once(pyshop, tmp_path):
     free = by_id(report)["ADR-0007.c1"]
     assert free.status == "UNKNOWN" and free.could_not_verify
     assert Report.model_validate_json(report.model_dump_json()) == report
+
+
+# =========================================================================== L-028 retest
+# Round 2 (cb1d31c): PR mode judges everything, drafts numbered in turn, drafts shown.
+
+CI_ENV = {"GITHUB_ACTIONS": "true", "CI": "true"}
+
+
+def violated_set(r: Report) -> set[str]:
+    """Verified violations only: judged, grounded, VIOLATED."""
+    return {
+        c.id for c in r.claims
+        if c.status == "VIOLATED" and c.verdict is not None and not c.could_not_verify
+    }  # fmt: skip
+
+
+def _mutate_tree(repo: Path, rnd: random.Random) -> list[str]:
+    """Commit a random deletion + rename + edit on top of ``repo``; return all touched paths
+    (old and new names of renames, deleted paths) plus a couple of paths that never existed."""
+    code = sorted(p for p in g(repo, "ls-files").splitlines() if p.startswith("src/"))
+    touched: list[str] = []
+    rnd.shuffle(code)
+    if code:
+        dead = code.pop()
+        g(repo, "rm", "-q", dead)
+        touched.append(dead)
+    if code:
+        old = code.pop()
+        new = old.replace(".py", "_renamed.py")
+        g(repo, "mv", old, new)
+        touched += [old, new]
+    if code:
+        edit = code.pop()
+        (repo / edit).write_text((repo / edit).read_text(encoding="utf-8") + "\n# edit\n")
+        touched.append(edit)
+    g(repo, "add", "-A")
+    g(repo, "commit", "-q", "-m", "mutate")
+    return touched + ["src/app/never_existed.py", "gone/dir/x.py"]
+
+
+@pytest.mark.parametrize("seed", range(24))
+def test_pr_mode_hides_no_violation_random_repos(seed, tmp_path):
+    rnd = random.Random(seed * 7919 + 1)
+    repo = mkrepo(tmp_path, gen_repo_files(seed, violate=seed % 5 != 4))
+    touched = _mutate_tree(repo, rnd) if seed % 2 == 0 else []
+    universe = sorted(set(g(repo, "ls-files").splitlines()) | set(touched))
+    full, _ = run(repo, tmp_path)
+    want_v, want_status = violated_set(full), {c.id: c.status for c in full.claims}
+    assert want_v or seed % 5 == 4, "generator should produce a violation"
+    subsets = [[], universe, touched, ["README.md"]]
+    for _ in range(4):
+        subsets.append(rnd.sample(universe, rnd.randint(1, len(universe))))
+    for cp in subsets:
+        pr, _ = run(repo, tmp_path, changed_paths=list(cp))
+        assert violated_set(pr) == want_v, cp
+        assert {c.id: c.status for c in pr.claims} == want_status, cp
+        assert pr.summary.exit_code == full.summary.exit_code, cp
+        assert all(c.judged and c.in_change is not None for c in pr.claims), cp
+
+
+def test_pr_mode_hides_no_violation_beyond_the_evidence_cap(tmp_path):
+    files = {f"app/w{i:02d}.py": "import celery\n" for i in range(60)}
+    files["docs/adr/0001-a.md"] = adr(1, "No Celery", "Accepted", "We will not use Celery.")
+    files["requirements.txt"] = "celery==5.3.0\n"
+    repo = mkrepo(tmp_path, files)
+    full, _ = run(repo, tmp_path)
+    assert violated_set(full) == {"ADR-0001.c1"}
+    cited = {e.ref.path for e in by_id(full)["ADR-0001.c1"].verdict.evidence}
+    hidden = sorted(f for f in files if f.startswith("app/") and f not in cited)
+    assert hidden
+    for cp in (hidden, hidden[:1], [hidden[-1]], ["README.md"], []):
+        pr, _ = run(repo, tmp_path, changed_paths=cp)
+        assert violated_set(pr) == {"ADR-0001.c1"} and pr.summary.exit_code == 1, cp
+    assert by_id(run(repo, tmp_path, changed_paths=[hidden[-1]])[0])["ADR-0001.c1"].in_change
+    assert (
+        by_id(run(repo, tmp_path, changed_paths=["README.md"])[0])["ADR-0001.c1"].in_change is False
+    )
+
+
+# --------------------------------------------------------------------------- in_change
+
+
+def test_in_change_celery_beyond_the_cap_and_structlog_deletion(tmp_path):
+    files = {f"app/w{i:02d}.py": "import celery\n" for i in range(51)}
+    files["docs/adr/0001-a.md"] = adr(1, "No Celery", "Accepted", "We will not use Celery.")
+    files["docs/adr/0002-b.md"] = adr(
+        2, "Logging", "Accepted", "We will use structlog for logging."
+    )
+    files["app/log.py"] = "import structlog\n"
+    files["requirements.txt"] = "celery==5.3.0\nstructlog==24.1.0\n"
+    repo = mkrepo(tmp_path, files)
+    full, _ = run(repo, tmp_path)
+    cited = {e.ref.path for e in by_id(full)["ADR-0001.c1"].verdict.evidence}
+    hidden = sorted(f for f in files if f.startswith("app/w") and f not in cited)
+    assert hidden, "needs a file past the evidence cap"
+    assert by_id(run(repo, tmp_path, changed_paths=[hidden[0]])[0])["ADR-0001.c1"].in_change is True
+    # delete the only structlog user + requirement, use loguru elsewhere
+    (repo / "app/w00.py").write_text("import loguru\n", encoding="utf-8")
+    g(repo, "add", "-A")
+    g(repo, "commit", "-q", "-m", "loguru")  # noqa: E702
+    g(repo, "rm", "-q", "app/log.py")
+    (repo / "requirements.txt").write_text("celery==5.3.0\nloguru==0.7.2\n", encoding="utf-8")
+    g(repo, "add", "-A")
+    g(repo, "commit", "-q", "-m", "drop structlog")  # noqa: E702
+    full, _ = run(repo, tmp_path)
+    assert by_id(full)["ADR-0002.c1"].status == "VIOLATED"
+    for cp in (["app/log.py"], ["requirements.txt"], ["app/log.py", "requirements.txt"]):
+        pr, _ = run(repo, tmp_path, changed_paths=cp)
+        c = by_id(pr)["ADR-0002.c1"]
+        assert c.judged and c.status == "VIOLATED" and c.in_change is True, cp
+        assert pr.summary.exit_code == full.summary.exit_code
+
+
+def test_in_change_adr_file_and_unrelated_readme(pyshop, tmp_path):
+    for variant in ("docs/adr/0006-no-celery.md", "./docs/adr/0006-no-celery.md"):
+        pr, _ = run(pyshop, tmp_path, changed_paths=[variant])
+        assert by_id(pr)["ADR-0006.c1"].in_change is True, variant
+        assert by_id(pr)["ADR-0003.c1"].in_change is False, variant
+    pr, _ = run(pyshop, tmp_path, changed_paths=["README.md", "docs/guide.md"])
+    for cid in ("ADR-0002.c1", "ADR-0003.c1", "ADR-0006.c1"):  # boundary / forbid / forbid
+        assert by_id(pr)[cid].in_change is False, cid
+        assert by_id(pr)[cid].judged
+    full, _ = run(pyshop, tmp_path)
+    assert all(c.in_change is None for c in full.claims)
+
+
+def test_in_change_rename_tags_require_and_new_name_tags_forbid(tmp_path):
+    files = gen_repo_files(2)
+    repo = mkrepo(tmp_path, files)
+    g(repo, "mv", "src/app/m1.py", "src/app/moved.py")
+    g(repo, "commit", "-q", "-m", "mv")
+    pr, _ = run(repo, tmp_path, changed_paths=["src/app/m1.py", "src/app/moved.py"])
+    assert by_id(pr)["ADR-0001.c1"].in_change is True  # forbid Celery: new name is evidence
+    pr2, _ = run(repo, tmp_path, changed_paths=["src/app/m1.py"])  # only the OLD name, deleted
+    full, _ = run(repo, tmp_path)
+    assert violated_set(pr2) == violated_set(full)
+    for c in pr2.claims:
+        if c.claim.kind in ("require", "only"):
+            assert c.in_change is True, c.id
+        elif c.claim.kind == "forbid":
+            assert c.in_change is False, c.id  # a deletion cannot introduce a forbidden use
+
+
+# --------------------------------------------------------------------------- terminal_safe
+
+HOSTILE = (
+    "\x1b[38;5;199mINJ\x1b]8;;http://evil.test\x07LNK\x1b]8;;\x07 "
+    "\x1b[2J\u202eRTL\u2066\u200b\x9b31m\x9dOSC\x85\x07"
+)
+
+
+def raw_hits(out: str) -> list[str]:
+    """Dangerous things in terminal output that rich itself never emits."""
+    bad = [m for m in ("\x1b[38;5;199m", "\x1b]8;;http://evil", "\x1b[2J", "\x1b]") if m in out]
+    bad += [repr(c) for c in sorted(set(out)) if c == "\x00" or c == "\x07"
+            or 0x80 <= ord(c) <= 0x9F or 0x202A <= ord(c) <= 0x202E or 0x2066 <= ord(c) <= 0x2069
+            or c in "\u200b\u2028\u2029\ufeff"]  # fmt: skip
+    return bad
+
+
+def test_terminal_safe_unit_all_categories_and_properties():
+    import unicodedata
+
+    from driftwarden.cli import terminal_safe
+
+    assert terminal_safe("") == "" and terminal_safe("a\n\tb é 日本 😀") == "a\n\tb é 日本 😀"
+    for ch in (
+        "\x00",
+        "\x07",
+        "\r",
+        "\x1b",
+        "\x7f",
+        "\x85",
+        "\x9b",
+        "\u2028",
+        "\u2029",
+        "\u200b",
+        "\u200e",
+        "\u202e",
+        "\u2066",
+        "\u2069",
+        "\ufeff",
+        "\U000e0041",
+        "\xad",
+    ):
+        assert terminal_safe(f"a{ch}b") == f"a\\u{ord(ch):04x}b", repr(ch)  # noqa: E501
+    rnd = random.Random(5)
+    pool = [chr(i) for i in range(0x20)] + [chr(i) for i in range(0x7F, 0xA0)]
+    pool += list("\u200b\u200e\u202a\u202e\u2066\u2069\u2028\ufeff\U000e0001abc é\n\t")
+    for _ in range(300):
+        s = "".join(rnd.choice(pool) for _ in range(rnd.randint(0, 40)))
+        out = terminal_safe(s)
+        assert (
+            all(
+                ch in "\n\t" or unicodedata.category(ch) not in ("Cc", "Cf", "Zl", "Zp")
+                for ch in out
+            )
+            and "\x7f" not in out
+        )
+        assert terminal_safe(out) == out  # idempotent: escapes are plain ASCII
+
+
+def _hostile_repo(tmp: Path, surface: str) -> Path:
+    clean = HOSTILE.replace("\x85", "")  # NEL splits ledger lines: tracked separately (D2)
+    files = gen_repo_files(1)
+    subject = "add cache"
+    if surface == "title":
+        files["docs/adr/0001-d1.md"] = adr(
+            1, "No Celery " + clean, "Accepted", "We will not use Celery."
+        )
+    elif surface == "decision":
+        files["docs/adr/0001-d1.md"] = adr(
+            1,
+            "No Celery",
+            "Accepted",
+            f"We will not use Celery. {clean} Every service exposes /healthz",
+        )
+    elif surface == "subject":
+        subject = "add cache " + clean
+    elif surface == "filename":
+        files["src/app/x" + clean.replace("/", "_") + ".py"] = "import celery\n"
+    repo = mkrepo(tmp, files)
+    (repo / "src/app/new.py").write_text("import redis\n", encoding="utf-8")
+    (tmp / "msg").write_text(subject + "\n", encoding="utf-8")
+    g(repo, "add", "-A")
+    g(repo, "commit", "-q", "-F", str(tmp / "msg"))
+    return repo
+
+
+LEAKING_SURFACES = {
+    "title": "D3: the Decisions table prints dec.title through rich escape() only, "
+    "so ESC / bidi / C1 in an ADR title reach the terminal (terminal_safe is applied to the "
+    "draft panel only). Also on main.",
+}
+SURFACES = ["title", "decision", "subject", "filename"]
+
+
+def _surf(name):
+    marks = []
+    if name in LEAKING_SURFACES:
+        marks.append(pytest.mark.xfail(strict=True, reason=LEAKING_SURFACES[name]))
+    return pytest.param(name, marks=marks)
+
+
+@pytest.mark.parametrize("surface", [_surf(s) for s in SURFACES])
+def test_hostile_text_never_reaches_the_terminal_raw_clirunner(surface, tmp_path):
+    repo = _hostile_repo(tmp_path, surface)
+    res = runner.invoke(app, ["scan", str(repo), "--out", str(tmp_path / "o"), "--draft-adrs"])
+    assert res.exit_code == 1 and res.exception is None or isinstance(res.exception, SystemExit)
+    assert not raw_hits(res.output), raw_hits(res.output)
+
+
+@pytest.mark.parametrize("surface", [_surf(s) for s in SURFACES])
+def test_hostile_text_never_reaches_the_terminal_raw_subprocess_ci_env(surface, tmp_path):
+    repo = _hostile_repo(tmp_path, surface)
+    exe = shutil.which("driftwarden")
+    env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")}
+    env.update(CI_ENV)
+    p = subprocess.run([exe, "scan", str(repo), "--out", str(tmp_path / "o"), "--draft-adrs"],
+                       capture_output=True, text=True, env=env)  # fmt: skip
+    assert p.returncode == 1, p.stdout[-500:] + p.stderr[-800:]
+    assert not raw_hits(p.stdout + p.stderr), raw_hits(p.stdout + p.stderr)
+
+
+def test_draft_panel_shows_hostile_commit_subject_as_visible_escapes(tmp_path):
+    repo = _hostile_repo(tmp_path, "subject")
+    res = runner.invoke(app, ["scan", str(repo), "--out", str(tmp_path / "o"), "--draft-adrs"])
+    assert "Draft ADR for UD-cache-redis" in res.output
+    assert not raw_hits(res.output)
+    # the draft layer strips control characters from the subject; the text stays, inert
+    assert "INJ" in res.output and "evil.test" in res.output
+
+
+def test_draft_markup_like_text_is_not_parsed_as_rich_markup(tmp_path):
+    files = gen_repo_files(1)
+    files["docs/adr/0001-d1.md"] = adr(1, "[bold red]No[/] Celery [link=http://evil.test]x[/link]",
+                                       "Accepted", "We will not use Celery.")  # fmt: skip
+    repo = mkrepo(tmp_path, files)
+    res = runner.invoke(app, ["scan", str(repo), "--out", str(tmp_path / "o"), "--draft-adrs"])
+    assert "[bold red]No[/]" in res.output.replace("\n", "") or "[bold red]" in res.output
+    assert "\x1b]8" not in res.output
+
+
+# --------------------------------------------------------------------------- D2 ledger split
+
+
+@pytest.mark.xfail(strict=True, reason="D2: pipeline._ledger_rows/_line_count use str.splitlines()")
+@pytest.mark.parametrize("ch", ["\u2028", "\u2029", "\x85"])
+def test_unicode_line_separators_in_ledger_rows_do_not_crash_a_scan(ch, tmp_path):
+    """A line separator inside a path lands unescaped in a ledger JSON line (ensure_ascii is
+    off); str.splitlines() splits there, so json.loads sees half a row -> JSONDecodeError."""
+    files = gen_repo_files(1)
+    files[f"src/app/odd{ch}name.py"] = "import celery\n"
+    repo = mkrepo(tmp_path, files)
+    rep, _ = run(repo, tmp_path)
+    assert rep.summary.exit_code in (1, 3)
+
+
+# --------------------------------------------------------------------------- draft numbers
+
+
+def _undoc_repo(tmp: Path, adr_numbers: list[int]) -> Path:
+    files: dict[str, str] = {}
+    for n in adr_numbers:
+        files[f"docs/adr/{n:04d}-d{n}.md"] = adr(
+            n, f"Decision {n}", "Accepted", "We will not use Celery."
+        )
+    files["src/app/a.py"] = (
+        "from kafka import KafkaProducer\nimport redis\nimport pymongo\nimport boto3\n"
+    )
+    files["requirements.txt"] = "kafka-python==2.0.2\nredis==5.0.0\npymongo==4.6.1\nboto3==1.34.0\n"
+    return mkrepo(tmp, files)
+
+
+def _nums(r: Report) -> list[int]:
+    return [d.number for d in r.drafts]
+
+
+@pytest.mark.parametrize("have", [[1], [1, 2, 3], [1, 3, 7], [5], [2, 9, 4]])
+def test_draft_numbers_unique_consecutive_and_respect_existing(have, tmp_path):
+    repo = _undoc_repo(tmp_path, have)
+    r, _ = run(repo, tmp_path, draft_adrs=True)
+    assert len(r.drafts) >= 3
+    start = max(have) + 1
+    assert _nums(r) == list(range(start, start + len(r.drafts)))
+    assert len({d.path for d in r.drafts}) == len(r.drafts)
+    for d in r.drafts:
+        assert d.path.startswith(f"docs/adr/{d.number:04d}-")
+    assert not set(_nums(r)) & set(have)
+
+
+def test_draft_numbers_respect_an_uncommitted_adr_in_the_worktree(tmp_path):
+    repo = _undoc_repo(tmp_path, [1, 2])
+    (repo / "docs/adr/0020-wip.md").write_text(
+        adr(20, "WIP", "Proposed", "We will not use Celery.")
+    )
+    r, _ = run(repo, tmp_path, draft_adrs=True)
+    assert _nums(r) == list(range(21, 21 + len(r.drafts)))
+
+
+def test_draft_numbers_are_stable_across_runs_and_pr_mode(tmp_path):
+    repo = _undoc_repo(tmp_path, [1, 3, 7])
+    a, _ = run(repo, tmp_path, draft_adrs=True)
+    b, _ = run(repo, tmp_path, draft_adrs=True, changed_paths=["README.md"])
+    assert [(d.number, d.path) for d in a.drafts] == [(d.number, d.path) for d in b.drafts]
+    assert _nums(a)[0] == 8
+
+
+@pytest.mark.parametrize("fail_at", [0, 1, 2])
+def test_a_draft_failing_g5_does_not_consume_a_number(fail_at, tmp_path, monkeypatch):
+    """Code behaviour: a refused draft has number=None / path=None and is never added to
+    the reserved list, so the NEXT draft takes the number the failed one would have had."""
+    repo = _undoc_repo(tmp_path, [1, 3, 7])
+    clean, _ = run(repo, tmp_path, draft_adrs=True)
+    n_total = len(clean.drafts)
+    real, calls = pipeline.draft_adr, {"n": 0}
+
+    def flaky(root, rec, **kw):
+        i, calls["n"] = calls["n"], calls["n"] + 1
+        if i == fail_at:
+            ev = rec.evidence[0]
+            ev2 = ev.model_copy(update={"ref": ev.ref.model_copy(update={"quote": "not in file"})})
+            rec = rec.model_copy(update={"evidence": [ev2, *rec.evidence[1:]]})
+        return real(root, rec, **kw)
+
+    monkeypatch.setattr(pipeline, "draft_adr", flaky)
+    r, _ = run(repo, tmp_path, draft_adrs=True)
+    assert len(r.drafts) == n_total - 1 and len(r.could_not_verify) >= 1
+    assert _nums(r) == list(range(8, 8 + n_total - 1))  # consecutive, no hole at the failure
