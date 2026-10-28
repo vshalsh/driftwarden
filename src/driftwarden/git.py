@@ -123,23 +123,26 @@ def log(
     max_count: int | None = None,
     rev: str = "HEAD",
 ) -> list[LogEntry]:
-    """Commits reachable from ``rev``, newest first, optionally limited to ``path``."""
-    sep, end = "\x1f", "\x1e"
-    args = ["log", f"--format=%H{sep}%an{sep}%aI{sep}%s{end}"]
+    """Commits reachable from ``rev``, newest first, optionally limited to ``path``.
+
+    Fields and records are NUL-separated (``-z``): a commit message cannot contain
+    NUL, so no subject or author name can collide with the delimiters."""
+    args = ["log", "-z", "--format=%H%x00%an%x00%aI%x00%s"]
     if max_count is not None:
         args.append(f"--max-count={max_count}")
     args.append(rev)
     if path is not None:
         args += ["--", Path(path).as_posix()]
     out = _run(args, repo)
-    entries = []
-    for rec in out.split(end):
-        rec = rec.strip("\n")
-        if not rec:
-            continue
-        sha, author, date, subject = rec.split(sep, 3)
-        entries.append(LogEntry(sha=sha, author=author, date=date, subject=subject))
-    return entries
+    fields = out.split("\0")
+    if fields and fields[-1] in ("", "\n"):
+        fields.pop()
+    if len(fields) % 4:
+        raise GitError(f"git log: unexpected output ({len(fields)} fields)")
+    return [
+        LogEntry(sha=fields[i], author=fields[i + 1], date=fields[i + 2], subject=fields[i + 3])
+        for i in range(0, len(fields), 4)
+    ]
 
 
 def is_tracked_and_clean(repo: str | Path, path: str) -> bool:

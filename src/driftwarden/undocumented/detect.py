@@ -63,7 +63,11 @@ commit whose parents all lack a production use (or lack the file) is the
 introducing commit, so a dev-only dependency promoted to production is
 introduced by the promotion. The record lists the distinct introducing commits
 oldest first in topological order (an ancestor always before its descendants;
-never by timestamp). A version bump does not move the introduction (the
+never by timestamp). When a technology has more production occurrences than
+``max_evidence``, every occurrence is still walked and the listed ones are chosen
+to include one occurrence per introducing commit, oldest first, so the record's
+oldest introducing commit is the oldest found among all occurrences (a note says
+how many were not listed). A version bump does not move the introduction (the
 technology was already there), unlike ``git blame``. In a shallow clone, a walk
 that reaches a boundary commit (``.git/shallow``: parents unavailable) cannot
 show absence before it, so that evidence has no introduction and the record is
@@ -586,6 +590,36 @@ def _introduction(
         return None, f"{exc}; presence/absence there cannot be checked"
 
 
+def _safe_introduction(
+    hist: _History, scan_commit: str, ev: Evidence, key: Key
+) -> tuple[Introduction | None, str]:
+    try:
+        return _introduction(hist, scan_commit, ev, key)
+    except git.NotAGitRepoError:
+        raise
+    except git.GitError as exc:
+        return None, f"{ev.ref.path}: history walk failed ({exc})"
+
+
+def _sample(
+    walked: list[tuple[Introduction | None, str]], limit: int, order: dict[str, int]
+) -> list[int]:
+    """Indices of the ``limit`` evidence items to list when there are more: first one
+    item per introducing commit, oldest commit first (so the record always carries the
+    oldest introduction found), then the rest in their usual order."""
+    first: dict[str, int] = {}
+    for i, (intro, _) in enumerate(walked):
+        if intro is not None:
+            first.setdefault(intro.commit, i)
+    keep = [first[c] for c in _oldest_first(first, order)][:limit]
+    for i in range(len(walked)):
+        if len(keep) >= limit:
+            break
+        if i not in keep:
+            keep.append(i)
+    return sorted(keep)
+
+
 def _walk(
     hist: _History, scan_commit: str, ev: Evidence, key: Key, path: str, track: str
 ) -> tuple[Introduction | None, str]:
@@ -1092,22 +1126,29 @@ def detect_undocumented(
             continue
         ordered = [d for _, d in sorted(g.items, key=lambda it: it[0])]
         rec_notes: list[str] = []
-        if len(ordered) > max_evidence:
-            rec_notes.append(f"{len(ordered) - max_evidence} further occurrence(s) not listed")
-            ordered = ordered[:max_evidence]
-        evidence = [Evidence(id=f"e{i}", **d) for i, d in enumerate(ordered, 1)]
+        candidates = [Evidence(id=f"e{i}", **d) for i, d in enumerate(ordered, 1)]
+        walked = [_safe_introduction(hist, snap.commit, ev, key) for ev in candidates]
+        keep = list(range(len(candidates)))
+        if len(candidates) > max_evidence:
+            keep = _sample(walked, max_evidence, hist.topo_index(snap.commit))
+            unknown = sum(
+                1 for i, (intro, _) in enumerate(walked) if intro is None and i not in keep
+            )
+            rec_notes.append(
+                f"{len(candidates) - max_evidence} further occurrence(s) not listed; the listed "
+                "ones include the oldest introducing commit found among all of them"
+                + (f" ({unknown} unlisted without an introducing commit)" if unknown else "")
+            )
+        evidence: list[Evidence] = []
         intros: list[Introduction] = []
-        for ev in evidence:
-            try:
-                intro, why = _introduction(hist, snap.commit, ev, key)
-            except git.NotAGitRepoError:
-                raise
-            except git.GitError as exc:
-                intro, why = None, f"{ev.ref.path}: history walk failed ({exc})"
+        for n, i in enumerate(keep, 1):
+            ev = candidates[i].model_copy(update={"id": f"e{n}"})
+            evidence.append(ev)
+            intro, why = walked[i]
             if intro is None:
                 rec_notes.append(f"{ev.id}: {why}")
             else:
-                intros.append(intro)
+                intros.append(intro.model_copy(update={"evidence_id": ev.id}))
         commits = _oldest_first({i.commit for i in intros}, hist.topo_index(snap.commit))
         rec = UndocumentedDecision.model_construct(
             id=f"UD-{key[1]}-{key[0]}",
