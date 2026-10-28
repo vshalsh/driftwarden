@@ -30,6 +30,8 @@ from driftwarden.undocumented.draft import (
     draft_filename,
     draft_title,
     next_adr_number,
+    polish_problems,
+    sanitise_subject,
     technology_name,
 )
 from test_l009_undocumented import NAMES, build_fixture
@@ -158,6 +160,44 @@ def test_write_never_overwrites(tmp_path):
     assert d.number == 1 and d.written_path is None
     assert any("not overwritten" in n for n in d.notes)
     assert target.read_text(encoding="utf-8") == "mine\n"
+
+
+def test_date_prefixed_adr_names_are_not_numbers():
+    assert next_adr_number(["docs/adr/2026-01-11-a.md", "docs/adr/20260111-b.md"]) == 1
+    assert next_adr_number(["docs/adr/2026-01-11-a.md", "docs/adr/0003-c.md"]) == 4
+
+
+def test_subjects_are_sanitised():
+    assert sanitise_subject("revert 1a2b3c4d5e6f") == "revert [ref removed]"
+    assert sanitise_subject("fix deadbeef") == "fix [ref removed]"
+    assert sanitise_subject("see src/app.py:12 and Makefile:3-4") == (
+        "see [ref removed] and [ref removed]"
+    )
+    assert sanitise_subject("a\u2028b\x85c\u202ed") == "a b c d"
+    assert sanitise_subject("plain 2026-01-01 at 10:30") == "plain 2026-01-01 at 10:30"
+
+
+def test_polish_checks_are_token_based(drafted):
+    _, _, pairs = drafted["pyservice"]
+    rec, d = next((r, d) for r, d in pairs if r.technology == "redis")
+    ctx = d.markdown.split("## Context and Problem Statement\n\n", 1)[1].split("\n\n", 1)[0]
+    assert polish_problems(ctx, ctx, rec) == []
+    # digits that only occur inside a SHA are not allowed as numbers
+    sha_digits = [r for r in re.findall(r"[0-9]+", rec.commit[:12]) if r not in ctx.replace(
+        rec.commit[:12], "")]  # fmt: skip
+    for run in sha_digits:
+        assert polish_problems(ctx + f" It has {run} users.", ctx, rec)
+    for bad in (
+        " See deadbeef.",
+        " See Makefile:1.",
+        " status: accepted",
+        " <b>x</b>",
+        " See http://x.y.",
+        " | a |",
+        " 1. because",
+        " Used in \u0665\u0660 places.",
+    ):
+        assert polish_problems(ctx + bad, ctx, rec), bad  # fmt: skip
 
 
 def test_numbering_follows_discovered_adrs(drafted):

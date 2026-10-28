@@ -14,56 +14,67 @@ repository, so none are written), and a *More Information* section of
 citations:
 
 * ``- Commit `<sha>`, <YYYY-MM-DD>: <subject>`` for each introducing commit
-  (author date and subject line only; no author names);
-* ``- [<evidence id>] `<path>` lines <a>-<b> at `<sha>`<detail>:`` followed by a
-  fenced block holding the verbatim quote, once for each introducing line (at
-  its introducing commit; detail ``, introduced``) and once for each evidence
-  item (at the scanned commit; detail = kind, and for a manifest item the
-  package, version spec, ecosystem and scope that G3 re-checks).
+  (author date and subject line only; no author names). The subject is
+  sanitised: control / format / separator characters become spaces, and runs of
+  7+ hex digits and ``path:line``-like tokens become ``[ref removed]``, so a
+  commit message cannot put a foreign SHA or source reference into the draft;
+* ``- [<evidence id>] <path> lines <a>-<b> at `<sha>`<detail>:`` (the path as a
+  backtick code span long enough for any backticks in it) followed by a fenced
+  block holding the verbatim quote, once for each introducing line (at its
+  introducing commit; detail ``, introduced``) and once for each evidence item
+  (at the scanned commit; detail = kind, and for a manifest item the package,
+  version spec, ecosystem and scope that G3 re-checks).
 
 **The gate** (:func:`verify_draft`, fail closed). The record is re-verified from
-scratch (``verify_undocumented``: G2/G3 on the evidence, G5 on the introductions);
-then the *markdown itself* is parsed and every citation in it is checked against
-the repository and against the record:
+scratch (``verify_undocumented``: G2/G3 on the evidence, G5 on the introductions).
+The draft text is then **pinned to the record**: it must be byte-for-byte the
+rendering of the record (commit dates and subjects read from git again). For an
+``origin="llm"`` draft only the context paragraph may differ, and that paragraph
+must pass the polish checks below. So no heading, front-matter, status line,
+list item, rationale, SHA, reference or number can be added, removed or changed
+anywhere else. Then every cited quote passes ``verify_source_quote`` (G2) at its
+commit, every manifest item ``verify_dependency`` (G3), every cited commit
+``verify_commits_exist`` with the scanned commit as ``ancestor_of`` (G5), and the
+draft must parse back through ``discover.adr.parse_adr`` with the expected title
+and status ``proposed``. Any failure makes the draft ``status=UNKNOWN,
+grounding=MISMATCH`` with the reasons: it is shown as *Could not verify*, never
+as a draft. A record that is itself *Could not verify* yields no draft at all.
 
-* every SHA in the text -- full ids in citations and front-matter, and any run of
-  7-64 hex digits anywhere in the prose -- must name (or abbreviate) one of the
-  record's commits (its introducing commits or the scanned commit), and each one
-  is checked with ``verify_commits_exist`` (it exists and is an ancestor of the
-  scanned commit, G5);
-* each commit line's date and subject must be git's for that SHA;
-* each source citation must be one of the record's evidence / introduction refs,
-  rendered exactly as the record says (path, line range, commit, detail, quote),
-  and its quote must pass ``verify_source_quote`` (G2) at that commit; a
-  dependency item's manifest fact passes ``verify_dependency`` (G3);
-* every ``path:line`` reference in the prose must be a cited range;
-* every introducing commit, evidence item and introduction must be cited, and
-  no code block may stand outside a citation;
-* the draft parses back through the repository's own ADR parser
-  (``discover.adr.parse_adr``) with the expected title and status ``proposed``.
-
-Any failure makes the draft ``status=UNKNOWN, grounding=MISMATCH`` with the
-reasons: it is shown as *Could not verify*, never as a draft. A record that is
-itself *Could not verify* yields no draft at all.
-
-**LLM path.** With a non-offline ``provider``, the model may rewrite the context
-paragraph only (one JSON string). Its text is never trusted for facts: it may not
-add headings, lists, code blocks or numbers that the template paragraph does not
-contain, and the assembled draft must pass the same gate; otherwise the template
-draft is returned with a note. Known limit: the gate checks references, not
-meaning, so a model sentence that invents a reason in plain words is not caught
-by it (the prompt forbids it and the number rule narrows it).
+**LLM path (opt-in).** The default is the deterministic template
+(``provider=None``; an offline provider is never called). Only when the caller
+passes a non-offline ``provider`` may the model rewrite the context paragraph
+(one JSON string). Its text is never trusted for facts. It is rejected, and the
+template draft returned with a note, when it is not a single plain ASCII
+paragraph; when it contains markdown structure (headings, lists, ordered lists,
+quotes, tables, fences), HTML or ``<``/``>``, links or URLs, a ``status:``; when
+it has any run of 7+ hex digits that does not abbreviate one of the record's
+commits, or any ``path:line``-like token; when it has any number that is not one
+of the template paragraph's own count / date tokens (digits inside SHAs never
+count); when the provider raises anything; or when the assembled draft fails the
+gate. **Known limit:** the gate checks structure, references and numbers, not
+meaning; a model sentence that invents a reason, a benefit, a person or an
+alternative in plain words ("chosen because it is fast") cannot be detected by a
+deterministic check. That is why the LLM path is opt-in and its prompt forbids
+it; such text is confined to the context paragraph.
 
 **Files.** ``path`` is a suggestion, ``<adr dir>/NNNN-use-<tech>-for-<category>.md``
 with NNNN the next free number among the ADRs discovered at the scanned commit and
-in the working tree; the ADR directory is where the existing ADRs live, else
-``docs/adr``. Nothing is written unless ``write=True`` (and the draft verified);
-an existing file is never overwritten.
+in the working tree (date-prefixed names such as ``2026-01-11-x.md`` are not
+numbers); the ADR directory is where the existing ADRs live, else ``docs/adr``
+(paths that are not canonical repo-relative paths are ignored). Nothing is
+written unless ``write=True`` and the draft verified. A write never overwrites a
+file, never follows a symlinked directory or file, never leaves the repository,
+and is idempotent: if an ADR whose front-matter names the same
+``driftwarden-record`` already exists, its path is returned instead. A write that
+cannot happen leaves the draft as is with a note.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
+import os
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -78,12 +89,13 @@ from driftwarden.discover.adr import discover_adr_files, parse_adr, scan_adrs_at
 from driftwarden.grounding.ledger import Ledger
 from driftwarden.grounding.verify import (
     commit_problem,
+    path_problem,
     verify_commits_exist,
     verify_dependency,
     verify_source_quote,
 )
 from driftwarden.judge import catalog
-from driftwarden.llm.base import LLMError, Provider
+from driftwarden.llm.base import Provider
 from driftwarden.models import (
     Claim,
     Decision,
@@ -99,7 +111,7 @@ from driftwarden.undocumented.detect import CATEGORY_LABELS, verify_undocumented
 DRAFT_STATUS = "proposed (draft)"
 DEFAULT_ADR_DIR = "docs/adr"
 TODO = "TODO: confirm"
-MIN_SHA_PREFIX = 7
+REF_REMOVED = "[ref removed]"
 
 DraftStatus = Literal["DRAFT", "UNKNOWN"]
 DraftOrigin = Literal["template", "llm"]
@@ -128,7 +140,9 @@ class DraftADR(BaseModel):
     reasons: list[str] = Field(default_factory=list, description="Why not verified.")
     checks: list[GroundingResult] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
-    written_path: str | None = Field(default=None, description="Set when write=True wrote it.")
+    written_path: str | None = Field(
+        default=None, description="The file holding this draft after write=True."
+    )
 
     @property
     def could_not_verify(self) -> bool:
@@ -171,17 +185,38 @@ def draft_filename(number: int, technology: str, category: str) -> str:
     return f"{number:04d}-use-{_slug(technology)}-for-{_slug(category)}.md"
 
 
-_NUM = re.compile(r"^(?:adr[-_]?)?(\d+)", re.IGNORECASE)
+_NUM = re.compile(r"^(?:adr[-_]?)?(\d+)(?=[-_.]|$)", re.IGNORECASE)
+_ISO_DATE = re.compile(r"^(?:adr[-_]?)?\d{4}-\d{2}-\d{2}(?!\d)", re.IGNORECASE)
+
+
+def _is_date(digits: str) -> bool:
+    if len(digits) != 8:
+        return False
+    try:
+        _dt.date(int(digits[:4]), int(digits[4:6]), int(digits[6:]))
+    except ValueError:
+        return False
+    return True
 
 
 def next_adr_number(paths: Iterable[str]) -> int:
-    """One more than the highest number leading an ADR file name (1 when none)."""
-    nums = [int(m.group(1)) for p in paths if (m := _NUM.match(Path(p).name))]
+    """One more than the highest number leading an ADR file name (1 when none).
+
+    Date-prefixed names (``2026-01-11-x.md``, ``20260111-x.md``) carry no number."""
+    nums: list[int] = []
+    for p in paths:
+        name = Path(p).name
+        if _ISO_DATE.match(name):
+            continue
+        m = _NUM.match(name)
+        if m and not _is_date(m.group(1)):
+            nums.append(int(m.group(1)))
     return max(nums, default=0) + 1
 
 
 def _adr_dir(paths: list[str]) -> str:
-    dirs = Counter(str(Path(p).parent.as_posix()) for p in paths)
+    dirs = Counter(Path(p).parent.as_posix() for p in paths)
+    dirs.pop(".", None)
     if not dirs:
         return DEFAULT_ADR_DIR
     best = max(dirs.values())
@@ -206,18 +241,41 @@ def _existing_adrs(root: Path, commit: str, config: Config | None) -> list[str]:
 @dataclass(frozen=True)
 class _CommitInfo:
     date: str  # YYYY-MM-DD, author date
-    subject: str
+    subject: str  # sanitised
+
+
+_HEX_RUN = re.compile(r"(?<![0-9A-Za-z])[0-9A-Fa-f]{7,}(?![0-9A-Za-z])")
+# Matches start only at the beginning of a run (linear time on long tokens).
+_REF = re.compile(r"(?<![^\s`:])(?P<path>[^\s`:]+):(?P<a>\d+)(?:-(?P<b>\d+))?")
+
+
+def sanitise_subject(subject: str) -> str:
+    """A commit subject safe to quote in a draft: no control / format / separator
+    characters, no SHA-like hex runs, no ``path:line`` references."""
+    chars = [" " if (ch != " " and unicodedata.category(ch)[0] in "CZ") else ch for ch in subject]
+    text = "".join(chars)
+    text = _HEX_RUN.sub(REF_REMOVED, text)
+    return _REF.sub(lambda m: m.group(0) if m["path"].isdigit() else REF_REMOVED, text)
 
 
 def _commit_info(root: Path, sha: str) -> _CommitInfo:
     entries = git.log(root, max_count=1, rev=sha)
     if not entries or entries[0].sha != sha:
         raise git.GitError(f"no log entry for {sha[:12]}")
-    return _CommitInfo(date=entries[0].date[:10], subject=entries[0].subject)
+    return _CommitInfo(date=entries[0].date[:10], subject=sanitise_subject(entries[0].subject))
 
 
 def _short(sha: str) -> str:
     return sha[:12]
+
+
+def _code(text: str) -> str:
+    """``text`` as a markdown code span, whatever backticks it holds."""
+    runs = [len(m.group(0)) for m in re.finditer(r"`+", text)]
+    if not runs:
+        return f"`{text}`"
+    ticks = "`" * (max(runs) + 1)
+    return f"{ticks} {text} {ticks}"
 
 
 def _fence(quote: str) -> str:
@@ -232,7 +290,7 @@ def _evidence_detail(ev: Evidence) -> str:
     spec = d.version_spec if d.version_spec is not None else "unversioned"
     eco = d.ecosystem or "?"
     scope = f", scope {d.scope}" if d.scope else ""
-    return f", {ev.kind} `{d.package}` {spec} ({eco}{scope})"
+    return f", {ev.kind} {_code(d.package)} {spec} ({eco}{scope})"
 
 
 INTRO_DETAIL = ", introduced"
@@ -240,7 +298,7 @@ INTRO_DETAIL = ", introduced"
 
 def _cite_line(eid: str, ref: Provenance, detail: str) -> str:
     span = f"lines {ref.line_start}-{ref.line_end}"
-    return f"- [{eid}] `{ref.path}` {span} at `{ref.commit}`{detail}:"
+    return f"- [{eid}] {_code(ref.path)} {span} at `{ref.commit}`{detail}:"
 
 
 def _cite_block(eid: str, ref: Provenance, detail: str) -> list[str]:
@@ -335,123 +393,79 @@ def render_markdown(
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+# --------------------------------------------------------------------------- polish checks
+
+_SHA_TOKEN = re.compile(r"(?i)(?<![0-9a-z])[0-9a-f]{7,64}(?![0-9a-z])")
+_ORDERED = re.compile(r"(?:^|\s)\d+[.)](?:\s|$)")
+_STATUS = re.compile(r"(?i)\bstatus\s*:")
+_REFLIKE = re.compile(r"(?<![\w./-])[\w./-]+:\d")
+_STRUCT_START = ("#", "-", "*", "+", ">", "=")
+
+
+def _record_commits(rec: UndocumentedDecision) -> list[str]:
+    return list(dict.fromkeys([*rec.introducing_commits, rec.commit]))
+
+
+def _strip_record_shas(text: str, commits: list[str]) -> tuple[str, list[str]]:
+    """``text`` with every SHA token that abbreviates a record commit removed, and the
+    SHA tokens that do not."""
+    foreign: list[str] = []
+
+    def sub(m: re.Match[str]) -> str:
+        tok = m.group(0)
+        if tok == tok.lower() and any(c.startswith(tok) for c in commits):
+            return " "
+        foreign.append(tok)
+        return " "
+
+    return _SHA_TOKEN.sub(sub, text), foreign
+
+
+def polish_problems(text: str, template: str, rec: UndocumentedDecision) -> list[str]:
+    """Why ``text`` may not replace the template context paragraph ([] when it may)."""
+    problems: list[str] = []
+    if not text.strip():
+        return ["model text is empty"]
+    if text != text.strip() or "\n" in text or "\r" in text:
+        problems.append("model text is not a single trimmed paragraph")
+    if any(not (32 <= ord(ch) < 127) for ch in text):
+        problems.append("model text has non-ASCII or control characters")
+    s = text.strip()
+    if s.startswith(_STRUCT_START) or any(t in s for t in ("```", "~~~", "|")):
+        problems.append("model text contains markdown structure")
+    if _ORDERED.search(s):
+        problems.append("model text contains an ordered list")
+    if any(t in s for t in ("<", ">", "](", "://", "www.")):
+        problems.append("model text contains HTML, a link or a URL")
+    if _STATUS.search(s):
+        problems.append("model text contains a status")
+    commits = _record_commits(rec)
+    bare, foreign = _strip_record_shas(s, commits)
+    if foreign:
+        problems.append(f"model text has hex runs that are not record commits: {foreign[:3]}")
+    if _REFLIKE.search(bare):
+        problems.append("model text contains a path:line-like reference")
+    t_bare, _ = _strip_record_shas(template, commits)
+    allowed = set(re.findall(r"[0-9]+", t_bare))
+    extra = sorted(set(re.findall(r"[0-9]+", bare)) - allowed)
+    if extra:
+        problems.append(f"model text has numbers that are not facts of the record: {extra[:5]}")
+    return problems
+
+
 # --------------------------------------------------------------------------- the G5 gate
 
-_COMMIT_LINE = re.compile(r"^- Commit `(?P<sha>[^`]*)`, (?P<date>[^:]*): (?P<subject>.*)$")
-_CITE_LINE = re.compile(
-    r"^- \[(?P<eid>[^\]]*)\] `(?P<path>[^`]+)` lines (?P<a>\d+)-(?P<b>\d+) "
-    r"at `(?P<sha>[^`]*)`(?P<detail>.*):$"
-)
-_FENCE_OPEN = re.compile(r"^(?P<fence>`{3,}|~{3,})text$")
-_ANY_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
-_HEX = re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{7,64}(?![0-9A-Za-z])")
-_REF = re.compile(r"(?P<path>[\w./-]*[\w-][./][\w./-]*):(?P<a>\d+)(?:-(?P<b>\d+))?(?!\d)")
-_FRONT = re.compile(r"^(?P<key>[A-Za-z][\w-]*)\s*:\s*(?P<value>.*)$")
+_SENTINEL = "\x00DRIFTWARDEN-CONTEXT\x00"
 
 
-def _sha_like(token: str) -> bool:
-    return any(ch.isdigit() for ch in token) or len(token) >= 12
-
-
-@dataclass
-class _Cite:
-    eid: str
-    path: str
-    a: int
-    b: int
-    sha: str
-    line: str
-    quote: str | None  # None when no fenced block followed
-
-
-@dataclass
-class _Parsed:
-    commits: list[tuple[str, str, str, str]]  # (sha, date, subject, line)
-    cites: list[_Cite]
-    prose: list[str]
-    front: dict[str, str]
-    problems: list[str]
-
-
-def _parse_draft(md: str) -> _Parsed:
-    lines = split_lines(md)
-    out = _Parsed([], [], [], {}, [])
-    i = 0
-    if lines and lines[0] == "---":
-        end = next((k for k in range(1, len(lines)) if lines[k] == "---"), None)
-        if end is None:
-            out.problems.append("front-matter is not closed")
-        else:
-            for raw in lines[1:end]:
-                m = _FRONT.match(raw)
-                if m:
-                    out.front[m.group("key").lower()] = m.group("value").strip()
-                out.prose.append(raw)
-            i = end + 1
-    while i < len(lines):
-        line = lines[i]
-        if line.startswith("- Commit "):
-            m = _COMMIT_LINE.match(line)
-            if m is None:
-                out.problems.append(f"malformed commit citation: {line!r}")
-                out.prose.append(line)
-            else:
-                out.commits.append((m["sha"], m["date"], m["subject"], line))
-            i += 1
-            continue
-        if line.startswith("- ["):
-            m = _CITE_LINE.match(line)
-            if m is None:
-                out.problems.append(f"malformed source citation: {line!r}")
-                out.prose.append(line)
-                i += 1
-                continue
-            cite = _Cite(m["eid"], m["path"], int(m["a"]), int(m["b"]), m["sha"], line, None)
-            j = i + 1
-            while j < len(lines) and not lines[j].strip():
-                j += 1
-            fm = _FENCE_OPEN.match(lines[j]) if j < len(lines) else None
-            if fm is None:
-                out.problems.append(f"source citation without a quote block: {line!r}")
-                out.cites.append(cite)
-                i += 1
-                continue
-            fence = fm["fence"]
-            close = next((k for k in range(j + 1, len(lines)) if lines[k] == fence), None)
-            if close is None:
-                out.problems.append(f"unclosed quote block after: {line!r}")
-                out.cites.append(cite)
-                i = len(lines)
-                continue
-            cite.quote = "\n".join(lines[j + 1 : close])
-            out.cites.append(cite)
-            i = close + 1
-            continue
-        if _ANY_FENCE.match(line):
-            out.problems.append(f"code block outside a citation at line {i + 1}")
-        out.prose.append(line)
-        i += 1
-    return out
-
-
-@dataclass(frozen=True)
-class _Expected:
-    ref: Provenance
-    evidence: Evidence
-    intro: bool
-
-
-def _expected_cites(rec: UndocumentedDecision) -> dict[str, _Expected]:
-    """Citation line -> what it cites, for every introduction and evidence item."""
-    by_id = {e.id: e for e in rec.evidence}
-    out: dict[str, _Expected] = {}
-    for intro in rec.introductions:
-        ev = by_id.get(intro.evidence_id)
-        if ev is not None:
-            out[_cite_line(ev.id, intro.ref, INTRO_DETAIL)] = _Expected(intro.ref, ev, True)
-    for ev in rec.evidence:
-        out[_cite_line(ev.id, ev.ref, _evidence_detail(ev))] = _Expected(ev.ref, ev, False)
-    return out
+def _first_difference(got: str, want: str) -> str:
+    g, w = got.split("\n"), want.split("\n")
+    for i in range(max(len(g), len(w))):
+        a = g[i] if i < len(g) else "<end of text>"
+        b = w[i] if i < len(w) else "<end of text>"
+        if a != b:
+            return f"line {i + 1}: {a[:80]!r}, expected {b[:80]!r}"
+    return "trailing text differs"
 
 
 def verify_draft(
@@ -474,36 +488,56 @@ def verify_draft(
     cited_commits: list[str] = []
     cited_refs: list[Provenance] = []
 
-    def fail(reason: str, prov=None, cid: str = "G5") -> None:
+    def result(ok: bool, reason: str, prov=None, cid: str = "G5") -> None:
         checks.append(
             GroundingResult(
-                check_id=cid, status="MISMATCH", reason=reason, provenance=prov, subject=subj
+                check_id=cid,
+                status="VERIFIED" if ok else "MISMATCH",
+                reason=reason,
+                provenance=prov,
+                subject=subj,
             )
         )
-        reasons.append(reason)
+        if not ok:
+            reasons.append(reason)
 
-    def ok(reason: str, prov=None, cid: str = "G5") -> None:
-        checks.append(
-            GroundingResult(
-                check_id=cid, status="VERIFIED", reason=reason, provenance=prov, subject=subj
-            )
-        )
+    def fail(reason: str, prov=None, cid: str = "G5") -> None:
+        result(False, reason, prov, cid)
 
     rec = draft.record
     try:
-        # 1. The record itself, from scratch.
-        if (draft.record_id, draft.technology, draft.category) != (
-            rec.id, rec.technology, rec.category,
+        want_title = draft_title(rec.technology, rec.category)
+        if (draft.record_id, draft.technology, draft.category, draft.title) != (
+            rec.id, rec.technology, rec.category, want_title,
         ):  # fmt: skip
-            fail("draft header does not match its record")
+            fail("draft header (record id, technology, category, title) does not match its record")
         vrec = verify_undocumented(root, rec, decisions=decisions, claims=claims)
         checks.extend(vrec.checks)
         reasons.extend(f"record: {r}" for r in vrec.reasons)
         md = draft.markdown
         if not md:
             fail("no draft text")
+        elif not rec.introducing_commits or any(
+            commit_problem(root, c) is not None for c in rec.introducing_commits
+        ):
+            fail("the record's introducing commits cannot be read; nothing to compare with")
         else:
-            _verify_text(root, rec, md, draft.title, fail, ok, checks, cited_commits, cited_refs)
+            infos = {c: _commit_info(root, c) for c in rec.introducing_commits}
+            _check_text(rec, md, draft.origin, infos, fail, result)
+            _check_citations(root, rec, result, cited_refs)
+            commits = _record_commits(rec)
+            for r in verify_commits_exist(root, commits, ancestor_of=rec.commit, subject=subj):
+                checks.append(r)
+                if r.status != "VERIFIED":
+                    reasons.append(r.reason)
+            cited_commits.extend(commits)
+            dec = parse_adr(md, "docs/adr/draft.md", rec.commit)
+            ok = dec.title == want_title and dec.status == "proposed"
+            result(
+                ok,
+                f"draft parses back with title {dec.title!r} and status {dec.status!r}"
+                + ("" if ok else f" (expected {want_title!r}, 'proposed')"),
+            )
     except git.NotAGitRepoError:
         raise
     except Exception as exc:  # a bad draft is a MISMATCH, never a crash
@@ -520,164 +554,47 @@ def verify_draft(
     return DraftADR.model_validate(data)
 
 
-def _verify_text(
-    root: Path,
-    rec: UndocumentedDecision,
-    md: str,
-    title: str,
-    fail,
-    ok,
-    checks: list[GroundingResult],
-    cited_commits: list[str],
-    cited_refs: list[Provenance],
-) -> None:
-    parsed = _parse_draft(md)
-    for p in parsed.problems:
-        fail(p)
-    record_commits = list(dict.fromkeys([*rec.introducing_commits, rec.commit]))
-    mentioned: list[str] = []
-
-    def mention(sha: str) -> None:
-        if sha not in mentioned:
-            mentioned.append(sha)
-
-    # Front-matter: pinned to this record.
-    fm = parsed.front
-    fm_rec, fm_commit = fm.get("driftwarden-record"), fm.get("driftwarden-commit")
-    if fm_rec != rec.id:
-        fail(f"front-matter driftwarden-record is {fm_rec!r}, not {rec.id}")
-    if fm_commit != rec.commit:
-        fail(f"front-matter driftwarden-commit {fm_commit!r} is not the record's commit")
-    else:
-        mention(rec.commit)
-
-    # Commit lines: introducing commits only, with git's own date and subject.
-    seen_commits: list[str] = []
-    for sha, date, subject, _line in parsed.commits:
-        if sha not in rec.introducing_commits:
-            fail(f"commit {sha[:12]!r} is cited but is not an introducing commit of {rec.id}")
-            continue
-        if sha in seen_commits:
-            fail(f"commit {sha[:12]} is cited twice")
-        seen_commits.append(sha)
-        mention(sha)
-        if commit_problem(root, sha) is not None:
-            continue  # reported by verify_commits_exist
-        info = _commit_info(root, sha)
-        if (date, subject) != (info.date, info.subject):
+def _check_text(rec, md: str, origin: str, infos, fail, result) -> None:
+    """The draft text must be the record's rendering (``origin='llm'``: except for a
+    context paragraph that passes the polish checks)."""
+    template = render_markdown(rec, infos)
+    if origin == "llm":
+        pre, post = render_markdown(rec, infos, _SENTINEL).split(_SENTINEL)
+        if len(md) < len(pre) + len(post) or not (md.startswith(pre) and md.endswith(post)):
             fail(
-                f"commit {sha[:12]}: draft says {date} {subject!r}, git says "
-                f"{info.date} {info.subject!r}"
+                f"draft text outside the context paragraph differs from the rendering of "
+                f"{rec.id} ({_first_difference(md, template)})"
             )
-        else:
-            ok(f"commit {sha[:12]}: date and subject match git")
-    for c in rec.introducing_commits:
-        if c not in seen_commits:
-            fail(f"introducing commit {c[:12]} is not cited")
-
-    # Source citations: exactly the record's refs, quotes re-verified (G2), deps (G3).
-    expected = _expected_cites(rec)
-    refs_of = {(x.evidence.id, x.ref.path, x.ref.line_start, x.ref.line_end, x.ref.commit)
-               for x in expected.values()}  # fmt: skip
-    seen_lines: set[str] = set()
-    for cite in parsed.cites:
-        loc = f"[{cite.eid}] {cite.path}:{cite.a}-{cite.b}@{cite.sha[:12]}"
-        if cite.sha in record_commits:
-            mention(cite.sha)
-        x = expected.get(cite.line)
-        if x is None:
-            if (cite.eid, cite.path, cite.a, cite.b, cite.sha) in refs_of:
-                fail(f"{loc}: citation text differs from the record ({cite.line!r})")
-            else:
-                fail(f"{loc}: not a ref of record {rec.id}")
-            continue
-        if cite.line in seen_lines:
-            fail(f"{loc}: cited twice")
-        seen_lines.add(cite.line)
-        ref, ev = x.ref, x.evidence
-        if cite.quote is None:
-            continue  # reported by the parser
-        if cite.quote != ref.quote:
-            fail(f"{loc}: quote differs from the record's", ref, "G2")
-        prov = Provenance(path=cite.path, line_start=cite.a, line_end=cite.b, commit=cite.sha,
-                          quote=cite.quote)  # fmt: skip
-        g2 = verify_source_quote(root, prov, check_id="G2", subject=f"draft:{rec.id}/{cite.eid}")
-        checks.append(g2)
-        if g2.status != "VERIFIED":
-            fail(f"{loc}: {g2.reason}", prov, "G2")
-        else:
-            cited_refs.append(prov)
-        if ev.dependency is not None and not x.intro:
-            g3 = verify_dependency(root, ev.dependency, subject=f"draft:{rec.id}/{cite.eid}")
-            checks.append(g3)
-            if g3.status != "VERIFIED":
-                fail(f"{loc}: {g3.reason}", ev.dependency, "G3")
-    for line, x in expected.items():
-        if line not in seen_lines:
-            r = x.ref
-            fail(f"[{x.evidence.id}] {r.path}:{r.line_start}-{r.line_end}@{r.commit[:12]} "
-                 "is not cited")  # fmt: skip
-
-    # Prose: every hex run abbreviates a record commit; every path:line is a cited range.
-    ranges = {(r[1], r[2], r[3]) for r in refs_of}
-    for text in parsed.prose:
-        for m in _HEX.finditer(text):
-            tok = m.group(0)
-            if not _sha_like(tok):
-                continue
-            hits = [c for c in record_commits if c.startswith(tok)]
-            if not hits:
-                fail(f"{tok!r} in the text is not a commit of record {rec.id}")
-            for c in hits:
-                mention(c)
-        for m in _REF.finditer(text):
-            path, a = m["path"], int(m["a"])
-            b = int(m["b"]) if m["b"] else a
-            if (path, a, b) not in ranges:
-                fail(f"reference {m.group(0)!r} in the text is not a cited source range")
-
-    # Prose numbers (counts, dates): only those of the template rendering of this record.
-    infos: dict[str, _CommitInfo] = {}
-    if rec.introducing_commits and all(
-        commit_problem(root, c) is None for c in rec.introducing_commits
-    ):
-        infos = {c: _commit_info(root, c) for c in rec.introducing_commits}
-        first_date = infos[rec.introducing_commits[0]].date
-        if fm.get("date") != first_date:
-            fail(f"front-matter date {fm.get('date')!r} is not {first_date}")
-        allowed = set(
-            re.findall(r"\d+", "\n".join(_parse_draft(render_markdown(rec, infos)).prose))
+            return
+        ctx = md[len(pre) : len(md) - len(post)]
+        problems = polish_problems(ctx, template_context(rec, infos), rec)
+        for p in problems:
+            fail(f"context paragraph: {p}")
+        if not problems:
+            result(True, f"draft text is the rendering of {rec.id} with a checked context")
+        return
+    if md != template:
+        fail(
+            f"draft text differs from the rendering of {rec.id} ({_first_difference(md, template)})"
         )
-        for text in parsed.prose:
-            bare = _REF.sub(" ", _HEX.sub(" ", text))
-            extra = sorted(set(re.findall(r"\d+", bare)) - allowed)
-            if extra:
-                fail(f"number(s) {extra[:5]} in the text are not facts of record {rec.id}")
-                break
-
-    # G5: every commit the text names exists and is in the scanned commit's history.
-    if mentioned:
-        for r in verify_commits_exist(
-            root, mentioned, ancestor_of=rec.commit, subject=f"draft:{rec.id}"
-        ):
-            checks.append(r)
-            if r.status != "VERIFIED":
-                fail(r.reason)
     else:
-        fail("the draft cites no commit")
-    cited_commits.extend(mentioned)
+        result(True, f"draft text is exactly the rendering of {rec.id}")
 
-    # Round trip through the repository's own ADR parser.
-    dec = parse_adr(md, "docs/adr/draft.md", rec.commit)
-    want = draft_title(rec.technology, rec.category)
-    if title != want:
-        fail(f"draft title {title!r} is not {want!r}")
-    if dec.title != want:
-        fail(f"draft parses with title {dec.title!r}, not {want!r}")
-    if dec.status != "proposed":
-        fail(f"draft parses with status {dec.status!r}, not 'proposed'")
-    if dec.title == want and dec.status == "proposed":
-        ok("draft parses back as a proposed ADR with the expected title")
+
+def _check_citations(root: Path, rec, result, cited_refs: list[Provenance]) -> None:
+    by_id = {e.id: e for e in rec.evidence}
+    items = [(i.evidence_id, i.ref, None) for i in rec.introductions]
+    items += [(e.id, e.ref, e) for e in rec.evidence]
+    for eid, ref, ev in items:
+        g2 = verify_source_quote(root, ref, check_id="G2", subject=f"draft:{rec.id}/{eid}")
+        result(g2.status == "VERIFIED", f"[{eid}] {g2.reason}", ref, "G2")
+        if g2.status == "VERIFIED":
+            cited_refs.append(ref)
+        if eid not in by_id:
+            result(False, f"[{eid}] cites no evidence item of {rec.id}")
+        if ev is not None and ev.dependency is not None:
+            g3 = verify_dependency(root, ev.dependency, subject=f"draft:{rec.id}/{eid}")
+            result(g3.status == "VERIFIED", f"[{eid}] {g3.reason}", ev.dependency, "G3")
 
 
 # --------------------------------------------------------------------------- LLM polish
@@ -692,23 +609,9 @@ POLISH_SYSTEM = (
     "You edit the context paragraph of a draft Architecture Decision Record. Improve "
     "only its wording. Keep every fact exactly as given and add none: no reasons for "
     "the choice, no benefits, no alternatives, no names of people, no new numbers, "
-    "dates, versions, commit ids or file references. Keep commit ids in backticks as "
-    "given. One plain paragraph, no headings, lists or code blocks."
+    "dates, versions, commit ids, links or file references. Keep commit ids in "
+    "backticks as given. One plain ASCII paragraph, no markdown structure."
 )
-
-
-def _polish_problems(text: str, template: str) -> list[str]:
-    problems: list[str] = []
-    for raw in split_lines(text):
-        s = raw.strip()
-        if s.startswith(("#", "- ", "* ", "+ ", "---", ">")) or "```" in s or "~~~" in s:
-            problems.append("model text contains markdown structure")
-            break
-    allowed = set(re.findall(r"\d+", template))
-    extra = sorted(set(re.findall(r"\d+", text)) - allowed)
-    if extra:
-        problems.append(f"model text adds numbers not in the facts: {extra[:5]}")
-    return problems
 
 
 def _polish(provider: Provider, rec: UndocumentedDecision, template: str) -> tuple[str | None, str]:
@@ -721,14 +624,15 @@ def _polish(provider: Provider, rec: UndocumentedDecision, template: str) -> tup
         res = provider.complete_json(
             prompt, POLISH_SCHEMA, system=POLISH_SYSTEM, purpose=f"adr-draft:{rec.id}"
         )
-    except LLMError as exc:
+        value = res.value.get("context") if isinstance(res.value, dict) else None
+    except Exception as exc:  # third-party code: any failure means "keep the template"
         return None, f"LLM polish failed ({type(exc).__name__}): template text kept"
-    raw = str(res.value.get("context", ""))
-    problems = _polish_problems(raw, template)
-    text = " ".join(raw.split())
+    if not isinstance(value, str):
+        return None, "LLM polish returned no context string: template text kept"
+    problems = polish_problems(value, template, rec)
     if problems:
         return None, f"LLM polish rejected ({'; '.join(problems)}): template text kept"
-    return text, ""
+    return value, ""
 
 
 # --------------------------------------------------------------------------- drafting
@@ -749,19 +653,20 @@ def draft_adr(
     """A MADR draft for ``record``, passed through :func:`verify_draft`.
 
     A record that is *Could not verify* (or fails re-verification) yields no draft:
-    the result has ``status=UNKNOWN``, no markdown, and the reasons. ``provider``
-    (non-offline) may polish the context paragraph; see the module docstring.
-    ``existing_adrs`` (repo-relative ADR paths) fixes the numbering; by default the
-    ADRs at the record's commit and in the working tree are discovered. Nothing is
-    written unless ``write=True``; the file is then created at ``path`` (never
-    overwritten) and ``written_path`` set."""
+    the result has ``status=UNKNOWN``, no markdown, and the reasons. The default is
+    the deterministic template; a non-offline ``provider`` opts in to an LLM polish
+    of the context paragraph (see the module docstring). ``existing_adrs``
+    (repo-relative ADR paths) fixes the numbering; by default the ADRs at the
+    record's commit and in the working tree are discovered. Nothing is written
+    unless ``write=True``; see the module docstring for the write rules."""
     root = git.repo_root(repo)
     title = draft_title(record.technology, record.category)
-    paths = (
-        sorted(existing_adrs)
+    raw_paths = (
+        list(existing_adrs)
         if existing_adrs is not None
         else _existing_adrs(root, record.commit, config)
     )
+    paths = sorted(p for p in raw_paths if isinstance(p, str) and path_problem(p) is None)
     number = next_adr_number(paths)
     rel = f"{_adr_dir(paths)}/{draft_filename(number, record.technology, record.category)}"
     base: dict[str, Any] = dict(
@@ -784,6 +689,10 @@ def draft_adr(
     if record.could_not_verify:
         return refused([f"record is Could not verify: {r}" for r in record.reasons])
     try:
+        if not record.introducing_commits or any(
+            commit_problem(root, c) is not None for c in record.introducing_commits
+        ):
+            return refused(["record's introducing commits are not pinned commits of this repo"])
         infos = {c: _commit_info(root, c) for c in record.introducing_commits}
     except git.NotAGitRepoError:
         raise
@@ -793,7 +702,7 @@ def draft_adr(
     notes: list[str] = []
     template = template_context(record, infos)
     drafts: list[tuple[DraftOrigin, str]] = []
-    if provider is not None and not provider.offline:
+    if provider is not None and not getattr(provider, "offline", True):
         text, note = _polish(provider, record, template)
         if text is not None:
             drafts.append(("llm", render_markdown(record, infos, text)))
@@ -817,21 +726,105 @@ def draft_adr(
         return refused(result.reasons, result.checks)
     result = result.model_copy(update={"notes": notes})
     if write:
-        result = _write(root, result)
+        result = _write(root, result, config)
     return result
 
 
-def _write(root: Path, draft: DraftADR) -> DraftADR:
-    assert draft.path is not None and draft.markdown is not None
-    target = root / draft.path
-    target.parent.mkdir(parents=True, exist_ok=True)
+# --------------------------------------------------------------------------- writing
+
+_FM_RECORD = re.compile(r"^driftwarden-record:\s*(\S+)\s*$")
+
+
+def _drafted_record(path: Path) -> str | None:
+    """The ``driftwarden-record`` named in the front-matter of ``path``, or None."""
     try:
-        with open(target, "x", encoding="utf-8", newline="\n") as fh:
+        if path.is_symlink() or not path.is_file():
+            return None
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            head = [fh.readline() for _ in range(12)]
+    except OSError:
+        return None
+    if not head or head[0].rstrip("\r\n") != "---":
+        return None
+    for line in head[1:]:
+        line = line.rstrip("\r\n")
+        if line == "---":
+            return None
+        m = _FM_RECORD.match(line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _existing_draft(root: Path, draft: DraftADR, config: Config | None) -> str | None:
+    cands: set[str] = set(discover_adr_files(root, config))
+    if draft.path is not None:
+        d = root / Path(draft.path).parent
+        if d.is_dir() and not d.is_symlink():
+            cands.update(
+                p.relative_to(root).as_posix() for p in d.iterdir() if p.suffix.lower() == ".md"
+            )
+    for rel in sorted(cands):
+        if _drafted_record(root / rel) == draft.record_id:
+            return rel
+    return None
+
+
+def _unsafe_dir(root: Path, rel_dir: str) -> str | None:
+    """Why the directory ``rel_dir`` cannot safely receive a file, or None."""
+    cur = root
+    for seg in Path(rel_dir).parts:
+        cur = cur / seg
+        if cur.is_symlink():
+            return f"{cur.relative_to(root).as_posix()} is a symlink"
+        if os.path.lexists(cur) and not cur.is_dir():
+            return f"{cur.relative_to(root).as_posix()} is not a directory"
+    try:
+        cur.resolve().relative_to(root.resolve())
+    except (OSError, ValueError, RuntimeError):
+        return f"{rel_dir} resolves outside the repository"
+    return None
+
+
+def _write(root: Path, draft: DraftADR, config: Config | None) -> DraftADR:
+    assert draft.path is not None and draft.markdown is not None
+
+    def note(text: str) -> DraftADR:
+        return draft.model_copy(update={"notes": [*draft.notes, text]})
+
+    try:
+        existing = _existing_draft(root, draft, config)
+        if existing is not None:
+            return draft.model_copy(
+                update={
+                    "path": existing,
+                    "written_path": existing,
+                    "notes": [*draft.notes, f"{existing} already drafts {draft.record_id}; "
+                              "not written again"],
+                }
+            )  # fmt: skip
+        bad = path_problem(draft.path)
+        if bad is not None:
+            return note(f"not written: {draft.path!r} is not a repo-relative path ({bad})")
+        rel_dir = Path(draft.path).parent.as_posix()
+        why = _unsafe_dir(root, rel_dir)
+        if why is not None:
+            return note(f"not written: {why}")
+        (root / rel_dir).mkdir(parents=True, exist_ok=True)
+        why = _unsafe_dir(root, rel_dir)  # re-check after creating it
+        if why is not None:
+            return note(f"not written: {why}")
+        target = root / draft.path
+        if os.path.lexists(target):
+            return note(f"not written: {draft.path} exists; not overwritten")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(target, flags, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(draft.markdown)
     except FileExistsError:
-        return draft.model_copy(
-            update={"notes": [*draft.notes, f"{draft.path} exists; not overwritten"]}
-        )
+        return note(f"not written: {draft.path} exists; not overwritten")
+    except OSError as exc:
+        return note(f"not written: {type(exc).__name__}: {exc}")
     return draft.model_copy(update={"written_path": draft.path})
 
 
@@ -842,7 +835,9 @@ __all__ = [
     "draft_filename",
     "draft_title",
     "next_adr_number",
+    "polish_problems",
     "render_markdown",
+    "sanitise_subject",
     "technology_name",
     "verify_draft",
 ]
