@@ -561,7 +561,18 @@ def _ledger_rows(out: Path):
     lines = jsonl.read_text(encoding="utf-8").split("\n")
     assert lines[-1] == "", "ledger must end with a newline"
     rows = [json.loads(x) for x in lines[:-1]]  # every line must be valid JSON
-    return rows, json.loads(summ.read_text(encoding="utf-8"))
+    # L-028: the ledger now also holds claim/evidence rows from the full pipeline; these
+    # tests are about the decision-level G1 rows (subject = decision id, no ".cN").
+    rows = [r for r in rows if r["check_id"] == "G1" and "." not in (r["subject"] or "")]
+    data = json.loads(summ.read_text(encoding="utf-8"))
+    ok = sum(r["status"] == "VERIFIED" for r in rows)
+    data.update(
+        total=len(rows),
+        verified=ok,
+        mismatch=len(rows) - ok,
+        pass_rate=ok / len(rows) if rows else None,
+    )
+    return rows, data
 
 
 def test_ledger_is_jsonl_with_correct_pass_rate_on_fixtures(tmp_path):

@@ -1,0 +1,418 @@
+"""L-028: end-to-end scan pipeline, the Report model and `driftwarden scan`."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import socket
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+import driftwarden.cli as cli
+from conftest import git
+from driftwarden.cli import app
+from driftwarden.config import Config
+from driftwarden.discover.adr import scan_adrs
+from driftwarden.grounding.ledger import Ledger
+from driftwarden.judge.judge import Judge
+from driftwarden.llm import OfflineProvider, RetryPolicy
+from driftwarden.models import Claim, Provenance
+from driftwarden.pipeline import claim_touches, run_scan
+from driftwarden.report.model import Report, rule_text
+
+FIXTURES = Path(__file__).parent / "fixtures"
+runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    def blocked(*_a, **_k):
+        raise OSError("network access is disabled in tests")
+
+    class BlockedSocket(socket.socket):
+        def connect(self, *_a, **_k):
+            blocked()
+
+    monkeypatch.setattr(socket, "socket", BlockedSocket)
+    monkeypatch.setattr(socket, "create_connection", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
+    for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+
+def _commit(repo: Path) -> None:
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "fixture")
+
+
+def copy_repo(tmp_path: Path, src: Path, name: str) -> Path:
+    dest = tmp_path / name
+    shutil.copytree(src, dest)
+    git(dest, "init", "-q", "-b", "main")
+    git(dest, "config", "commit.gpgsign", "false")
+    _commit(dest)
+    return dest
+
+
+@pytest.fixture
+def pyshop(tmp_path):
+    return copy_repo(tmp_path, FIXTURES / "judge_repos" / "pyshop", "pyshop")
+
+
+def scan(repo: Path, tmp_path: Path, **kw) -> Report:
+    kw.setdefault("mode", "offline")
+    return run_scan(repo, config=Config(), ledger=Ledger(tmp_path / "ledger"), **kw)
+
+
+def by_id(report: Report) -> dict:
+    return {c.id: c for c in report.claims}
+
+
+# ------------------------------------------------------------------ end to end
+
+
+def test_end_to_end_pyshop_offline(pyshop, tmp_path):
+    r = scan(pyshop, tmp_path, draft_adrs=True)
+    claims = by_id(r)
+    assert claims["ADR-0004.c1"].status == "HOLDING"  # structlog required, present
+    assert claims["ADR-0001.c1"].status == "VIOLATED"  # pymongo next to PostgreSQL
+    assert claims["ADR-0007.c1"].status == "UNKNOWN"  # free-form claim
+    for c in r.claims:
+        assert c.judged and c.verdict is not None and c.verdict.grounding == "VERIFIED"
+        for ev in c.verdict.evidence:
+            assert ev.ref.commit == r.metadata.commit and ev.ref.quote
+    violated = claims["ADR-0001.c1"].verdict
+    assert violated.evidence and all(e.relation == "alternative" for e in violated.evidence)
+    assert {u.id for u in r.undocumented} >= {"UD-queue-kafka"}
+    assert all(u.grounding == "VERIFIED" for u in r.undocumented)
+    assert r.drafts and {d.record_id for d in r.drafts} == {u.id for u in r.undocumented}
+    assert all(d.status == "DRAFT" and d.written_path is None for d in r.drafts)
+    assert not (pyshop / "docs" / "adr" / "0008-use-kafka-for-queue.md").exists()
+    assert r.could_not_verify == []
+    assert r.timeline == []
+    s = r.summary
+    assert s.by_status["VIOLATED"] >= 1 and s.unknown == s.by_status["UNKNOWN"] >= 1
+    decided = s.by_status["HOLDING"] + s.by_status["DRIFTING"] + s.by_status["VIOLATED"]
+    assert s.drift_score == pytest.approx(
+        (s.by_status["DRIFTING"] + s.by_status["VIOLATED"]) / decided
+    )
+    assert s.exit_code == 1
+    assert r.metadata.mode == "offline" and r.metadata.provider is None
+    assert r.metadata.repo == "pyshop" and len(r.metadata.commit) == 40
+
+
+def test_grounding_summary_comes_from_the_ledger(pyshop, tmp_path):
+    from driftwarden.models import GroundingResult
+
+    ledger = Ledger(tmp_path / "lg")
+    # a row written before the run must not be counted
+    ledger.append(GroundingResult(check_id="G9", status="MISMATCH", reason="earlier"))
+    r = run_scan(pyshop, config=Config(), mode="offline", ledger=ledger, draft_adrs=True)
+    rows = [json.loads(x) for x in ledger.path.read_text(encoding="utf-8").splitlines()][1:]
+    gs = r.grounding_summary
+    assert set(gs.by_check) == {"G1", "G2", "G3", "G4", "G5", "G6"}
+    assert gs.total == len(rows)
+    for cid, cs in gs.by_check.items():
+        mine = [x for x in rows if x["check_id"] == cid]
+        assert cs.total == len(mine)
+        assert cs.verified == sum(x["status"] == "VERIFIED" for x in mine)
+        assert cs.pass_rate == (cs.verified / cs.total if cs.total else None)
+    assert gs.by_check["G1"].total > len(r.decisions)  # decisions + claims
+    assert gs.by_check["G5"].total > 0 and gs.by_check["G2"].total > 0
+
+
+def test_tampered_decision_lands_in_could_not_verify(pyshop, tmp_path):
+    adrs = scan_adrs(pyshop, Config())
+    d = adrs.decisions[0]
+    adrs.decisions[0] = d.model_copy(
+        update={"source": d.source.model_copy(update={"quote": "We will use MongoDB."})}
+    )
+    r = scan(pyshop, tmp_path, adrs=adrs)
+    item = next(i for i in r.could_not_verify if i.kind == "decision")
+    assert item.id == d.id and item.check_id == "G1" and item.reasons[0]
+    dec = next(x for x in r.decisions if x.id == d.id)
+    assert not dec.judged and "G1" in (dec.not_judged_reason or "")
+    assert not any(c.claim.decision_id == d.id for c in r.claims)
+    assert r.summary.exit_code == 3  # G1 wins over VIOLATED
+
+
+def test_tampered_evidence_is_could_not_verify_never_violated(pyshop, tmp_path, monkeypatch):
+    real = Judge.evidence
+
+    def tampered(self, claim):
+        es = real(self, claim)
+        if claim.id != "ADR-0001.c1":
+            return es
+        items = [
+            e.model_copy(update={"ref": e.ref.model_copy(update={"quote": "import nothing"})})
+            for e in es.candidates
+        ]
+        return es.model_copy(update={"candidates": items})
+
+    monkeypatch.setattr(Judge, "evidence", tampered)
+    r = scan(pyshop, tmp_path)
+    v = by_id(r)["ADR-0001.c1"].verdict
+    assert v.status == "UNKNOWN" and v.grounding == "MISMATCH" and v.proposed_status == "VIOLATED"
+    kinds = {(i.kind, i.claim_id) for i in r.could_not_verify}
+    assert ("verdict", "ADR-0001.c1") in kinds and ("evidence", "ADR-0001.c1") in kinds
+    ev_items = [i for i in r.could_not_verify if i.kind == "evidence"]
+    assert all(i.check_id in ("G2", "G3") and i.reasons for i in ev_items)
+    assert "ADR-0001.c1" not in {c.id for c in r.verdicts("VIOLATED")}
+    assert r.summary.exit_code == 1  # other claims are still VIOLATED; G2 is not exit 3
+
+
+def test_every_ledger_mismatch_is_reported(pyshop, tmp_path, monkeypatch):
+    """Catch-all: a failed verifier row the stages do not surface is still listed."""
+    import driftwarden.pipeline as pipeline
+    from driftwarden.models import GroundingResult
+
+    real = pipeline.detect_undocumented
+
+    def noisy(*a, **k):
+        k["ledger"].append(
+            GroundingResult(check_id="G5", status="MISMATCH", reason="stray", subject="ZZ-1")
+        )
+        return real(*a, **k)
+
+    monkeypatch.setattr(pipeline, "detect_undocumented", noisy)
+    r = scan(pyshop, tmp_path)
+    item = next(i for i in r.could_not_verify if i.id == "ZZ-1")
+    assert item.kind == "check" and item.check_id == "G5" and item.reasons == ["stray"]
+
+
+# ------------------------------------------------------------------ status
+
+
+ADR = """# {n}. {title}
+
+## Status
+
+{status}
+
+## Context
+
+Background jobs.
+
+## Decision
+
+We will not use Celery.
+"""
+
+
+def test_only_accepted_decisions_are_judged(make_repo, tmp_path):
+    repo = make_repo(
+        {
+            "docs/adr/0001-a.md": ADR.format(n=1, title="No Celery", status="Accepted"),
+            "docs/adr/0002-p.md": ADR.format(n=2, title="No Celery p", status="Proposed"),
+            "docs/adr/0003-s.md": ADR.format(
+                n=3, title="No Celery s", status="Superseded by ADR-0001"
+            ),
+            "docs/adr/0004-r.md": ADR.format(n=4, title="No Celery r", status="Rejected"),
+            "requirements.txt": "celery==5.3.0\n",
+            "app/worker.py": "import celery\n",
+        }
+    )
+    r = scan(repo, tmp_path)
+    decs = {d.id: d for d in r.decisions}
+    assert decs["ADR-0001"].judged and decs["ADR-0001"].claim_ids
+    for did, status in (
+        ("ADR-0002", "proposed"),
+        ("ADR-0003", "superseded"),
+        ("ADR-0004", "rejected"),
+    ):
+        assert decs[did].status == status and not decs[did].judged
+        assert "only accepted decisions are judged" in decs[did].not_judged_reason
+        assert decs[did].claim_ids == [] and decs[did].g1.status == "VERIFIED"
+    assert decs["ADR-0003"].superseded_by == "ADR-0001"
+    assert {c.claim.decision_id for c in r.claims} == {"ADR-0001"}
+    assert by_id(r)["ADR-0001.c1"].status == "VIOLATED"
+    assert r.summary.decisions == 4 and r.summary.decisions_judged == 1
+
+
+# ------------------------------------------------------------------ PR mode
+
+
+def test_changed_paths_filtering(pyshop, tmp_path):
+    full = by_id(scan(pyshop, tmp_path / "a"))
+    r = scan(pyshop, tmp_path / "b", changed_paths=["./docs/adr/0007-health-endpoint.md"])
+    judged = {c.id for c in r.claims if c.judged}
+    assert judged == {"ADR-0007.c1"}
+    assert set(by_id(r)) == set(full)  # every claim still listed
+    other = by_id(r)["ADR-0001.c1"]
+    assert other.verdict is None and "changed paths" in other.not_judged_reason
+    assert r.metadata.changed_paths == ["docs/adr/0007-health-endpoint.md"]
+
+    r2 = scan(pyshop, tmp_path / "c", changed_paths=["requirements.txt"])
+    judged2 = {c.id for c in r2.claims if c.judged}
+    assert "ADR-0001.c1" in judged2 and "ADR-0007.c1" not in judged2
+    assert by_id(r2)["ADR-0001.c1"].status == full["ADR-0001.c1"].status
+
+    r3 = scan(pyshop, tmp_path / "d", changed_paths=[])
+    assert not any(c.judged for c in r3.claims) and r3.summary.exit_code == 0
+
+
+def test_claim_touches_rule_paths():
+    src = Provenance(path="docs/adr/1.md", line_start=1, line_end=1, commit="W", quote="q")
+    c = Claim(
+        id="X.c1",
+        kind="boundary",
+        subject="cloud sdk",
+        rule={"target": ["boto3"], "allowed_in": ["src/adapters/"]},
+        source=src,
+        decision_id="X",
+    )
+    assert claim_touches(c, None, {"src/adapters/s3.py"})
+    assert claim_touches(c, None, {"docs/adr/1.md"})
+    assert not claim_touches(c, None, {"src/adaptersx/s3.py", "src/other.py"})
+    assert rule_text(c) == "boundary [boto3] allowed_in [src/adapters/]"
+
+
+# ------------------------------------------------------------------ model
+
+
+def test_report_json_round_trip_and_offline_determinism(pyshop, tmp_path):
+    a = scan(pyshop, tmp_path / "a", draft_adrs=True)
+    b = scan(pyshop, tmp_path / "b", draft_adrs=True)
+    assert Report.model_validate_json(a.model_dump_json()) == a
+    ja = json.loads(a.model_dump_json())
+    jb = json.loads(b.model_dump_json())
+    ja["metadata"].pop("scanned_at")
+    jb["metadata"].pop("scanned_at")
+    assert ja == jb
+    sa = a.model_copy(update={"metadata": a.metadata.model_copy(update={"scanned_at": "T"})})
+    sb = b.model_copy(update={"metadata": b.metadata.model_copy(update={"scanned_at": "T"})})
+    assert sa.model_dump_json() == sb.model_dump_json()  # byte-identical
+    assert [d.id for d in a.decisions] == sorted(d.id for d in a.decisions)
+
+
+def test_round_trip_with_failures(pyshop, tmp_path):
+    adrs = scan_adrs(pyshop, Config())
+    d = adrs.decisions[2]
+    adrs.decisions[2] = d.model_copy(
+        update={"source": d.source.model_copy(update={"line_start": 1, "line_end": 1})}
+    )
+    r = scan(pyshop, tmp_path, adrs=adrs, draft_adrs=True)
+    assert r.could_not_verify
+    assert Report.model_validate_json(r.model_dump_json()) == r
+
+
+def test_repo_without_commits_judges_the_worktree(tmp_path):
+    repo = tmp_path / "fresh"
+    shutil.copytree(FIXTURES / "judge_repos" / "pyshop", repo)
+    git(repo, "init", "-q", "-b", "main")
+    r = scan(repo, tmp_path)
+    assert r.metadata.commit == "WORKTREE"
+    assert by_id(r)["ADR-0001.c1"].status == "VIOLATED"
+    assert r.undocumented == [] and any("needs a commit" in n for n in r.notes)
+
+
+# ------------------------------------------------------------------ llm mode (scripted)
+
+
+def test_llm_mode_uses_consistency_runner(pyshop, tmp_path):
+    def responder(request):
+        if (request.purpose or "").startswith("claims:"):
+            return json.dumps({"claims": []})
+        return json.dumps({"status": "UNKNOWN", "citations": [], "rationale": "not enough"})
+
+    provider = OfflineProvider(
+        responder=responder, retry=RetryPolicy(max_attempts=1, sleep=lambda _s: None)
+    )
+    r = scan(pyshop, tmp_path, mode="llm", provider=provider)
+    assert r.metadata.mode == "llm" and r.metadata.provider == "offline"
+    free = by_id(r)["ADR-0007.c1"].verdict
+    assert free.consistency is not None and free.consistency.basis == "vote"
+    assert len(free.consistency.votes) == 3
+    decided = by_id(r)["ADR-0001.c1"].verdict
+    assert decided.status == "VIOLATED" and decided.consistency.basis == "deterministic"
+    assert r.grounding_summary.by_check["G6"].total >= 1
+
+
+# ------------------------------------------------------------------ CLI
+
+
+def test_cli_exit_1_on_violation_and_json_out(pyshop, tmp_path):
+    out = tmp_path / "report.json"
+    res = runner.invoke(
+        app, ["scan", str(pyshop), "--out", str(tmp_path / "o"), "--json-out", str(out)]
+    )
+    assert res.exit_code == 1, res.output
+    r = Report.model_validate_json(out.read_text(encoding="utf-8"))
+    assert r.summary.exit_code == 1 and r.metadata.mode == "offline"
+    assert "VIOLATED (" in res.output and "ADR-0001.c1" in res.output
+    assert "requirements.txt:2@" in res.output
+    assert "Undocumented UD-queue-kafka" in res.output
+    assert "Grounding (all checks):" in res.output
+    assert "Not yet implemented: claim structuring" not in res.output
+    assert "auto mode" in res.output  # fell back to offline: no key
+
+
+def test_cli_exit_0(make_repo, tmp_path):
+    repo = make_repo({"docs/adr/0001-a.md": ADR.format(n=1, title="x", status="Accepted")})
+    res = runner.invoke(app, ["scan", str(repo), "--out", str(tmp_path / "o")])
+    assert res.exit_code == 0, res.output
+    assert "HOLDING (1)" in res.output
+
+
+def test_cli_exit_3_wins_over_1(pyshop, tmp_path, monkeypatch):
+    real = cli.scan_adrs
+
+    def tampered(*a, **k):
+        res = real(*a, **k)
+        d = res.decisions[3]
+        res.decisions[3] = d.model_copy(
+            update={"source": d.source.model_copy(update={"quote": "never said"})}
+        )
+        return res
+
+    monkeypatch.setattr(cli, "scan_adrs", tampered)
+    res = runner.invoke(app, ["scan", str(pyshop), "--out", str(tmp_path / "o")])
+    assert res.exit_code == 3, res.output
+    assert "Could not verify decision ADR-0004 [G1]" in res.output
+
+
+def test_cli_draft_adrs_shown_not_written(pyshop, tmp_path):
+    res = runner.invoke(app, ["scan", str(pyshop), "--out", str(tmp_path / "o"), "--draft-adrs"])
+    assert res.exit_code == 1, res.output
+    assert "Draft ADR for UD-queue-kafka" in res.output and "not written" in res.output
+    assert git(pyshop, "status", "--porcelain", "--untracked-files=all").strip() == ""
+
+
+def test_cli_format_writes_nothing(pyshop, tmp_path):
+    out = tmp_path / "o"
+    res = runner.invoke(app, ["scan", str(pyshop), "--out", str(out), "--format", "json,md"])
+    assert "nothing was written" in res.output
+    assert sorted(p.name for p in out.iterdir()) == ["logs"]
+
+
+def _openai_without_model(repo: Path) -> None:
+    (repo / "driftwarden.toml").write_text(
+        'provider = "openai"\nbase_url = "http://127.0.0.1:9"\n', encoding="utf-8"
+    )
+
+
+def test_cli_auto_falls_back_when_provider_fails(pyshop, tmp_path):
+    _openai_without_model(pyshop)
+    res = runner.invoke(app, ["scan", str(pyshop), "--out", str(tmp_path / "o")])
+    assert res.exit_code == 1, res.output
+    assert "falling back to offline mode" in res.output and "mode=offline" in res.output
+
+
+def test_cli_llm_mode_provider_failure_exits_2(pyshop, tmp_path):
+    _openai_without_model(pyshop)
+    res = runner.invoke(app, ["scan", str(pyshop), "--mode", "llm", "--out", str(tmp_path / "o")])
+    assert res.exit_code == 2 and "failed to initialise" in res.output
+
+
+def test_cli_llm_mode_without_key_exits_2(pyshop, tmp_path):
+    res = runner.invoke(app, ["scan", str(pyshop), "--mode", "llm", "--out", str(tmp_path / "o")])
+    assert res.exit_code == 2 and "ANTHROPIC_API_KEY" in res.output
+
+
+def test_cli_help_documents_exit_codes():
+    res = runner.invoke(app, ["scan", "--help"])
+    assert res.exit_code == 0
+    for text in ("--json-out", "--draft-adrs", "Exit codes", "VIOLATED", "mismatch"):
+        assert text in res.output

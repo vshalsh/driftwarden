@@ -17,8 +17,10 @@ from driftwarden import __version__, git
 from driftwarden.config import ConfigError, load_config
 from driftwarden.discover.adr import scan_adrs
 from driftwarden.grounding.ledger import Ledger
-from driftwarden.grounding.verify import verify_source_quote
+from driftwarden.llm import get_provider
 from driftwarden.models import WORKTREE
+from driftwarden.pipeline import run_scan
+from driftwarden.report.model import Report, rule_text
 
 app = typer.Typer(
     name="driftwarden",
@@ -26,8 +28,8 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
-console = Console()
-err = Console(stderr=True)
+console = Console(soft_wrap=True)
+err = Console(stderr=True, soft_wrap=True)
 
 VALID_FORMATS = ("json", "md", "sarif", "html")
 
@@ -116,12 +118,146 @@ def version() -> None:
     console.print(f"driftwarden {__version__}")
 
 
+def _resolve_provider(requested: str, cfg, root: Path) -> tuple[str, object | None]:
+    """(mode, provider) for the scan. auto: llm when a provider key (or a local
+    OpenAI-compatible base_url) is configured, else offline; a provider that fails to
+    initialise falls back to offline with a warning. llm: a failure exits 2."""
+    if requested == "offline":
+        return "offline", None
+    try:
+        provider = get_provider(cfg.model_copy(update={"mode": requested}), root)
+    except Exception as exc:  # noqa: BLE001 - any init failure: fallback or exit 2
+        if requested == "llm":
+            err.print(f"[red]error:[/red] LLM provider failed to initialise: {escape(str(exc))}")
+            raise typer.Exit(2) from exc
+        err.print(
+            f"[yellow]warning:[/yellow] LLM provider failed to initialise "
+            f"({escape(str(exc))}); falling back to offline mode",
+            highlight=False,
+        )
+        return "offline", None
+    if provider.offline:
+        reason = getattr(provider, "reason", "offline mode")
+        err.print(f"[dim]auto mode: {escape(reason)}[/dim]", highlight=False)
+        return "offline", None
+    return "llm", provider
+
+
+def _loc(path: str, a: int, b: int, commit: str) -> str:
+    sha = "worktree" if commit == WORKTREE else commit[:7]
+    lines = f"{a}" if a == b else f"{a}-{b}"
+    return f"{path}:{lines}@{sha}"
+
+
+def _detail(ev) -> str:
+    """An evidence item's detail without its leading ``path:line`` (already shown)."""
+    head, _, rest = ev.detail.partition(" ")
+    return rest if rest and head.startswith(f"{ev.ref.path}:") else ev.detail
+
+
+def _print_report(report: Report) -> None:
+    by = report.summary.by_status
+    judged = [c for c in report.claims if c.judged and c.verdict is not None]
+    console.print(
+        f"Verdicts ({len(judged)} judged of {report.summary.claims} claim(s)): "
+        + ", ".join(f"{by.get(s, 0)} {s}" for s in ("VIOLATED", "DRIFTING", "HOLDING", "UNKNOWN")),
+        highlight=False,
+    )
+    colour = {"VIOLATED": "red", "DRIFTING": "yellow", "HOLDING": "green", "UNKNOWN": "dim"}
+    for status in ("VIOLATED", "DRIFTING", "HOLDING", "UNKNOWN"):
+        group = report.verdicts(status)  # VERIFIED only; failures are listed below
+        if not group:
+            continue
+        console.print(
+            f"[{colour[status]}]{status}[/{colour[status]}] ({len(group)}), grounding VERIFIED"
+        )
+        for cr in group:
+            c, v = cr.claim, cr.verdict
+            assert v is not None
+            src = c.source
+            console.print(
+                f"  {escape(c.id)}  {escape(rule_text(c))}  "
+                f"{escape(_loc(src.path, src.line_start, src.line_end, src.commit))}",
+                highlight=False,
+            )
+            console.print(f"    {escape(v.rationale)}", highlight=False)
+            for ev in v.evidence:
+                r = ev.ref
+                console.print(
+                    f"    evidence  {escape(_loc(r.path, r.line_start, r.line_end, r.commit))}"
+                    f"  {escape(_detail(ev))}",
+                    highlight=False,
+                )
+    skipped = [c for c in report.claims if not c.judged]
+    for cr in skipped:
+        console.print(
+            f"[dim]not judged {escape(cr.id)}: {escape(cr.not_judged_reason or '')}[/dim]",
+            highlight=False,
+        )
+    for item in report.could_not_verify:
+        check = f" [{item.check_id}]" if item.check_id else ""
+        reason = "; ".join(item.reasons)
+        console.print(
+            f"[red]Could not verify[/red] {item.kind} {escape(item.id)}{escape(check)}: "
+            f"{escape(reason)}",
+            highlight=False,
+        )
+    for rec in report.undocumented:
+        first = rec.introducing_commits[0][:7] if rec.introducing_commits else "?"
+        console.print(
+            f"[yellow]Undocumented[/yellow] {escape(rec.id)}: {escape(rec.title)} "
+            f"(introduced {first})",
+            highlight=False,
+        )
+        for ev in rec.evidence:
+            r = ev.ref
+            console.print(
+                f"    evidence  {escape(_loc(r.path, r.line_start, r.line_end, r.commit))}"
+                f"  {escape(_detail(ev))}",
+                highlight=False,
+            )
+    for d in report.drafts:
+        console.print(
+            f"Draft ADR for {escape(d.record_id)}: {escape(d.title)} -> suggested path "
+            f"{escape(d.path or '?')} (shown only, not written)",
+            highlight=False,
+        )
+    gs = report.grounding_summary
+    parts = []
+    for cid, cs in gs.by_check.items():
+        if cs.total:
+            parts.append(f"{cid} {cs.verified}/{cs.total}")
+        else:
+            parts.append(f"{cid} n/a")
+    rate = f"{gs.pass_rate:.1%}" if gs.pass_rate is not None else "n/a"
+    console.print(
+        f"Grounding (all checks): {gs.verified}/{gs.total} VERIFIED, pass rate {rate} "
+        f"[{', '.join(parts)}]",
+        highlight=False,
+    )
+    s = report.summary
+    drift = f"{s.drift_score:.1%}" if s.drift_score is not None else "n/a"
+    console.print(
+        f"Summary: drift score {drift} (decided claims not HOLDING), {s.unknown} UNKNOWN, "
+        f"{s.could_not_verify} unverified item(s), {s.undocumented} undocumented decision(s), "
+        f"{s.drafts} draft(s); exit code {s.exit_code}",
+        highlight=False,
+    )
+
+
 @app.command()
 def scan(
     path: Path = typer.Argument(Path("."), help="Repository to scan."),
-    mode: Mode = typer.Option(Mode.auto, "--mode", help="auto | offline | llm"),
+    mode: Mode = typer.Option(
+        Mode.auto,
+        "--mode",
+        help="auto (llm if a provider key is configured, else offline) | offline | llm",
+    ),
     format: str = typer.Option(
-        "", "--format", help="Comma list of report formats: json,md,sarif,html"
+        "",
+        "--format",
+        help="Comma list of report formats: json,md,sarif,html. Not written yet "
+        "(arrives in L-012/L-013); use --json-out for JSON.",
     ),
     out: Path | None = typer.Option(
         None,
@@ -130,10 +266,23 @@ def scan(
         "Default: <repo>/.driftwarden.",
     ),
     config: Path | None = typer.Option(None, "--config", help="Config file to use."),
+    json_out: Path | None = typer.Option(
+        None, "--json-out", help="Write the full Report as JSON to this file."
+    ),
+    draft_adrs: bool = typer.Option(
+        False,
+        "--draft-adrs",
+        help="Draft MADR files for undocumented decisions (shown, never written to the repo).",
+    ),
 ) -> None:
     """Scan a repository against its architecture decisions.
 
-    Exit codes: 0 all decisions VERIFIED, 2 usage/config error, 3 any grounding MISMATCH.
+    Exit codes:
+    0 = no VIOLATED claim and no G1 grounding mismatch;
+    1 = at least one VERIFIED VIOLATED claim;
+    2 = usage or config error (including --mode llm with no usable provider);
+    3 = G1 grounding mismatch (an ADR decision or claim quote not found at its
+    cited lines). When both 1 and 3 apply, the exit code is 3.
     """
     fmts = _parse_formats(format)
     if not path.exists():
@@ -156,9 +305,12 @@ def scan(
         err.print(f"[red]error:[/red] {git_error}")
         raise typer.Exit(2) from git_error
 
+    requested = cfg.mode if mode is Mode.auto else mode.value
+    resolved, provider = _resolve_provider(requested, cfg, root)
+
     console.print(f"driftwarden {__version__} - scan {root}")
     console.print(
-        f"mode={mode.value} formats={','.join(fmts) or '(none)'} config={cfg.source or 'defaults'}",
+        f"mode={resolved} formats={','.join(fmts) or '(none)'} config={cfg.source or 'defaults'}",
         highlight=False,
     )
 
@@ -182,34 +334,43 @@ def scan(
             err.print(f"[red]error:[/red] cannot write ledger to {escape(str(exc))}; use --out DIR")
             raise typer.Exit(2) from exc
     ledger = Ledger(ledger_base)
-    rows = []
-    for dec in result.decisions:
-        gr = verify_source_quote(root, dec.source, check_id="G1", subject=dec.id)
-        ledger.append(gr)
-        rows.append((dec, gr))
+    try:
+        report = run_scan(
+            root,
+            config=cfg,
+            mode=resolved,
+            provider=provider,  # type: ignore[arg-type]
+            ledger=ledger,
+            draft_adrs=draft_adrs,
+            adrs=result,
+        )
+    except git.GitError as exc:
+        err.print(f"[red]error:[/red] {escape(str(exc))}")
+        raise typer.Exit(2) from exc
 
-    table = Table(title=f"Decisions ({len(rows)})", show_lines=False)
+    decisions = report.decisions
+    table = Table(title=f"Decisions ({len(decisions)})", show_lines=False)
     for col in ("id", "title", "status", "format", "lines", "grounding"):
         table.add_column(col, overflow="fold")
-    for dec, gr in rows:
+    for dec in decisions:
         src = dec.source
         commit = "worktree" if src.commit == WORKTREE else src.commit[:7]
         lines = f"{src.path}:{src.line_start}-{src.line_end}@{commit}"
-        g = "[green]VERIFIED[/green]" if gr.status == "VERIFIED" else "[red]MISMATCH[/red]"
+        g = "[green]VERIFIED[/green]" if dec.g1.status == "VERIFIED" else "[red]MISMATCH[/red]"
         table.add_row(escape(dec.id), escape(dec.title), dec.status, dec.format, escape(lines), g)
     console.print(table)
+    for dec in decisions:
+        if not dec.judged and dec.g1.status == "VERIFIED":
+            console.print(
+                f"[dim]not judged {escape(dec.id)}: {escape(dec.not_judged_reason or '')}[/dim]",
+                highlight=False,
+            )
 
-    mismatches = [gr for _, gr in rows if gr.status == "MISMATCH"]
-    for gr in mismatches:
-        subject = escape(gr.subject or "")
-        console.print(f"[red]Could not verify[/red] {subject}: {escape(gr.reason)}")
-
-    summary = ledger.write_summary()
-    if summary["total"]:
-        rate = f"{summary['pass_rate']:.1%}"
+    g1_ok = sum(1 for d in decisions if d.g1.status == "VERIFIED")
+    if decisions:
         console.print(
-            f"Grounding (G1): {summary['verified']}/{summary['total']} VERIFIED, "
-            f"pass rate {rate}. Ledger: {ledger.path}",
+            f"Decisions (G1): {g1_ok}/{len(decisions)} VERIFIED, "
+            f"pass rate {g1_ok / len(decisions):.1%}.",
             highlight=False,
         )
     elif result.skipped:
@@ -221,17 +382,30 @@ def scan(
     else:
         console.print("No ADRs found. Grounding (G1): nothing to verify (pass rate n/a).")
 
+    _print_report(report)
+    ledger.write_summary()
+    console.print(f"Ledger: {ledger.path}", highlight=False, soft_wrap=True)
+
+    if json_out is not None:
+        try:
+            json_out.parent.mkdir(parents=True, exist_ok=True)
+            json_out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        except OSError as exc:
+            err.print(f"[red]error:[/red] cannot write {escape(str(json_out))}: {escape(str(exc))}")
+            raise typer.Exit(2) from exc
+        console.print(f"Report JSON: {json_out}", highlight=False, soft_wrap=True)
+    if fmts:
+        console.print(
+            "[dim]--format: report file formats arrive in L-012/L-013; nothing was written "
+            "for --format (use --json-out FILE for the JSON report).[/dim]",
+            highlight=False,
+        )
     console.print(
-        "Not yet implemented: claim structuring, evidence collection, judgement, "
-        "undocumented decisions, drift timeline, report formats.",
+        "[dim]Not yet implemented: drift timeline (L-011), report file formats "
+        "(L-012/L-013).[/dim]",
         highlight=False,
     )
-    if mode is not Mode.auto or fmts:
-        console.print(
-            "[dim]--mode/--format are accepted but have no effect yet; "
-            "no report files were written.[/dim]"
-        )
-    raise typer.Exit(3 if mismatches else 0)
+    raise typer.Exit(report.summary.exit_code)
 
 
 @app.command()
