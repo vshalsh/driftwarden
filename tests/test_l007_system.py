@@ -1910,8 +1910,10 @@ def test_non_utf8_file_name_never_yields_unverified_violation(tmp_path):
 
 
 def test_config_exclude_is_honoured_and_not_cited(tmp_path):
-    repo, _ = build(tmp_path, {"vendor/x.py": "import pymongo\n", "src/a.py": "x = 1\n"})
-    v = Judge(repo, mode="offline", config=Config(exclude=["vendor/**"])).judge(
+    # L-030: vendor/ is vendored third-party code and is never evidence, so the
+    # excluded directory here is an ordinary project directory.
+    repo, _ = build(tmp_path, {"legacy/x.py": "import pymongo\n", "src/a.py": "x = 1\n"})
+    v = Judge(repo, mode="offline", config=Config(exclude=["legacy/**"])).judge(
         mkclaim("forbid", MONGO)
     )
     assert v.status == "HOLDING"
