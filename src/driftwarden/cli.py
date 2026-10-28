@@ -20,7 +20,15 @@ from driftwarden.grounding.ledger import Ledger
 from driftwarden.llm import get_provider
 from driftwarden.models import WORKTREE
 from driftwarden.pipeline import run_scan
-from driftwarden.report.model import Report, rule_text
+from driftwarden.report import (
+    EXTENSIONS,
+    HTML_UNAVAILABLE,
+    RENDERERS,
+    RendererUnavailable,
+    render_json,
+    renderer_available,
+)
+from driftwarden.report.model import REPORT_SCHEMA_VERSION, Report, rule_text
 
 app = typer.Typer(
     name="driftwarden",
@@ -49,7 +57,50 @@ def _parse_formats(value: str | None) -> list[str]:
         raise typer.BadParameter(
             f"unknown format(s): {', '.join(bad)}; choose from {', '.join(VALID_FORMATS)}"
         )
-    return fmts
+    return list(dict.fromkeys(fmts))  # de-duplicated, in the order given
+
+
+def _require_renderers(fmts: list[str]) -> None:
+    """Exit 2 before any work when a requested format is not in this build (html, L-013)."""
+    for f in fmts:
+        if not renderer_available(f):
+            err.print(f"[red]error:[/red] {HTML_UNAVAILABLE if f == 'html' else f}")
+            raise typer.Exit(2)
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _write_reports(report: Report, fmts: list[str], out_dir: Path) -> list[Path]:
+    """Render each format and write ``out_dir/driftwarden.<ext>``; exit 2 on failure."""
+    written: list[Path] = []
+    for f in fmts:
+        target = out_dir / f"driftwarden.{EXTENSIONS[f]}"
+        try:
+            text = RENDERERS[f](report)
+        except RendererUnavailable as exc:
+            err.print(f"[red]error:[/red] {escape(str(exc))}")
+            raise typer.Exit(2) from exc
+        try:
+            _atomic_write(target, text)
+        except OSError as exc:
+            err.print(f"[red]error:[/red] cannot write {escape(str(target))}: {escape(str(exc))}")
+            raise typer.Exit(2) from exc
+        written.append(target)
+        console.print(f"Wrote {f}: {target}", highlight=False, soft_wrap=True)
+    return written
 
 
 DEFAULT_OUT_DIR = ".driftwarden"
@@ -256,14 +307,14 @@ def scan(
     format: str = typer.Option(
         "",
         "--format",
-        help="Comma list of report formats: json,md,sarif,html. Not written yet "
-        "(arrives in L-012/L-013); use --json-out for JSON.",
+        help="Comma list of report files to write: json,md,sarif,html. Each goes to "
+        "OUT/driftwarden.<ext> (html needs the HTML report, L-013).",
     ),
     out: Path | None = typer.Option(
         None,
         "--out",
-        help="Output directory (grounding ledger goes to OUT/logs/grounding). "
-        "Default: <repo>/.driftwarden.",
+        help="Output directory for --format files and the grounding ledger "
+        "(OUT/logs/grounding). Default: <repo>/.driftwarden (self-ignored).",
     ),
     config: Path | None = typer.Option(None, "--config", help="Config file to use."),
     json_out: Path | None = typer.Option(
@@ -285,6 +336,7 @@ def scan(
     cited lines). When both 1 and 3 apply, the exit code is 3.
     """
     fmts = _parse_formats(format)
+    _require_renderers(fmts)
     if not path.exists():
         err.print(f"[red]error:[/red] path does not exist: {path}")
         raise typer.Exit(2)
@@ -388,24 +440,62 @@ def scan(
 
     if json_out is not None:
         try:
-            json_out.parent.mkdir(parents=True, exist_ok=True)
-            json_out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+            _atomic_write(json_out, render_json(report))
         except OSError as exc:
             err.print(f"[red]error:[/red] cannot write {escape(str(json_out))}: {escape(str(exc))}")
             raise typer.Exit(2) from exc
         console.print(f"Report JSON: {json_out}", highlight=False, soft_wrap=True)
     if fmts:
-        console.print(
-            "[dim]--format: report file formats arrive in L-012/L-013; nothing was written "
-            "for --format (use --json-out FILE for the JSON report).[/dim]",
-            highlight=False,
-        )
-    console.print(
-        "[dim]Not yet implemented: drift timeline (L-011), report file formats "
-        "(L-012/L-013).[/dim]",
-        highlight=False,
-    )
+        _write_reports(report, fmts, ledger_base)
+    if not report.timeline:
+        console.print("[dim]Not yet implemented: drift timeline (L-011).[/dim]", highlight=False)
     raise typer.Exit(report.summary.exit_code)
+
+
+@app.command("report")
+def report_cmd(
+    report_json: Path = typer.Argument(..., help="A Report JSON written by scan."),
+    format: str = typer.Option(
+        "md", "--format", help="Comma list of report files to write: json,md,sarif,html."
+    ),
+    out: Path | None = typer.Option(
+        None, "--out", help="Output directory. Default: the directory of REPORT_JSON."
+    ),
+) -> None:
+    """Re-render report files from a saved Report JSON, without rescanning.
+
+    Writes OUT/driftwarden.<ext> for each format. Evidence is re-checked against the
+    verifier records inside the file, so an edited finding is shown as Could not verify.
+    Exit codes: 0 = written; 2 = unreadable or invalid report, unknown or unavailable
+    format, or an output that cannot be written.
+    """
+    fmts = _parse_formats(format)
+    if not fmts:
+        err.print("[red]error:[/red] --format needs at least one of json,md,sarif,html")
+        raise typer.Exit(2)
+    _require_renderers(fmts)
+    try:
+        raw = report_json.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        err.print(f"[red]error:[/red] cannot read {escape(str(report_json))}: {escape(str(exc))}")
+        raise typer.Exit(2) from exc
+    try:
+        report = Report.model_validate_json(raw)
+    except ValueError as exc:
+        first = str(exc).splitlines()[0] if str(exc) else "invalid"
+        err.print(
+            f"[red]error:[/red] {escape(str(report_json))} is not a DriftWarden Report JSON: "
+            f"{escape(first)}"
+        )
+        raise typer.Exit(2) from exc
+    if report.metadata.schema_version > REPORT_SCHEMA_VERSION:
+        err.print(
+            f"[red]error:[/red] report schema version {report.metadata.schema_version} is newer "
+            f"than this build supports ({REPORT_SCHEMA_VERSION}); upgrade driftwarden"
+        )
+        raise typer.Exit(2)
+    out_dir = out if out is not None else report_json.parent
+    _write_reports(report, fmts, out_dir)
 
 
 @app.command()
