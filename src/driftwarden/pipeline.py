@@ -39,7 +39,9 @@ true when (see :func:`claim_touches`):
   the forbid / require / only terms ...); or
 * a changed path is the file or manifest of any of the claim's evidence items,
   collected **without** the per-group cap the judge uses (a 51st file importing
-  a forbidden package still counts); or
+  a forbidden package still counts) and **with** every keyword (``code``)
+  candidate (a free-form claim has no other evidence), or of anything the verdict
+  or one of its consistency runs cited; or
 * conservatively, for ``require`` and ``only`` claims (whose verdict can change
   when something disappears): a changed path is not in the scanned tree (it was
   deleted, or is the old name of a rename), or is a dependency manifest.
@@ -396,9 +398,15 @@ def run_scan(
         verdict = runner.run(claim, es) if runner is not None else judge.judge(claim, es)
         in_change = None
         if changed is not None:
-            # Relevance uses the UNCAPPED evidence: the judge's per-group cap must never
-            # hide the changed file (it only tags; everything is judged regardless).
-            full = collect_evidence(claim, snap, max_per_relation=UNCAPPED, max_keywords=0)
+            # Relevance uses the UNCAPPED evidence, keyword (code) candidates included: the
+            # judge's caps must never hide the changed file, and a free-form claim has only
+            # keyword evidence. Plus everything the verdict (or any consistency run) cited.
+            # It only tags; everything is judged regardless.
+            full = collect_evidence(claim, snap, max_per_relation=UNCAPPED, max_keywords=UNCAPPED)
+            cited = [*verdict.evidence]
+            if verdict.consistency is not None:
+                cited += [e for vote in verdict.consistency.votes for e in vote.evidence]
+            full = full.model_copy(update={"candidates": [*full.candidates, *cited]})
             in_change = claim_touches(claim, full, changed, absent=absent, manifests=manifests)
         results.append(ClaimResult(claim=claim, judged=True, verdict=verdict, in_change=in_change))
 

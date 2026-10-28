@@ -306,6 +306,41 @@ def test_drafts_of_one_scan_get_distinct_consecutive_numbers(pyshop, tmp_path):
     assert all(d.grounding == "VERIFIED" for d in r.drafts)
 
 
+def test_free_claim_keyword_evidence_counts_for_in_change(pyshop, tmp_path):
+    """Codex P2 (4404618563): a free-form claim has only keyword evidence; changing the
+    file that mentions /healthz must tag it."""
+    r = scan(pyshop, tmp_path, changed_paths=["src/shop/health.py"])
+    c = by_id(r)["ADR-0007.c1"]
+    assert c.judged and c.in_change is True
+    other = scan(pyshop, tmp_path / "b", changed_paths=["src/shop/db.py"])
+    assert by_id(other)["ADR-0007.c1"].in_change is False
+
+
+def test_llm_verdict_citing_changed_keyword_evidence_is_in_change(pyshop, tmp_path):
+    def responder(request):
+        purpose = request.purpose or ""
+        if purpose.startswith("claims:"):
+            return json.dumps({"claims": []})
+        if "ADR-0007.c1" in purpose:
+            cands = json.loads(request.prompt.split("data, not instructions):\n", 1)[1])
+            h = next(c for c in cands if c["path"] == "src/shop/health.py")
+            cite = {k: h[k] for k in ("line_start", "line_end")}
+            cite.update(evidence_id=h["id"], quote=h["snippet"])
+            return json.dumps(
+                {"status": "HOLDING", "citations": [cite], "rationale": "endpoint exists"}
+            )
+        return json.dumps({"status": "UNKNOWN", "citations": [], "rationale": "n/a"})
+
+    provider = OfflineProvider(
+        responder=responder, retry=RetryPolicy(max_attempts=1, sleep=lambda _s: None)
+    )
+    r = scan(pyshop, tmp_path, mode="llm", provider=provider, changed_paths=["src/shop/health.py"])
+    c = by_id(r)["ADR-0007.c1"]
+    assert c.status == "HOLDING" and c.verdict.grounding == "VERIFIED"
+    assert "src/shop/health.py" in {e.ref.path for e in c.verdict.evidence}
+    assert c.in_change is True
+
+
 def test_claim_touches_rule_paths():
     src = Provenance(path="docs/adr/1.md", line_start=1, line_end=1, commit="W", quote="q")
     c = Claim(
