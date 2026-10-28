@@ -356,6 +356,7 @@ _SOFTWARE_TAIL = re.compile(
     r"\s+(?:library|lib|package|module|client|driver|sdk|dependency|imports?)$"
 )
 _LITERAL_TERM = re.compile(r"^@?[a-z0-9][a-z0-9._\-/@:+]*$")
+_TERRAFORM_REGISTRY_HOSTS = ("registry.terraform.io/", "registry.opentofu.org/")
 _FILLER_PARTS = frozenset("as to of and or for the a an in on with by".split())
 
 
@@ -456,6 +457,13 @@ def literal_technology(term: str) -> Technology | None:
     """A pseudo-technology that matches ``term`` literally as a package/import name,
     or None if ``term`` does not look like a package name."""
     t = _norm(term)
+    for host in _TERRAFORM_REGISTRY_HOSTS:
+        # The manifest side canonicalises the public registry host away
+        # (manifests.terraform.canonical_source); do the same for the claim term
+        # (L-026, D-L025-11). Only a full namespace/name address after the host counts.
+        if t.startswith(host) and "/" in t[len(host) :]:
+            t = t[len(host) :]
+            break
     if not _LITERAL_TERM.match(t) or t in NOT_LITERAL:
         return None
     parts = re.split(r"[-_]", t)

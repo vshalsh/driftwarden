@@ -28,7 +28,10 @@ What is collected per rule kind (terms are resolved by ``judge.catalog``):
 ``only``
     The allowed technology (``allowed``) and every other member of the
     category (``alternative``). The category comes from the rule's ``category``
-    or from the allowed technology itself.
+    or, when the rule has none, from the allowed technology itself. A
+    ``category`` (or a require's ``for``) phrase that is not a catalog category
+    ("session storage", "service-to-service communication") is never widened to
+    the technology's own category: the claim is UNKNOWN (fail closed, L-026).
 ``boundary``
     Imports of the target (a technology, a category such as "cloud SDK", or a
     repository directory such as ``payments/``) inside the ``allowed_in`` paths
@@ -61,7 +64,10 @@ Python ``from mysql import connector`` is matched as ``mysql`` *and*
 ``mysql.connector``, so dotted catalog patterns apply. A bare boundary target
 ("payments") that names an existing repository directory is that directory,
 unless a package of that name is actually used, in which case both are
-evaluated.
+evaluated. Directory names are matched ignoring case when the exact spelling
+does not exist and exactly one other spelling does ("Payments" -> payments/);
+with no directory, a module file that local imports target (payments.py) is the
+target (L-026).
 
 Commit and WORKTREE snapshots select files the same way (by name, symlinks never
 followed) and decode them like the verifiers (``text.decode_text``), so UTF-16
@@ -111,6 +117,7 @@ from driftwarden.index.manifests import (
     parse_manifest,
     scan_manifests,
 )
+from driftwarden.index.manifests import terraform as terraform_manifest
 from driftwarden.judge import catalog
 from driftwarden.judge.catalog import Resolution, Technology
 from driftwarden.models import (
@@ -459,13 +466,32 @@ def dir_exists(directory: str, snap: Snapshot) -> bool:
     return any(k == directory or k.endswith("/" + directory) for k in snap.directories())
 
 
+def _dirs_ci(directory: str, snap: Snapshot) -> list[str]:
+    """The spellings in ``snap`` of directories named ``directory`` ignoring case
+    (as the trailing segments of an existing directory path)."""
+    want = directory.lower().split("/")
+    n = len(want)
+    out: set[str] = set()
+    for k in snap.directories():
+        parts = k.split("/")
+        if len(parts) >= n and [p.lower() for p in parts[-n:]] == want:
+            out.add("/".join(parts[-n:]))
+    return sorted(out)
+
+
 def resolve_dir(raw: str, snap: Snapshot) -> str | None:
     """A repository directory named by ``raw``, or None.
 
     Explicit directory spellings ("adapters/", "`infra/aws/`", "./src/db") are
     taken as written. Anything else ("persistence", "internal/cloud") counts only
     if such a directory exists in the snapshot, so package names with a slash
-    (``@aws-sdk/client-s3``, ``github.com/x/y``) are never mistaken for paths."""
+    (``@aws-sdk/client-s3``, ``github.com/x/y``) are never mistaken for paths.
+
+    Prose capitalises ("Payments may be imported only from billing/."): when no
+    directory has the exact spelling, a directory whose name differs only in case
+    is used, provided exactly one such spelling exists (L-026, D-L025-1). Two
+    spellings (``Payments/`` and ``payments/``) are ambiguous: the explicit form
+    is then kept as written and a bare name resolves to nothing."""
     t = raw.strip().strip("`'\"")
     explicit = t.endswith("/") or t.startswith("./")
     while t.startswith("./"):
@@ -473,9 +499,28 @@ def resolve_dir(raw: str, snap: Snapshot) -> str | None:
     t = t.strip("/")
     if not t or " " in t or ".." in t.split("/"):
         return None
-    if explicit or dir_exists(t, snap):
+    if dir_exists(t, snap):
+        return t
+    folded = _dirs_ci(t, snap)
+    if len(folded) == 1:
+        return folded[0]
+    if explicit:
         return t
     return None
+
+
+def module_files(name: str, snap: Snapshot) -> list[str]:
+    """Local module files named ``name`` (``payments`` -> ``payments.py``,
+    ``src/payments.ts``) that some local import edge actually targets, ignoring
+    case (L-026, D-L025-10)."""
+    low = name.lower()
+    out: set[str] = set()
+    for e in snap.imports:
+        if e.category != "local" or not e.target:
+            continue
+        if posixpath.splitext(posixpath.basename(e.target))[0].lower() == low:
+            out.add(e.target)
+    return sorted(out)
 
 
 # --------------------------------------------------------------------------- occurrences
@@ -491,14 +536,59 @@ class _Occurrence:
     dep: DependencyRef | None = None
 
 
+def _declared_provider_locals(snap: Snapshot) -> dict[str, set[str] | None]:
+    """Terraform module directory -> the ``required_providers`` local names declared
+    in it (any source), or None when a Terraform file there could not be read (then
+    nothing is inferred for that directory: fail closed)."""
+    out: dict[str, set[str] | None] = {}
+    for m in snap.manifests:
+        if m.kind != "terraform":
+            continue
+        d = posixpath.dirname(m.path)
+        text = snap.texts.get(m.path)
+        names: set[str] | None
+        if text is None or m.errors:
+            names = None
+        else:
+            try:
+                # Same normalisation as parse_manifest (BOM, mis-decoded UTF-16), so a
+                # file the manifest layer reads is never "unreadable" here.
+                clean = _prepare(text)
+                names = {
+                    n.lower() for n in terraform_manifest.required_provider_locals(clean, m.path)
+                }
+            except Exception:  # noqa: BLE001 - any parse failure means "unknown"
+                names = None
+        prev = out.get(d, set())
+        out[d] = None if prev is None or names is None else prev | names
+    return out
+
+
+def _implicit_source(local: str, declared: set[str] | None) -> bool:
+    return declared is not None and local.lower() not in declared
+
+
 def _occurrences(snap: Snapshot) -> list[_Occurrence]:
     out: list[_Occurrence] = []
+    declared = _declared_provider_locals(snap)
     for ref in snap.dependency_refs():
         ns = catalog.ECOSYSTEM_NAMESPACE.get(ref.ecosystem or "")
         if ns is None:
             continue
         kind: EvidenceKind = "infra" if ref.ecosystem in INFRA_ECOSYSTEMS else "dependency"
-        out.append(_Occurrence(kind, ns, (ref.package,), ref.manifest_path, dep=ref))
+        names: tuple[str, ...] = (ref.package,)
+        if (
+            ref.ecosystem == "terraform-provider"
+            and ref.scope == "provider-block"
+            and "/" not in ref.package
+            and _implicit_source(ref.package, declared.get(posixpath.dirname(ref.manifest_path)))
+        ):
+            # provider "random" {} whose local name no required_providers entry of the
+            # module declares is hashicorp/random, Terraform's implicit default
+            # (L-026, D-L025-3). A declared "random" (whatever its source, e.g.
+            # hashicorp/null) is that declaration, matched through its own record.
+            names = (ref.package, f"hashicorp/{ref.package.lower()}")
+        out.append(_Occurrence(kind, ns, names, ref.manifest_path, dep=ref))
     for e in snap.imports:
         if e.category not in ("external", "stdlib"):
             continue
@@ -532,6 +622,12 @@ class EvidenceSet(BaseModel):
     unresolved: list[str] = Field(default_factory=list, description="Terms the rules cannot map.")
     undecidable: str | None = Field(
         default=None, description="Why the rules cannot decide this claim (-> UNKNOWN)."
+    )
+    fail_closed: str | None = Field(
+        default=None,
+        description="Set when the rules refused to guess a qualifier (communication scope, "
+        "an unresolvable actor, a purpose that is not a catalog category). The resulting "
+        "UNKNOWN is final: the model may not decide it either (L-026, D-L025-4).",
     )
     category: str | None = None
     searched: str = Field(default="", description="What was searched, for absence verdicts.")
@@ -845,14 +941,55 @@ def subject_actor(claim: Claim) -> list[str]:
         return []  # the subject is what is restricted, not who acts
     # Only when the decision sentence uses it as the acting subject; otherwise the
     # subject is just a label.
+    return [bare] if _is_acting(bare, claim) else []
+
+
+# Verbs that make the word before them the acting subject: modals, auxiliaries,
+# adverbs of frequency and their negated contractions ("Handlers never import",
+# "Handlers don't / won't / shouldn't / mustn't / cannot import"; L-026, D-L025-6).
+_ACTING_VERBS = (
+    r"(?:must|shall|should|may|might|can|could|will|would|are|is|do|does|need|needs|have|has"
+    r"|never|cannot|always"
+    r"|(?:must|should|ca|wo|do|does|did|sha|may|need|are|is|could|would)n['’]?t)"
+)
+
+
+def _is_acting(bare: str, claim: Claim) -> bool:
+    """The decision sentence uses ``bare`` as its acting subject."""
     quote = " ".join(claim.source.quote.lower().split())
     word = re.escape(bare)
-    acting = re.search(
-        rf"(?<![\w-]){word}s?\s+(?:must|shall|should|may|can|will|are|is|do|does|need|have)\b"
-        rf"|\bno\s+{word}s?\s+(?:may|shall|can|must|should|will)\b",
-        quote,
+    return bool(
+        re.search(
+            rf"(?<![\w-]){word}s?\s+{_ACTING_VERBS}(?![\w-])"
+            rf"|\bno\s+{word}s?\s+(?:may|shall|can|must|should|will)\b",
+            quote,
+        )
     )
-    return [bare] if acting else []
+
+
+# Generic subjects that may still name a part of the repository: "Services must not
+# import requests" in a repository that has a services/ directory.
+_AMBIGUOUS_GENERIC = frozenset({"service", "services", "microservice", "microservices"})
+
+
+def ambiguous_generic_actor(claim: Claim, snap: Snapshot) -> str | None:
+    """The generic subject ("services") of a rule-library forbid/require claim when
+    the sentence uses it as the acting subject *and* a directory of that name
+    exists. The claim then has two honest readings, whole codebase and that
+    directory; the judge evaluates both and keeps a verdict only when they agree,
+    UNKNOWN otherwise (L-026, D-L025-5). None in every other case."""
+    if claim.origin != "rule" or claim.kind not in ("forbid", "require"):
+        return None
+    if _str_list(claim.rule.get("actor")):
+        return None
+    subj = " ".join(claim.subject.lower().split())
+    bare = re.sub(r"^(?:the|all|every|each|any|our|no)\s+", "", subj)
+    if bare not in _AMBIGUOUS_GENERIC or not _is_acting(bare, claim):
+        return None
+    names = _actor_variants(bare)
+    if not any(posixpath.basename(d).lower() in names for d in snap.directories()):
+        return None
+    return bare
 
 
 def resolve_actor(actors: list[str], snap: Snapshot) -> tuple[Callable[[str], bool] | None, str]:
@@ -922,16 +1059,32 @@ def _forbid(c: _Collector, es: EvidenceSet) -> None:
         )
 
 
+def _purpose_not_in_catalog(es: EvidenceSet, phrase: str) -> None:
+    """A 'for X' / category phrase that names no catalog category ("session storage",
+    "audit logging", "service-to-service communication") narrows the claim to a
+    purpose the evidence cannot show. It is never replaced by the technology's own
+    (wider) category: fail closed (L-026, D-L025-7)."""
+    es.undecidable = (
+        f"purpose {phrase!r} is not a catalog category; which technologies serve it cannot "
+        "be established from manifests and imports"
+    )
+    es.fail_closed = es.undecidable
+
+
 def _require(c: _Collector, es: EvidenceSet) -> None:
     rule = c.claim.rule
     res = _resolve_all(_str_list(rule.get("require")), es)
     if es.unresolved or not res:
         es.undecidable = f"cannot map {', '.join(map(repr, es.unresolved))} to a technology"
         return
+    raw_for = rule.get("for") if isinstance(rule.get("for"), str) else None
+    cat = catalog.category_for(raw_for)
+    if raw_for and raw_for.strip() and cat is None:
+        _purpose_not_in_catalog(es, raw_for)
+        return
     required = _techs(res)
     c.scan(required, "required")
     es.required_terms = {r.term: [t.id for t in r.technologies] for r in res}
-    cat = catalog.category_for(rule.get("for") if isinstance(rule.get("for"), str) else None)
     if cat is None and len(res) == 1 and res[0].kind == "technology":
         cat = res[0].category
     es.category = cat
@@ -954,6 +1107,7 @@ def _only(c: _Collector, es: EvidenceSet) -> None:
             f"communication scope (between {', '.join(_str_list(rule.get('between')))}) cannot "
             "be established: the evidence does not show which participants talk to each other"
         )
+        es.fail_closed = es.undecidable
         return
     res = _resolve_all(_str_list(rule.get("only")), es, allow_category=False)
     if es.unresolved or not res:
@@ -961,6 +1115,9 @@ def _only(c: _Collector, es: EvidenceSet) -> None:
         return
     raw_cat = rule.get("category") if isinstance(rule.get("category"), str) else None
     cat = catalog.category_for(raw_cat)
+    if raw_cat and raw_cat.strip() and cat is None:
+        _purpose_not_in_catalog(es, raw_cat)
+        return
     if cat is None:
         own = {r.category for r in res if r.category}
         cat = own.pop() if len(own) == 1 else None
@@ -1005,6 +1162,7 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
     targets = _str_list(rule.get("target"))
     res: list[Resolution] = []
     local_dirs: list[str] = []
+    module_paths: set[str] = set()
     for t in targets:
         # A repo directory only when spelled as one ("payments/") or when it exists;
         # otherwise a technology / package name such as "@aws-sdk/client-s3".
@@ -1018,18 +1176,33 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
             continue
         # A bare name ("payments"): a repo directory wins if it exists and no package
         # of that name is used; if both exist, both are evaluated.
+        if d is None and len(_dirs_ci(t, c.snap)) > 1:
+            es.undecidable = es.fail_closed = (
+                f"target {t!r} names several directories that differ only in case "
+                f"({', '.join(_dirs_ci(t, c.snap))})"
+            )
+            return
         r = catalog.resolve(t)
         used = r is not None and any(
             catalog.name_matches(tech, o.namespace, o.names)
             for tech in r.technologies
             for o in c.occ
         )
-        if d is not None and (r is None or (r.kind == "literal" and not used)):
-            local_dirs.append(d)
-            es.resolved.append(f"{t} -> directory {d}/")
-        elif d is not None:
-            local_dirs.append(d)
-            es.resolved.append(f"{t} -> directory {d}/ and {r.label}")
+        if d is not None:
+            local = [d]
+            label = f"directory {d}/"
+        else:
+            # A flat layout: "payments" is payments.py (a module file that local
+            # imports target), not a directory (L-026, D-L025-10).
+            local = module_files(t, c.snap)
+            module_paths.update(local)
+            label = "module file(s) " + ", ".join(local)
+        if local and (r is None or (r.kind == "literal" and not used)):
+            local_dirs.extend(local)
+            es.resolved.append(f"{t} -> {label}")
+        elif local:
+            local_dirs.extend(local)
+            es.resolved.append(f"{t} -> {label} and {r.label}")
             res.extend(_resolve_all([t], es))
         else:
             res.extend(_resolve_all([t], es))
@@ -1046,7 +1219,8 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
             if c.actor is not None and not c.actor(e.source):
                 continue
             o = _Occurrence("import", "local", (e.target,), e.source, edge=e)
-            c.add_occurrence(o, side(o), Technology(id=f"{d}/", category=None))
+            tid = d if d in module_paths else f"{d}/"
+            c.add_occurrence(o, side(o), Technology(id=tid, category=None))
 
 
 _KINDS = {"forbid": _forbid, "require": _require, "only": _only, "boundary": _boundary}
@@ -1075,7 +1249,7 @@ def collect_evidence(
         if actors:
             c.actor, why = resolve_actor(actors, snap)
             if why:
-                es.undecidable = why
+                es.undecidable = es.fail_closed = why
             elif c.actor is not None:
                 es.notes.append(f"restricted to the code of {', '.join(actors)}")
         if not es.undecidable:

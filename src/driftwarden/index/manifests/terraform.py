@@ -1,4 +1,5 @@
-"""Terraform / OpenTofu (``*.tf``, ``*.tofu``).
+"""Terraform / OpenTofu (``*.tf``, ``*.tofu``, and the JSON syntax ``*.tf.json``,
+``*.tofu.json``).
 
 * ``terraform { required_providers { aws = { source = "hashicorp/aws", version = "~> 5.0" } } }``
   -> ecosystem ``terraform-provider``, package = source (legacy ``aws = "~> 3.0"``
@@ -8,19 +9,27 @@
   -> ecosystem ``terraform-module`` (local ``./`` / ``../`` sources are skipped).
 * ``provider "aws" { ... }`` blocks -> ecosystem ``terraform-provider``, package =
   the local name, scope ``provider-block``.
+
+The JSON syntax carries the same blocks as JSON objects (a block may also be an
+array of objects). JSON has no positions, so each record's line is the first
+unused line where its key starts a line, below its section; minified JSON falls
+back to the section's line (as for ``package.json``).
 """
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import PurePosixPath
 
+from driftwarden.index.manifests._common import ManifestError
 from driftwarden.index.manifests._hcl import Attr, Block, parse_hcl
+from driftwarden.index.manifests.npm import _key_lines
 from driftwarden.models import DependencyRef
 
 
 def matches(path: str) -> bool:
-    return PurePosixPath(path).name.endswith((".tf", ".tofu"))
+    return PurePosixPath(path).name.endswith((".tf", ".tofu", ".tf.json", ".tofu.json"))
 
 
 _REGISTRY_ADDR = re.compile(
@@ -78,6 +87,8 @@ def _str(attr: Attr | None) -> str | None:
 
 
 def parse(text: str, path: str) -> list[DependencyRef]:
+    if PurePosixPath(path).name.endswith(".json"):
+        return _parse_json(text, path)
     root = parse_hcl(text)
     refs: list[DependencyRef] = []
 
@@ -158,3 +169,105 @@ def _required_providers(rp: Block, add) -> None:
         elif isinstance(attr.value, dict):
             source = _str(attr.value.get("source")) or f"hashicorp/{local}"
             add("terraform-provider", source, _str(attr.value.get("version")), attr.line, None)
+
+
+def _objects(value: object) -> list[dict]:
+    """A JSON block body: one object, or an array of objects."""
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, dict)]
+    return []
+
+
+def _jstr(value: object) -> str | None:
+    return value.strip() or None if isinstance(value, str) else None
+
+
+def _parse_json(text: str, path: str) -> list[DependencyRef]:
+    """``*.tf.json``: the same records as the native syntax (L-026, D-L025-9)."""
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise ManifestError(f"JSON: {exc}") from None
+    if not isinstance(data, dict):
+        raise ManifestError("JSON: top level is not an object")
+    index = _key_lines(text)
+    used: set[int] = set()
+
+    def take(key: str, lo: int) -> int:
+        for n in index.get(key, ()):
+            if n >= lo and n not in used:
+                used.add(n)
+                return n
+        return lo
+
+    refs: list[DependencyRef] = []
+
+    def add(eco: str, pkg: str, version: str | None, line: int, scope: str | None) -> None:
+        refs.append(
+            DependencyRef(
+                ecosystem=eco, package=pkg, version_spec=version, manifest_path=path,
+                line=line, scope=scope,
+            )
+        )  # fmt: skip
+
+    for tf in _objects(data.get("terraform")):
+        lo = take("terraform", 1)
+        rv = _jstr(tf.get("required_version"))
+        if rv:
+            add("terraform", "terraform", rv, take("required_version", lo), "core")
+        for rp in _objects(tf.get("required_providers")):
+            rp_line = take("required_providers", lo)
+            for local, spec in rp.items():
+                if not isinstance(local, str) or not local:
+                    continue
+                if isinstance(spec, str):
+                    add("terraform-provider", f"hashicorp/{local}", _jstr(spec),
+                        take(local, rp_line), None)  # fmt: skip
+                elif isinstance(spec, dict):
+                    source = _jstr(spec.get("source")) or f"hashicorp/{local}"
+                    add("terraform-provider", source, _jstr(spec.get("version")),
+                        take(local, rp_line), None)  # fmt: skip
+    for mod in _objects(data.get("module")):
+        lo = take("module", 1)
+        for name, bodies in mod.items():
+            for body in _objects(bodies):
+                source = _jstr(body.get("source"))
+                if not source or source.startswith(("./", "../")):
+                    continue
+                line = take(name, lo)
+                add("terraform-module", source, _jstr(body.get("version")),
+                    take("source", line), f"module:{name}")  # fmt: skip
+    for prov in _objects(data.get("provider")):
+        lo = take("provider", 1)
+        for name, bodies in prov.items():
+            for body in _objects(bodies):
+                add("terraform-provider", name, _jstr(body.get("version")), take(name, lo),
+                    "provider-block")  # fmt: skip
+    return refs
+
+
+def required_provider_locals(text: str, path: str) -> set[str]:
+    """Local names declared in ``required_providers`` (``random = { source = ... }``)
+    in one Terraform file, whatever their source. A ``provider "x" {}`` block in the
+    same module configures the provider declared under local name ``x``; only an
+    undeclared ``x`` means Terraform's implicit ``hashicorp/x``. Raises
+    ManifestError (or the HCL parser's error) on unreadable input."""
+    out: set[str] = set()
+    if PurePosixPath(path).name.endswith(".json"):
+        try:
+            data = json.loads(text)
+        except (json.JSONDecodeError, RecursionError) as exc:
+            raise ManifestError(f"JSON: {exc}") from None
+        if not isinstance(data, dict):
+            raise ManifestError("JSON: top level is not an object")
+        for tf in _objects(data.get("terraform")):
+            for rp in _objects(tf.get("required_providers")):
+                out.update(k for k in rp if isinstance(k, str) and k)
+        return out
+    for block in parse_hcl(text).blocks:
+        if block.type == "terraform":
+            for rp in (b for b in block.blocks if b.type == "required_providers"):
+                out.update(rp.attrs)
+    return out

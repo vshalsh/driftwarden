@@ -716,15 +716,24 @@ def test_emphasis_links_and_markup_in_sentences_always_verify_fuzz(make_repo):
 
 
 def test_very_long_adr_is_fast_and_ids_are_sequential(make_repo):
-    sentences = [f"Module m{i} must not import legacy{i}." for i in range(1500)]
-    body = "\n".join(sentences)
-    repo, _, cs = None, None, None
-    t = time.monotonic()
-    repo, d, cs = offline(make_repo, adr(body))
-    dt = time.monotonic() - t
+    """Runner-independent budget (as L-024 did for the 5000-claim perf tests): a
+    hard wall-clock limit failed on slow macOS runners (61.8 s). The check is that
+    1500 sentences cost roughly 5x what 300 cost (ratio bound 12x, catches a
+    quadratic blow-up, which would be ~25x), under a very generous ceiling."""
+
+    def run(n: int):
+        body = "\n".join(f"Module m{i} must not import legacy{i}." for i in range(n))
+        t = time.monotonic()
+        repo, d, cs = offline(make_repo, adr(body), name=f"repo{n}")
+        return repo, d, cs, time.monotonic() - t
+
+    _, _, small_cs, small = run(300)
+    assert len(small_cs.claims) == 300
+    repo, d, cs, dt = run(1500)
     assert len(cs.claims) == 1500
     assert [c.id for c in cs.claims] == [f"ADR-0001.c{i}" for i in range(1, 1501)]
-    assert dt < 60, dt
+    assert dt < max(small, 1.0) * 12, (small, dt)
+    assert dt < 600, dt
     spot = random.Random(1).sample(cs.claims, 25)
     for c in spot:
         assert verify_source_quote(repo, c.source).status == "VERIFIED"
