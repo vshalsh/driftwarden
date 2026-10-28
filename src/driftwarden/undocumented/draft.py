@@ -46,7 +46,8 @@ passes a non-offline ``provider`` may the model rewrite the context paragraph
 (one JSON string). Its text is never trusted for facts. It is rejected, and the
 template draft returned with a note, when it is not a single plain ASCII
 paragraph; when it contains markdown structure (headings, lists, ordered lists,
-quotes, tables, fences), HTML or ``<``/``>``, links or URLs, a ``status:``; when
+quotes, tables, fences), HTML or ``<``/``>``, an ``&`` (HTML entities), links or
+URLs, a ``status:``; when it is longer than 2000 characters; when
 it has any run of 7+ hex digits that is not a backticked abbreviation of one of
 the record's commits (a bare all-digit run is a number, never a commit
 reference), or any ``path:line``-like token; when it has any number that is not
@@ -203,6 +204,7 @@ def draft_filename(number: int, technology: str, category: str) -> str:
 
 
 _NUM = re.compile(r"^(?:adr[-_]?)?(\d+)(?=[-_.]|$)", re.IGNORECASE)
+MAX_NUMBER_DIGITS = 20  # a longer leading digit run is not a sequence number
 _ISO_DATE = re.compile(r"^(?:adr[-_]?)?\d{4}-\d{2}-\d{2}(?!\d)", re.IGNORECASE)
 
 
@@ -226,9 +228,26 @@ def next_adr_number(paths: Iterable[str]) -> int:
         if _ISO_DATE.match(name):
             continue
         m = _NUM.match(name)
-        if m and not _is_date(m.group(1)):
+        if m and len(m.group(1)) <= MAX_NUMBER_DIGITS and not _is_date(m.group(1)):
             nums.append(int(m.group(1)))
     return max(nums, default=0) + 1
+
+
+def _adr_path_problem(path: str) -> str | None:
+    """Why ``path`` may not decide where a draft goes, or None. Stricter than the
+    grounding verifiers' ``path_problem`` (which must accept any name git can hold):
+    every character printable, no ':' (Windows drive letters / streams), and no
+    segment with leading or trailing whitespace."""
+    bad = path_problem(path)
+    if bad is not None:
+        return bad
+    if not path.isprintable():
+        return "path has a non-printable character"
+    if ":" in path:
+        return "path contains ':'"
+    if any(seg != seg.strip() for seg in path.split("/")):
+        return "a path segment has leading or trailing whitespace"
+    return None
 
 
 def _adr_dir(paths: list[str]) -> str:
@@ -269,6 +288,7 @@ _REF = re.compile(r"(?<![^\s`:])(?P<path>[^\s`:]+):(?P<a>\d+)(?:-(?P<b>\d+))?")
 def sanitise_subject(subject: str) -> str:
     """A commit subject safe to quote in a draft: no control / format / separator
     characters, no SHA-like hex runs, no ``path:line`` references."""
+    subject = unicodedata.normalize("NFKC", subject)  # fullwidth ':' / hex letters -> ASCII
     chars = [" " if (ch != " " and unicodedata.category(ch)[0] in "CZ") else ch for ch in subject]
     text = "".join(chars)
     text = _HEX_RUN.sub(REF_REMOVED, text)
@@ -451,7 +471,8 @@ def render_markdown(
 
 # --------------------------------------------------------------------------- polish checks
 
-_SHA_TOKEN = re.compile(r"(?i)(?<![0-9a-z])[0-9a-f]{7,64}(?![0-9a-z])")
+_SHA_TOKEN = re.compile(r"(?i)(?<![0-9a-z])[0-9a-f]{7,}(?![0-9a-z])")
+POLISH_MAX = 2000  # same as POLISH_SCHEMA's maxLength
 _ORDERED = re.compile(r"(?:^|\s)\d+[.)](?:\s|$)")
 _STATUS = re.compile(r"(?i)\bstatus\s*:")
 _REFLIKE = re.compile(r"(?<![\w./-])[\w./-]+:\d")
@@ -500,6 +521,10 @@ def polish_problems(text: str, template: str, rec: UndocumentedDecision) -> list
     problems: list[str] = []
     if not text.strip():
         return ["model text is empty"]
+    if len(text) > POLISH_MAX:
+        return [f"model text is longer than {POLISH_MAX} characters"]
+    if "&" in text:  # HTML entities (&colon; &shy; &#58; ...) decode to structure
+        problems.append("model text contains '&' (HTML entities are not allowed)")
     if text != text.strip() or "\n" in text or "\r" in text:
         problems.append("model text is not a single trimmed paragraph")
     if any(not (32 <= ord(ch) < 127) for ch in text):
@@ -753,7 +778,7 @@ def draft_adr(
         if existing_adrs is not None
         else _existing_adrs(root, record.commit, config)
     )
-    paths = sorted(p for p in raw_paths if isinstance(p, str) and path_problem(p) is None)
+    paths = sorted(p for p in raw_paths if isinstance(p, str) and _adr_path_problem(p) is None)
     number = next_adr_number(paths)
     rel = f"{_adr_dir(paths)}/{draft_filename(number, record.technology, record.category)}"
     base: dict[str, Any] = dict(
@@ -945,7 +970,7 @@ def _write(root: Path, draft: DraftADR, config: Config | None) -> DraftADR:
                               f"({on_disk.origin}); not written again"],
                 }
             )  # fmt: skip
-        bad = path_problem(draft.path)
+        bad = _adr_path_problem(draft.path)
         if bad is not None:
             return note(f"not written: {draft.path!r} is not a repo-relative path ({bad})")
         rel_dir = Path(draft.path).parent.as_posix()

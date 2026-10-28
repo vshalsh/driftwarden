@@ -312,6 +312,12 @@ def test_hole_huge_number_in_existing_adr_name_makes_huge_filename(tmp_path):
 # ------------------------------------------------------------ idempotence vs hostile files
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="pinned pre-fix behaviour (on 1d447dd): since Codex round 2 / D16 a file is "
+    "adopted only when its text verifies against the record, so a forged front-matter "
+    "file is ignored with a note",
+)
 def test_forged_front_matter_file_is_adopted_as_the_draft(tmp_path):
     """Pins current behaviour: ANY file whose front-matter names the record is returned as
     written_path with a note, whatever its content or status."""
@@ -340,6 +346,11 @@ def test_hole_forged_front_matter_adoption_has_no_content_check(tmp_path):
     assert on_disk == r.markdown or r.grounding != "VERIFIED" or "differs" in " ".join(r.notes)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="pinned pre-fix behaviour (on 1d447dd): a file holding only front-matter does "
+    "not verify against the record, so it is not adopted (Codex round 2 / D16)",
+)
 @pytest.mark.parametrize("name", ["9999-x.MD", "9999-x.md"])
 def test_existing_draft_found_case_insensitive_suffix(tmp_path, name):
     repo, _ = redis_repo(tmp_path)
