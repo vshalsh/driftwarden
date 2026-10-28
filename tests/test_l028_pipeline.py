@@ -20,7 +20,7 @@ from driftwarden.judge.judge import Judge
 from driftwarden.llm import OfflineProvider, RetryPolicy
 from driftwarden.models import Claim, Provenance
 from driftwarden.pipeline import claim_touches, run_scan
-from driftwarden.report.model import Report, rule_text
+from driftwarden.report.model import Report, natural_key, rule_text
 
 FIXTURES = Path(__file__).parent / "fixtures"
 runner = CliRunner()
@@ -524,7 +524,8 @@ def test_cli_help_documents_exit_codes():
 # Anything else interpolated into printed text must be safe(...) (D3).
 CLI_TRUSTED_VALUES = {
     "__version__", "resolved", "len(decisions)", "len(judged)", "report.summary.claims",
-    "len(group)", "by.get(s, 0)", "s", "status", "colour[status]", "cid", "cs.verified",
+    "len(group)", "len(report.notes)", "by.get(s, 0)", "s", "status", "colour[status]", "cid",
+    "cs.verified",
     "cs.total", "gs.verified", "gs.total", "rate", "drift", "s.unknown", "s.could_not_verify",
     "s.undocumented", "s.drafts", "s.exit_code", "g1_ok", "len(result.skipped)",
     "','.join(fmts) or '(none)'", "', '.join(parts)", "check",
@@ -628,3 +629,69 @@ def test_safe_escapes_newlines_controls_and_markup():
     assert safe("a\nb") == "a\\u000ab"
     assert safe("\x1b]8;;http://e\x1b\\x\u202e") == "\\u001b]8;;http://e\\u001b\\x\\u202e"
     assert safe("[red]x[/red]") == "\\[red]x\\[/red]"
+
+
+# ------------------------------------------------------------------ Codex round 5
+
+
+def test_adr_deleted_only_in_worktree_still_documents_its_technology(pyshop, tmp_path):
+    """Codex 4405326906: the detector must use the ADRs of the committed tree it judges."""
+    clean = scan(pyshop, tmp_path / "a", draft_adrs=True)
+    assert not any("postgres" in u.id for u in clean.undocumented)
+    (pyshop / "docs/adr/0001-postgresql-only.md").unlink()  # not committed
+    r = scan(pyshop, tmp_path / "b", draft_adrs=True)
+    assert "ADR-0001" not in {d.id for d in r.decisions}  # the working-tree list lacks it
+    assert [u.id for u in r.undocumented] == [u.id for u in clean.undocumented]
+    assert [d.record_id for d in r.drafts] == [d.record_id for d in clean.drafts]
+    assert not any("postgres" in i.id for i in r.could_not_verify)
+
+
+class _FailingModel(OfflineProvider):
+    """A non-offline provider whose every reply is unusable (not JSON)."""
+
+    name = "scripted"
+    offline = False
+
+
+def test_cli_shows_llm_extraction_failures_as_warnings(pyshop, tmp_path, monkeypatch):
+    """Codex 4405326918: a provider / extraction failure must reach the terminal."""
+    provider = _FailingModel(
+        responder=lambda _req: "not json", retry=RetryPolicy(max_attempts=1, sleep=lambda _s: None)
+    )
+    monkeypatch.setattr(cli, "get_provider", lambda *_a, **_k: provider)
+    res = runner.invoke(app, ["scan", str(pyshop), "--mode", "llm", "--out", str(tmp_path / "o")])
+    assert res.exit_code == 1, res.output  # rule verdicts still stand
+    assert "mode=llm" in res.output and "Notes (" in res.output
+    assert "warning:" in res.output and "LLM structuring failed for ADR-0001" in res.output
+    assert "LLM judge failed" in res.output
+
+
+def test_is_failure_note():
+    from driftwarden.cli import is_failure_note
+
+    assert is_failure_note("ADR-1: LLM structuring failed for ADR-1: boom")
+    assert is_failure_note("could not read ADR docs/adr/x.md: denied")
+    assert not is_failure_note("ADR-1: 2 duplicate claim(s) merged")
+
+
+def test_natural_key_handles_unicode_digit_characters():
+    """Codex 4405326923: "²" and "①" pass str.isdigit() but int() rejects them."""
+    for s in ("²", "①", "٣", "ADR-²", "a①b2", "x٣y10"):
+        natural_key(s)  # never raises
+    assert natural_key("c2") < natural_key("c10")
+    assert sorted(["c10", "²", "c2", "①", "٣"], key=natural_key)  # total order, no crash
+
+
+def test_scan_with_unicode_digit_adr_file_names(make_repo, tmp_path):
+    files = {
+        f"docs/adr/{name}.md": ADR.format(n=i, title=f"No Celery {i}", status="Accepted")
+        for i, name in enumerate(("²", "①", "٣"), 1)
+    }
+    files["app/w.py"] = "import celery\n"
+    r = scan(make_repo(files), tmp_path)
+    assert len(r.decisions) == 3
+    assert Report.model_validate_json(r.model_dump_json()) == r
+    repo2 = make_repo(files, name="r2")
+    res = runner.invoke(app, ["scan", str(repo2), "--out", str(tmp_path / "o")])
+    assert res.exception is None or isinstance(res.exception, SystemExit), res.output
+    assert res.exit_code in (0, 1, 3)

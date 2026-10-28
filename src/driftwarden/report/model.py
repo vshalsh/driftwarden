@@ -63,12 +63,18 @@ UnverifiedKind = Literal[
 ]
 
 
+_ASCII_DIGITS = re.compile(r"([0-9]+)", re.ASCII)
+
+
 def natural_key(value: str) -> tuple:
-    """Sort key that orders embedded numbers numerically ("c2" before "c10")."""
+    """Sort key that orders embedded ASCII numbers numerically ("c2" before "c10").
+
+    Only the runs the ASCII ``[0-9]+`` splitter captured (odd indices) are numbers.
+    ``str.isdigit()`` is true for "²" or "①", where ``int()`` raises; other Unicode
+    digits ("٣") sort as text, deterministically."""
+    parts = _ASCII_DIGITS.split(value)
     return tuple(
-        (0, int(part), "") if part.isdigit() else (1, 0, part)
-        for part in re.split(r"(\d+)", value)
-        if part
+        (0, int(part), "") if i % 2 else (1, 0, part) for i, part in enumerate(parts) if part
     )
 
 

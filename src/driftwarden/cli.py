@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 import unicodedata
 from enum import Enum
@@ -177,6 +178,15 @@ def terminal_safe(text: str, *, multiline: bool = True) -> str:
     return "".join(out)
 
 
+_FAILURE_NOTE = re.compile(r"\b(failed|error|could not read|cannot read)\b", re.IGNORECASE)
+
+
+def is_failure_note(note: str) -> bool:
+    """A report note that records a failure (LLM provider / claim extraction / judge,
+    unreadable ADR): printed as a warning as well as in the Notes section."""
+    return bool(_FAILURE_NOTE.search(note))
+
+
 def _detail(ev) -> str:
     """An evidence item's detail without its leading ``path:line`` (already shown)."""
     head, _, rest = ev.detail.partition(" ")
@@ -257,6 +267,13 @@ def _print_report(report: Report) -> None:
             highlight=False,
             soft_wrap=False,
         )
+    if report.notes:
+        console.print(f"Notes ({len(report.notes)}):", highlight=False)
+        for note in report.notes:
+            console.print(f"  - {safe(note)}", highlight=False)
+            if is_failure_note(note):
+                # A provider / extraction failure must be visible, not only in --json-out.
+                err.print(f"[yellow]warning:[/yellow] {safe(note)}", highlight=False)
     gs = report.grounding_summary
     parts = []
     for cid, cs in gs.by_check.items():

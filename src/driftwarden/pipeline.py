@@ -16,7 +16,9 @@
    in llm mode through ``judge.consistency.ConsistencyRunner``, 3 runs + vote,
    G6). Offline mode judges once: the rules are deterministic.
 5. Detect undocumented decisions (``undocumented.detect.detect_undocumented``,
-   same Snapshot). Needs a commit: a repository with no commits skips it (noted).
+   same Snapshot), against the ADRs as they are at that same commit
+   (``scan_adrs_at``), never the working-tree list of step 1. Needs a commit: a
+   repository with no commits skips it (noted).
 6. Optionally draft ADRs for the verified records (``undocumented.draft.draft_adr``
    with ``write=False``: drafts are returned, never written into the repository;
    always the deterministic template, the LLM polish is not used here).
@@ -409,19 +411,25 @@ def run_scan(
             full = full.model_copy(update={"candidates": [*full.candidates, *cited]})
             in_change = claim_touches(claim, full, changed, absent=absent, manifests=manifests)
         results.append(ClaimResult(claim=claim, judged=True, verdict=verdict, in_change=in_change))
+        # A model failure behind a verdict is a report note too, so the CLI shows it.
+        notes.extend(f"{claim.id}: {n}" for n in verdict.notes if n.startswith("LLM judge failed"))
 
     # 5. Undocumented decisions (needs a commit).
     at_commit_claims = [c for c in claims if c.source.commit == snap.commit]
-    at_commit = all(d.source.commit == snap.commit for d in decisions)
     found = []
     undoc_cnv = []
+    committed: list[Decision] = []
     if snap.commit == WORKTREE:
         notes.append("undocumented-decision detection skipped: it needs a commit")
     else:
+        # The ADRs of the COMMITTED tree the code is judged at (Codex 4405326906): the
+        # working-tree list misses a committed ADR deleted (or emptied) only in the working
+        # tree, and an incomplete list would report a documented technology as undocumented.
+        committed = scan_adrs_at(root, snap.commit, config).decisions
         und = detect_undocumented(
             root,
             snap.commit,
-            decisions=decisions if at_commit else None,
+            decisions=committed,
             claims=at_commit_claims,
             config=config,
             snapshot=snap,
@@ -443,7 +451,7 @@ def run_scan(
                 root,
                 rec,
                 existing_adrs=list(reserved),
-                decisions=decisions if at_commit else None,
+                decisions=committed,
                 claims=at_commit_claims,
                 config=config,
                 write=False,
