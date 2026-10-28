@@ -353,7 +353,9 @@ class GitIgnore:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             text = ""
-        return cls(text.splitlines(), base)
+        # git splits .gitignore on "\n" only; str.splitlines() would also split on NEL,
+        # U+2028, \v, \f... and turn one pattern into two (L-028 D2 audit).
+        return cls([line.removesuffix("\r") for line in text.split("\n")], base)
 
     def match(self, rel: str, is_dir: bool) -> bool | None:
         """``True`` ignored, ``False`` re-included by a negation, ``None`` no rule applies.
