@@ -474,14 +474,18 @@ def verify_draft(
     *,
     decisions: Iterable[Decision] | None = None,
     claims: Iterable[Claim] = (),
+    config: Config | None = None,
     ledger: Ledger | None = None,
 ) -> DraftADR:
     """G5 gate: re-verify ``draft`` (see the module docstring). Returns the draft with
     ``checks`` replaced and ``status/grounding/reasons`` set: DRAFT / VERIFIED, or
     UNKNOWN / MISMATCH with every reason. Never raises for a bad draft; raises only
     if ``repo`` is not a git repository. ``decisions`` (optional) re-runs the
-    "no ADR mentions it" check of the record."""
+    "no ADR mentions it" check of the record; ``config`` must be the one the record
+    was detected with (its exclusions decide how imports resolve)."""
     root = git.repo_root(repo)
+    decisions = list(decisions) if decisions is not None else None
+    claims = tuple(claims)
     checks: list[GroundingResult] = []
     reasons: list[str] = []
     subj = f"draft:{draft.record_id}"
@@ -511,7 +515,7 @@ def verify_draft(
             rec.id, rec.technology, rec.category, want_title,
         ):  # fmt: skip
             fail("draft header (record id, technology, category, title) does not match its record")
-        vrec = verify_undocumented(root, rec, decisions=decisions, claims=claims)
+        vrec = verify_undocumented(root, rec, decisions=decisions, claims=claims, config=config)
         checks.extend(vrec.checks)
         reasons.extend(f"record: {r}" for r in vrec.reasons)
         md = draft.markdown
@@ -658,8 +662,12 @@ def draft_adr(
     of the context paragraph (see the module docstring). ``existing_adrs``
     (repo-relative ADR paths) fixes the numbering; by default the ADRs at the
     record's commit and in the working tree are discovered. Nothing is written
-    unless ``write=True``; see the module docstring for the write rules."""
+    unless ``write=True``; see the module docstring for the write rules. ``config``
+    must be the one the record was detected with; it reaches every gate call.
+    ``decisions`` and ``claims`` are read once (a generator is fine)."""
     root = git.repo_root(repo)
+    decisions = list(decisions) if decisions is not None else None
+    claims = tuple(claims)
     title = draft_title(record.technology, record.category)
     raw_paths = (
         list(existing_adrs)
@@ -713,7 +721,7 @@ def draft_adr(
     result: DraftADR | None = None
     for origin, md in drafts:
         cand = DraftADR(**base, markdown=md, origin=origin, notes=list(notes))
-        result = verify_draft(root, cand, decisions=decisions, claims=claims)
+        result = verify_draft(root, cand, decisions=decisions, claims=claims, config=config)
         if not result.could_not_verify:
             break
         if origin == "llm":

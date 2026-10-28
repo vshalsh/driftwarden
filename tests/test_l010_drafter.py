@@ -488,3 +488,66 @@ def test_grounding_numbers(drafted, tmp_path, capsys):
     with capsys.disabled():
         shown = ", ".join(f"{k} {ok}/{t}" for k, (ok, t) in sorted(by.items()))
         print(f"\nL-010 draft grounding: {shown}")
+
+
+# ------------------------------------------------------------------ Codex round 1 (PR #22)
+
+
+def _shadowed_redis_repo(tmp_path: Path) -> Path:
+    """`import redis` resolves to the local redis.py unless that file is excluded."""
+    repo = tmp_path / "shadow"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "commit.gpgsign", "false")
+    (repo / "README.md").write_text("x\n", encoding="utf-8")
+    git(repo, "add", "README.md")
+    git(repo, "commit", "-q", "-m", "init")
+    (repo / "app.py").write_text("import redis\n", encoding="utf-8")
+    (repo / "redis.py").write_text("X = 1\n", encoding="utf-8")
+    git(repo, "add", "app.py", "redis.py")
+    git(repo, "commit", "-q", "-m", "use redis")
+    return repo
+
+
+def test_config_reaches_every_gate_call(tmp_path):
+    from driftwarden.config import Config
+
+    repo = _shadowed_redis_repo(tmp_path)
+    cfg = Config(exclude=["redis.py"])
+    (rec,) = detect_undocumented(repo, config=cfg).findings
+    assert detect_undocumented(repo).findings == []  # without the exclusion: a local module
+    d = draft_adr(repo, rec, config=cfg, write=True)
+    assert d.status == "DRAFT" and d.grounding == "VERIFIED", d.reasons
+    assert d.written_path is not None
+    assert verify_draft(repo, d, config=cfg).grounding == "VERIFIED"
+    # The same draft checked with another configuration does not verify.
+    assert verify_draft(repo, d).could_not_verify
+
+
+def _covering_decision(rec: UndocumentedDecision):
+    text = "# Use Redis\n\n## Decision\n\nWe use redis for caching.\n"
+    return parse_adr(text, "docs/adr/0042-redis.md", rec.commit)
+
+
+def test_decision_generator_is_read_once_and_coverage_cannot_be_bypassed(tmp_path):
+    repo, _, _ = build_fixture(tmp_path, "pyservice")
+    rec = next(r for r in detect_undocumented(repo).findings if r.technology == "redis")
+    good = draft_adr(repo, rec)
+    assert good.status == "DRAFT"
+    dec = _covering_decision(rec)
+    before = git(repo, "status", "--porcelain")
+    replies = (
+        _json(_template_context(good.markdown)),  # LLM draft is built, then fails coverage
+        _json("## not a paragraph"),  # LLM text rejected, straight to the template
+    )
+    for reply in replies:
+        p = FakeProvider(reply)
+        d = draft_adr(repo, rec, provider=p, decisions=iter([dec]), write=True)
+        assert d.status == "UNKNOWN" and d.markdown is None and d.written_path is None, reply
+        assert any("documented" in r for r in d.reasons), d.reasons
+    d = draft_adr(repo, rec, decisions=iter([dec]), claims=iter(()), write=True)
+    assert d.could_not_verify and d.written_path is None
+    assert git(repo, "status", "--porcelain") == before
+    res = verify_draft(repo, good, decisions=iter([dec]))
+    assert res.could_not_verify and any("documented" in r for r in res.reasons)
+    assert verify_draft(repo, good, decisions=iter([])).grounding == "VERIFIED"
