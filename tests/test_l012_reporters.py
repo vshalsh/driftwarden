@@ -401,7 +401,7 @@ def test_markdown_injection_is_inert(render):
         assert len(widths) == 1, table
     # the rule text survives intact inside its code span
     spans = [unescape(c) for c in re.findall(r"<code>(.*?)</code>", html)]
-    assert any(PAYLOAD.replace("\u202e", "") in c for c in spans)
+    assert any(PAYLOAD.replace("\u202e", "\\u202e") in c for c in spans)  # D3: shown, visibly
 
 
 def test_escape_helpers():
@@ -800,6 +800,50 @@ def test_report_subcommand_round_trip(pyshop_tmp, tmp_path):
     shutil.copy(a / "driftwarden.json", c / "saved.json")
     res3 = runner.invoke(app, ["report", str(c / "saved.json")])
     assert res3.exit_code == 0 and (c / "driftwarden.md").is_file()
+
+
+def test_regate_is_identity_on_a_clean_report_and_corrects_a_tampered_one(tmp_path):
+    from driftwarden.report.view import REGATE_REASON, regate
+
+    clean = load_fixture()
+    assert regate(clean) is clean
+    bad = _tamper_saved_evidence(clean, "ADR-0001.c1", quote="from x import y")
+    fixed = regate(bad)
+    cr = next(c for c in fixed.claims if c.id == "ADR-0001.c1")
+    assert cr.verdict.status == "UNKNOWN" and cr.verdict.grounding == "MISMATCH"
+    assert cr.verdict.proposed_status == "VIOLATED"
+    item = next(
+        i for i in fixed.could_not_verify if i.claim_id == "ADR-0001.c1" and i.kind == "verdict"
+    )
+    assert item.reasons[0] == REGATE_REASON
+    s = fixed.summary
+    assert s.by_status["VIOLATED"] == clean.summary.by_status["VIOLATED"] - 1
+    assert s.could_not_verify == len(fixed.could_not_verify) == clean.summary.could_not_verify + 1
+    assert regate(fixed) is fixed  # idempotent
+    # every format renders the same corrected report
+    p = tmp_path / "bad.json"
+    p.write_text(render_json(bad), encoding="utf-8")
+    res = runner.invoke(
+        app, ["report", str(p), "--format", "json,md", "--out", str(tmp_path / "o")]
+    )
+    assert res.exit_code == 0, res.output
+    assert (tmp_path / "o" / "driftwarden.json").read_text(encoding="utf-8") == render_json(fixed)
+    assert "failed the re-render check" in res.output
+
+
+def test_report_exit_code_flag_follows_the_recomputed_exit_code(tmp_path):
+    res = runner.invoke(app, ["report", str(FIXTURE_REPORT), "--out", str(tmp_path), "--exit-code"])
+    assert res.exit_code == 3  # the fixture carries a G1 mismatch
+    data = json.loads(FIXTURE_REPORT.read_text(encoding="utf-8"))
+    # drop the G1 item and edit one evidence item, so the exit code is recomputed
+    data["could_not_verify"] = [i for i in data["could_not_verify"] if i["check_id"] != "G1"]
+    c = next(x for x in data["claims"] if x["claim"]["id"] == "ADR-0001.c1")
+    c["verdict"]["evidence"][0]["ref"]["quote"] = "edited"
+    p = tmp_path / "no_g1.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    res = runner.invoke(app, ["report", str(p), "--out", str(tmp_path), "--exit-code"])
+    assert res.exit_code == 1  # recomputed: no G1 left, other claims still VIOLATED
+    assert runner.invoke(app, ["report", str(p), "--out", str(tmp_path)]).exit_code == 0
 
 
 def test_report_subcommand_errors(tmp_path):

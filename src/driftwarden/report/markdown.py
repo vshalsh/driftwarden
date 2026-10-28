@@ -12,18 +12,24 @@ under **Could not verify**, a section that is always present.
 **Escaping.** Every piece of user-controlled text (ADR text, titles, rationale,
 reasons, commit subjects, paths, ids) goes through :func:`esc` (inline Markdown or,
 inside ``<summary>``, HTML) or :func:`code` (a code span sized to its backticks).
-``esc`` removes control and bidi characters, folds newlines, backslash-escapes the
-Markdown punctuation that can open a link, image, emphasis, code span, HTML tag,
-entity, table cell or math span, and puts a zero-width joiner after ``@`` so a
-``@mention`` never pings anyone. Draft ADRs are shown as the Markdown *source* in a
-fenced block longer than any backtick run inside them, so nothing in a draft renders.
-Link targets are repo paths, percent-encoded (a ``javascript:`` target cannot form).
+``esc`` folds newlines and shows every other Unicode control, format, line or paragraph
+separator character (categories Cc, Cf, Zl, Zp: bidi controls, zero-width characters,
+BOM...) as a visible ``\\uXXXX``; it backslash-escapes the Markdown punctuation that
+can open a link, image, emphasis, code span, HTML tag, entity, table cell or math span;
+it puts a zero-width joiner after ``@`` (no ``@mention`` pings), after ``://``, ``www``,
+``GH-`` and a ``#`` before a digit or name (no autolink or issue cross-reference), and
+inside ``<!--`` (user text can never forge the PR-comment marker). Code spans and fenced
+blocks get the same character and ``<!--`` treatment. Draft ADRs are shown as the
+Markdown *source* in a fenced block longer than any backtick run inside them, so nothing
+in a draft renders. Link targets are repo paths, percent-encoded (a ``javascript:``
+target cannot form). Commit SHAs that are not hex are shown as ``invalid``.
 """
 
 from __future__ import annotations
 
 import html
 import re
+import unicodedata
 from dataclasses import dataclass, replace
 from urllib.parse import quote
 
@@ -36,6 +42,7 @@ from driftwarden.report.view import (
     Unverified,
     build_view,
     canonical_path,
+    full_sha,
     short_sha,
 )
 
@@ -46,13 +53,33 @@ ZWJ = "\u200d"
 
 # --------------------------------------------------------------------------- escaping
 
-_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
 _MD_SPECIAL = re.compile(r"([\\`*_\[\]<>&|~$!#])")
+_INVISIBLE = ("Cc", "Cf", "Zl", "Zp")
+_AUTOLINK = (
+    (re.compile(r"://"), ":" + ZWJ + "//"),
+    (re.compile(r"(?i)\bwww(?=\.)"), "www" + ZWJ),
+    (re.compile(r"#(?=[\w])"), "#" + ZWJ),
+    (re.compile(r"(?i)\bGH-(?=\d)"), "GH-" + ZWJ),
+)
+
+
+def visible(text: str, keep: str = "") -> str:
+    """Every Cc/Cf/Zl/Zp character not in ``keep`` as a visible ``\\uXXXX``; ``<!--``
+    broken with a zero-width joiner so user text cannot forge an HTML comment / marker."""
+    out = []
+    for ch in text:
+        if ch in keep:
+            out.append(ch)
+        elif unicodedata.category(ch) in _INVISIBLE:
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return "".join(out).replace("<!--", "<!" + ZWJ + "--")
 
 
 def _clean(text: object, limit: int | None = None) -> str:
-    s = _CONTROL.sub("", str(text))
-    s = " ".join(s.split())  # newlines, tabs, runs of spaces -> one space
+    s = str(text).replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    s = " ".join(visible(s).split())  # one line, runs of spaces -> one space
     if limit is not None and len(s) > limit:
         s = s[: max(1, limit - 1)].rstrip() + "…"
     return s
@@ -64,6 +91,8 @@ def esc(text: object, *, html_ctx: bool = False, limit: int | None = None) -> st
     if html_ctx:
         s = html.escape(s, quote=True)
     else:
+        for pattern, repl in _AUTOLINK:
+            s = pattern.sub(repl, s)
         s = _MD_SPECIAL.sub(r"\\\1", s)
     return s.replace("@", "@" + ZWJ)
 
@@ -81,7 +110,7 @@ def code(text: object, *, limit: int | None = None) -> str:
 
 def fenced(text: str, info: str = "") -> list[str]:
     """A fenced block holding ``text`` verbatim (longer fence than any inside)."""
-    body = _CONTROL.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
+    body = visible(text.replace("\r\n", "\n").replace("\r", "\n"), keep="\n\t")
     run = max((len(m) for m in re.findall(r"`{3,}", body)), default=2)
     fence = "`" * max(3, run + 1)
     return [f"{fence}{info}", *body.rstrip("\n").split("\n"), fence]
@@ -97,14 +126,15 @@ def _anchor(a: int, b: int) -> str:
 
 def adr_link(p: Provenance, link_base: str | None = None) -> str:
     """``[path#Lline](path#Lline) @ `sha``` for an ADR source line."""
-    text = f"{p.path}{_anchor(p.line_start, p.line_end)}"
+    # The path is user text; the #Lline anchor is ours (escaped, no joiner needed).
+    text = esc(p.path) + "\\" + _anchor(p.line_start, p.line_end)
     sha = code(short_sha(p.commit))
     if not canonical_path(p.path):
-        return f"{esc(text)} @ {sha}"
+        return f"{text} @ {sha}"
     target = quote(p.path, safe="/-._~") + _anchor(p.line_start, p.line_end)
     if link_base and re.match(r"^https://[^\s()<>]+$", link_base):
         target = link_base.rstrip("/") + "/" + target
-    return f"[{esc(text)}]({target}) @ {sha}"
+    return f"[{text}]({target}) @ {sha}"
 
 
 def _loc(path: str, a: int, b: int, commit: str | None) -> str:
@@ -269,7 +299,7 @@ def _cited(p: Provenance | DependencyRef | None) -> str | None:
         return _loc(p.path, p.line_start, p.line_end, p.commit)
     if isinstance(p, DependencyRef):
         line = f":{p.line}" if p.line else ""
-        return f"{code(p.manifest_path + line)} @ {code(short_sha(p.commit or '?'))} " + esc(
+        return f"{code(p.manifest_path + line)} @ {code(short_sha(p.commit))} " + esc(
             f"declares {p.package} {p.version_spec or ''}".strip()
         )
     return None
@@ -334,7 +364,7 @@ def _header(ctx: _Ctx, title: str) -> list[str]:
     m = ctx.view.report.metadata
     rows = [
         ("Repository", esc(m.repo, limit=200)),
-        ("Commit", code(m.commit)),
+        ("Commit", code(full_sha(m.commit))),
         (
             "Mode",
             esc(m.mode) + (f" ({esc(m.provider)} {esc(m.model or '')})" if m.provider else ""),

@@ -33,6 +33,7 @@ from driftwarden.report import (
     renderer_available,
 )
 from driftwarden.report.model import REPORT_SCHEMA_VERSION, Report, rule_text
+from driftwarden.report.view import regate
 
 app = typer.Typer(
     name="driftwarden",
@@ -516,13 +517,22 @@ def report_cmd(
     out: Path | None = typer.Option(
         None, "--out", help="Output directory. Default: the directory of REPORT_JSON."
     ),
+    exit_code: bool = typer.Option(
+        False,
+        "--exit-code",
+        help="Exit with the re-checked report's exit code (0/1/3, as scan) instead of 0.",
+    ),
 ) -> None:
     """Re-render report files from a saved Report JSON, without rescanning.
 
-    Writes OUT/driftwarden.<ext> for each format. Evidence is re-checked against the
-    verifier records inside the file, so an edited finding is shown as Could not verify.
-    Exit codes: 0 = written; 2 = unreadable or invalid report, unknown or unavailable
-    format, or an output that cannot be written.
+    Writes OUT/driftwarden.<ext> for each format. The loaded report is re-gated once first:
+    a finding whose evidence has no matching VERIFIED verifier record inside the file is
+    turned into Could not verify, and the summary and exit code are recomputed, so every
+    format (json included) agrees. A file whose verifier records were forged as well can
+    only be caught by re-scanning: report re-renders, scan verifies.
+    Exit codes: 0 = written (with --exit-code: the re-checked report's 0, 1 or 3);
+    2 = unreadable or invalid report, unknown or unavailable format, or an output that
+    cannot be written.
     """
     fmts = _parse_formats(format)
     if not fmts:
@@ -549,8 +559,18 @@ def report_cmd(
             "upgrade driftwarden"
         )
         raise typer.Exit(2)
+    gated = regate(report)
+    demoted = len(gated.could_not_verify) - len(report.could_not_verify)
+    if demoted:
+        err.print(
+            f"[yellow]warning:[/yellow] {safe(demoted)} item(s) failed the re-render check and "
+            "are reported as Could not verify",
+            highlight=False,
+        )
     out_dir = out if out is not None else report_json.parent
-    _write_reports(report, fmts, out_dir)
+    _write_reports(gated, fmts, out_dir)
+    if exit_code:
+        raise typer.Exit(gated.summary.exit_code)
 
 
 @app.command()

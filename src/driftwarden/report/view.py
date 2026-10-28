@@ -23,6 +23,7 @@ never reaches a report as a fact.
 from __future__ import annotations
 
 import posixpath
+import re
 from dataclasses import dataclass, field, replace
 
 from driftwarden.models import (
@@ -36,6 +37,7 @@ from driftwarden.models import (
     Verdict,
 )
 from driftwarden.report.model import (
+    VERDICT_STATUSES,
     ClaimResult,
     DecisionResult,
     Report,
@@ -320,8 +322,126 @@ def build_view(report: Report) -> ReportView:
     return view
 
 
-def short_sha(commit: str) -> str:
-    return "worktree" if commit == WORKTREE else commit[:7]
+REGATE_REASON = "re-render: no matching VERIFIED ledger record"
+
+
+def regate(report: Report) -> Report:
+    """``report`` with the :func:`build_view` checks applied to the data itself (L-012 D1).
+
+    ``driftwarden report`` calls this once on a loaded Report before rendering any format,
+    so JSON, Markdown, SARIF and HTML agree. A finding that fails the cross-check becomes
+    ``UNKNOWN`` / ``MISMATCH`` (its ``proposed_status`` kept), an undocumented record that
+    fails is removed with its draft, each one gets a *Could not verify* item whose first
+    reason is ``REGATE_REASON``, and the summary, drift score and exit code are recomputed.
+    A report that passes is returned unchanged (same object), so a fresh scan's JSON
+    round-trips byte for byte. Known limit: a file whose ledger rows were forged too cannot
+    be caught without re-scanning (``report`` re-renders; ``scan`` verifies).
+    """
+    view = build_view(report)
+    listed = {(i.kind, i.id) for i in report.could_not_verify}
+    new = [u for u in view.could_not_verify if u.report_check or (u.kind, u.id) not in listed]
+    if not new:
+        return report
+    demoted_claims = {u.claim_id for u in new if u.kind == "verdict" and u.claim_id}
+    demoted_records = {u.id for u in new if u.kind == "undocumented"}
+
+    claims: list[ClaimResult] = []
+    for cr in report.claims:
+        v = cr.verdict
+        if cr.claim.id in demoted_claims and v is not None and not v.could_not_verify:
+            why = next(u for u in new if u.claim_id == cr.claim.id)
+            data = v.model_dump()
+            data.update(
+                status="UNKNOWN",
+                grounding="MISMATCH",
+                proposed_status=v.status,
+                reasons=[REGATE_REASON, *why.reasons],
+                rationale=f"{REGATE_REASON} (was {v.status})",
+            )
+            cr = cr.model_copy(update={"verdict": Verdict.model_validate(data)})
+        claims.append(cr)
+
+    items = list(report.could_not_verify)
+    for u in new:
+        reasons = (
+            list(u.reasons)
+            if u.reasons and u.reasons[0] == REGATE_REASON
+            else [
+                REGATE_REASON,
+                *u.reasons,
+            ]
+        )
+        items.append(
+            UnverifiedItem(
+                kind=u.kind,  # type: ignore[arg-type]
+                id=u.id,
+                check_id=u.check_id,
+                reasons=reasons,
+                decision_id=u.decision_id,
+                claim_id=u.claim_id,
+                provenance=u.provenance,
+                proposed_status=u.proposed_status,  # type: ignore[arg-type]
+            )
+        )
+    items.sort(
+        key=lambda i: (_KIND_ORDER.get(i.kind, 99), natural_key(i.id), i.check_id or "", i.reasons)
+    )
+    undocumented = [r for r in report.undocumented if r.id not in demoted_records]
+    drafts = [d for d in report.drafts if d.record_id not in demoted_records]
+
+    judged = [c for c in claims if c.judged and c.verdict is not None]
+    by_status = {st: sum(1 for c in judged if c.status == st) for st in VERDICT_STATUSES}
+    decided = by_status["HOLDING"] + by_status["DRIFTING"] + by_status["VIOLATED"]
+    drift = (by_status["DRIFTING"] + by_status["VIOLATED"]) / decided if decided else None
+    if any(i.check_id == "G1" for i in items):
+        exit_code = 3
+    elif by_status["VIOLATED"]:
+        exit_code = 1
+    else:
+        exit_code = 0
+    summary = report.summary.model_copy(
+        update={
+            "claims_judged": len(judged),
+            "by_status": by_status,
+            "unknown": by_status["UNKNOWN"],
+            "could_not_verify": len(items),
+            "undocumented": len(undocumented),
+            "drafts": len(drafts),
+            "drift_score": drift,
+            "exit_code": exit_code,
+        }
+    )
+    return report.model_copy(
+        update={
+            "claims": claims,
+            "could_not_verify": items,
+            "undocumented": undocumented,
+            "drafts": drafts,
+            "summary": summary,
+        }
+    )
+
+
+_SHA = re.compile(r"[0-9a-f]{7,64}")
+
+
+def valid_sha(commit: str | None) -> bool:
+    """A lowercase hex SHA (or WORKTREE): anything else comes from an edited report."""
+    return commit == WORKTREE or (commit is not None and bool(_SHA.fullmatch(commit)))
+
+
+def full_sha(commit: str | None) -> str:
+    """``commit`` for display, or ``invalid`` when it is not a hex SHA (L-012 D4)."""
+    if not valid_sha(commit):
+        return "invalid"
+    return "worktree" if commit == WORKTREE else str(commit)
+
+
+def short_sha(commit: str | None) -> str:
+    """Seven hex digits, ``worktree``, or ``invalid`` for anything that is not a SHA."""
+    if not valid_sha(commit):
+        return "invalid"
+    return "worktree" if commit == WORKTREE else str(commit)[:7]
 
 
 __all__ = [
@@ -330,9 +450,13 @@ __all__ = [
     "ReportView",
     "Undocumented",
     "Unverified",
+    "REGATE_REASON",
     "build_view",
     "canonical_path",
     "evidence_verified",
+    "full_sha",
     "location_ok",
+    "regate",
     "short_sha",
+    "valid_sha",
 ]

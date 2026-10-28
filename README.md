@@ -50,8 +50,17 @@ written paths are printed.
 
 `driftwarden report REPORT.json --format md,sarif,html --out DIR` renders the same files
 from a saved Report JSON without rescanning (default format `md`, default `--out` the
-directory of `REPORT.json`; exit 0, or 2 for an unreadable or invalid file). The GitHub
-Action uses it.
+directory of `REPORT.json`; exit 0, or 2 for an unreadable or invalid file; with
+`--exit-code` it exits with the re-checked report's 0, 1 or 3, as `scan` does). The GitHub
+Action uses it. Before rendering, `report` re-gates the loaded file once: a finding whose
+evidence has no matching VERIFIED verifier record inside the file becomes `UNKNOWN`
+(grounding `MISMATCH`, proposed status kept), is listed under *Could not verify* with
+"re-render: no matching VERIFIED ledger record", and the summary, drift score and exit
+code are recomputed, so every format, JSON included, agrees.
+
+**Known limit:** `report` can only check a saved file against itself. A JSON whose verifier
+records were forged along with its findings cannot be detected without re-scanning:
+`report` re-renders, `scan` verifies.
 
 All user-controlled text (ADR text, commit subjects, paths) is escaped in Markdown,
 `@mentions` cannot ping anyone, and draft ADRs are shown as inert source. Every reporter
