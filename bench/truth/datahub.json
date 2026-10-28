@@ -1,0 +1,620 @@
+{
+  "adr_styles": [
+    "freeform",
+    "madr",
+    "madr-fm"
+  ],
+  "commits": 16,
+  "counts": {
+    "claim": 16,
+    "evidence_decoy": 6,
+    "evidence_proof": 4,
+    "evidence_violation": 5,
+    "undocumented": 4
+  },
+  "ecosystem": "python (pyproject extras)",
+  "head": "25f9655f8ab9db936a5296a6bb21189ef3fcead6",
+  "layout": "single",
+  "records": [
+    {
+      "adr_path": "docs/adr/0001-django-as-web-framework.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0001",
+      "expected_offline": "HOLDING",
+      "id": "datahub:ADR-0001",
+      "kind": "require",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "terms": [],
+      "title": "Django as web framework",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0001",
+      "id": "datahub:ADR-0001:p:src/datahub/web.py:1",
+      "introduced_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "kind": "import",
+      "line": 1,
+      "needle": "from django.http",
+      "path": "src/datahub/web.py",
+      "repo": "datahub",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0002-postgresql-is-the-only-datastore.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0002",
+      "expected_offline": "DRIFTING",
+      "id": "datahub:ADR-0002",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "DRIFTING",
+      "tags": [
+        "supported",
+        "adversarial",
+        "dev-only"
+      ],
+      "terms": [
+        "mysql"
+      ],
+      "title": "PostgreSQL is the only datastore",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "decoy_kind": "optional-dependency",
+      "id": "datahub:ADR-0002:d:pyproject.toml:26",
+      "introduced_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "line": 26,
+      "path": "pyproject.toml",
+      "repo": "datahub",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0003-no-requests-library.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0003",
+      "expected_offline": "DRIFTING",
+      "id": "datahub:ADR-0003",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "DRIFTING",
+      "tags": [
+        "supported",
+        "adversarial",
+        "dev-only"
+      ],
+      "terms": [
+        "import requests",
+        "\"requests"
+      ],
+      "title": "No requests library",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "decoy_kind": "test-file",
+      "id": "datahub:ADR-0003:d:tests/test_net.py:1",
+      "introduced_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "line": 1,
+      "path": "tests/test_net.py",
+      "repo": "datahub",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "decoy_kind": "dev-dependency",
+      "id": "datahub:ADR-0003:d:pyproject.toml:20",
+      "introduced_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "line": 20,
+      "path": "pyproject.toml",
+      "repo": "datahub",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0004-httpx-as-http-client.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0004",
+      "expected_offline": "HOLDING",
+      "id": "datahub:ADR-0004",
+      "kind": "require",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "terms": [
+        "import requests",
+        "\"requests"
+      ],
+      "title": "httpx as HTTP client",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "id": "datahub:ADR-0004:p:src/datahub/net.py:1",
+      "introduced_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "kind": "import",
+      "line": 1,
+      "needle": "import httpx",
+      "path": "src/datahub/net.py",
+      "repo": "datahub",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0005-no-celery.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0005",
+      "expected_offline": "VIOLATED",
+      "id": "datahub:ADR-0005",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "terms": [
+        "celery"
+      ],
+      "title": "No Celery",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "id": "datahub:ADR-0005:v:src/datahub/tasks.py:1",
+      "introduced_commit": "c9bbe70fb9dbd3f0f3bfc3029725bff1ff9b4dbe",
+      "kind": "import",
+      "line": 1,
+      "path": "src/datahub/tasks.py",
+      "repo": "datahub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "id": "datahub:ADR-0005:v:pyproject.toml:9",
+      "introduced_commit": "5c99a48182b92aa4b80d68e0c8c76ad69e522d68",
+      "kind": "dependency",
+      "line": 9,
+      "path": "pyproject.toml",
+      "repo": "datahub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0006-database-access-stays-in-the-store-packa.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0006",
+      "expected_offline": "VIOLATED",
+      "id": "datahub:ADR-0006",
+      "kind": "boundary",
+      "note": "",
+      "phrasing": "front-matter-hint",
+      "repo": "datahub",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated",
+        "hint"
+      ],
+      "terms": [
+        "sqlalchemy"
+      ],
+      "title": "Database access stays in the store package",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0006",
+      "id": "datahub:ADR-0006:v:src/datahub/reports.py:1",
+      "introduced_commit": "60cd16f5b20764fe8cb29b86ec9b1e4356a6ee36",
+      "kind": "import",
+      "line": 1,
+      "path": "src/datahub/reports.py",
+      "repo": "datahub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0006",
+      "decoy_kind": "allowed-location",
+      "id": "datahub:ADR-0006:d:src/datahub/store/repo.py:1",
+      "introduced_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "line": 1,
+      "path": "src/datahub/store/repo.py",
+      "repo": "datahub",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0007-no-pandas-in-request-paths.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0007",
+      "expected_offline": "VIOLATED",
+      "id": "datahub:ADR-0007",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "terms": [
+        "pandas"
+      ],
+      "title": "No pandas in request paths",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0007",
+      "id": "datahub:ADR-0007:v:src/datahub/etl.py:1",
+      "introduced_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "kind": "import",
+      "line": 1,
+      "path": "src/datahub/etl.py",
+      "repo": "datahub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0007",
+      "id": "datahub:ADR-0007:v:pyproject.toml:14",
+      "introduced_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "kind": "dependency",
+      "line": 14,
+      "path": "pyproject.toml",
+      "repo": "datahub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0008-no-numpy-stubs.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0008",
+      "expected_offline": "HOLDING",
+      "id": "datahub:ADR-0008",
+      "kind": "forbid",
+      "note": "the only occurrence is vendored third-party code",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding",
+        "adversarial"
+      ],
+      "terms": [
+        "numpy"
+      ],
+      "title": "No NumPy stubs",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0008",
+      "decoy_kind": "vendored",
+      "id": "datahub:ADR-0008:d:third_party/numpy_stub/__init__.py:1",
+      "introduced_commit": "60cd16f5b20764fe8cb29b86ec9b1e4356a6ee36",
+      "line": 1,
+      "path": "third_party/numpy_stub/__init__.py",
+      "repo": "datahub",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0009-no-dask.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0009",
+      "expected_offline": "HOLDING",
+      "id": "datahub:ADR-0009",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding",
+        "adversarial"
+      ],
+      "terms": [
+        "dask"
+      ],
+      "title": "No Dask",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0009",
+      "decoy_kind": "comment",
+      "id": "datahub:ADR-0009:d:src/datahub/calc01.py:2",
+      "introduced_commit": "777fe95809f3b79fad38fd498244cb3ddfcd1ca5",
+      "line": 2,
+      "path": "src/datahub/calc01.py",
+      "repo": "datahub",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0010-batch-jobs-are-idempotent.md",
+      "adr_status": "Accepted",
+      "adr_style": "freeform",
+      "decision_id": "ADR-0010",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "datahub:ADR-0010",
+      "kind": null,
+      "note": "",
+      "phrasing": "free-form",
+      "repo": "datahub",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "terms": [],
+      "title": "Batch jobs are idempotent",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0010",
+      "id": "datahub:ADR-0010:p:src/datahub/jobs.py:1",
+      "introduced_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "kind": "idempotent-upsert",
+      "line": 1,
+      "needle": "on conflict (batch_id) do nothing",
+      "path": "src/datahub/jobs.py",
+      "repo": "datahub",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0011-sqlalchemy-is-the-only-orm.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0011",
+      "expected_offline": "HOLDING",
+      "id": "datahub:ADR-0011",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "terms": [
+        "peewee",
+        "tortoise",
+        "django.db",
+        "pony"
+      ],
+      "title": "SQLAlchemy is the only ORM",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0011",
+      "id": "datahub:ADR-0011:p:src/datahub/store/repo.py:3",
+      "introduced_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "kind": "orm-usage",
+      "line": 3,
+      "needle": "create_engine",
+      "path": "src/datahub/store/repo.py",
+      "repo": "datahub",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0012-report-review.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0012",
+      "expected_offline": "UNKNOWN",
+      "id": "datahub:ADR-0012",
+      "kind": null,
+      "note": "a free-text hint carrying an injection: no deterministic rule, stays UNKNOWN",
+      "phrasing": "hint-free-text",
+      "repo": "datahub",
+      "status": "UNKNOWN",
+      "tags": [
+        "unknown",
+        "prompt-injection",
+        "hint"
+      ],
+      "terms": [],
+      "title": "Report review",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0013-flask.md",
+      "adr_status": "Superseded by ADR-0001",
+      "adr_style": "madr",
+      "decision_id": "ADR-0013",
+      "expected_offline": "SKIPPED",
+      "id": "datahub:ADR-0013",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "superseded"
+      ],
+      "terms": [],
+      "title": "Flask",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0014-spark.md",
+      "adr_status": "Proposed",
+      "adr_style": "madr",
+      "decision_id": "ADR-0014",
+      "expected_offline": "SKIPPED",
+      "id": "datahub:ADR-0014",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "proposed"
+      ],
+      "terms": [],
+      "title": "Spark",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0015-mysql-replica.md",
+      "adr_status": "Rejected",
+      "adr_style": "madr",
+      "decision_id": "ADR-0015",
+      "expected_offline": "SKIPPED",
+      "id": "datahub:ADR-0015",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "rejected"
+      ],
+      "terms": [],
+      "title": "MySQL replica",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0016-pip-tools.md",
+      "adr_status": "Deprecated",
+      "adr_style": "madr",
+      "decision_id": "ADR-0016",
+      "expected_offline": "SKIPPED",
+      "id": "datahub:ADR-0016",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "datahub",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "deprecated"
+      ],
+      "terms": [],
+      "title": "Pip-tools",
+      "type": "claim"
+    },
+    {
+      "category": "cache",
+      "evidence": [
+        {
+          "commit": "1d820278b7935f3719f039754085e61623ce2f62",
+          "line": 1,
+          "path": "src/datahub/cache.py"
+        }
+      ],
+      "first_commit": "1d820278b7935f3719f039754085e61623ce2f62",
+      "id": "datahub:ud:redis:positive",
+      "introducing_commits": [
+        "1d820278b7935f3719f039754085e61623ce2f62"
+      ],
+      "reason": "",
+      "repo": "datahub",
+      "role": "positive",
+      "technology": "redis",
+      "type": "undocumented"
+    },
+    {
+      "category": "search",
+      "evidence": [
+        {
+          "commit": "1d820278b7935f3719f039754085e61623ce2f62",
+          "line": 1,
+          "path": "src/datahub/search.py"
+        }
+      ],
+      "first_commit": "1d820278b7935f3719f039754085e61623ce2f62",
+      "id": "datahub:ud:elasticsearch:positive",
+      "introducing_commits": [
+        "1d820278b7935f3719f039754085e61623ce2f62"
+      ],
+      "reason": "",
+      "repo": "datahub",
+      "role": "positive",
+      "technology": "elasticsearch",
+      "type": "undocumented"
+    },
+    {
+      "category": "vendor-sdk",
+      "evidence": [
+        {
+          "commit": "1d820278b7935f3719f039754085e61623ce2f62",
+          "line": 1,
+          "path": "src/datahub/errors.py"
+        }
+      ],
+      "first_commit": "1d820278b7935f3719f039754085e61623ce2f62",
+      "id": "datahub:ud:sentry:positive",
+      "introducing_commits": [
+        "1d820278b7935f3719f039754085e61623ce2f62"
+      ],
+      "reason": "",
+      "repo": "datahub",
+      "role": "positive",
+      "technology": "sentry",
+      "type": "undocumented"
+    },
+    {
+      "category": "queue",
+      "evidence": [
+        {
+          "commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+          "line": 23,
+          "path": "pyproject.toml"
+        }
+      ],
+      "first_commit": "8dfb654d29582430da28e4b624e57d086b6026ef",
+      "id": "datahub:ud:kafka:negative",
+      "introducing_commits": [
+        "8dfb654d29582430da28e4b624e57d086b6026ef"
+      ],
+      "reason": "nonproduction",
+      "repo": "datahub",
+      "role": "negative",
+      "technology": "kafka",
+      "type": "undocumented"
+    }
+  ],
+  "repo": "datahub",
+  "schema": 1
+}
