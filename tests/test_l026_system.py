@@ -26,6 +26,7 @@ from driftwarden.judge.catalog import literal_technology
 from driftwarden.llm import OfflineProvider, RetryPolicy
 from driftwarden.models import WORKTREE, Claim, Provenance, Verdict
 from test_l007_system import _is_equivalent, mutate_evidence, show
+from test_l026_judge_defects import needs_case_sensitive_fs
 
 F_ = "import os\n\nVALUE = os.sep\n"
 REQ = "import requests\n"
@@ -204,6 +205,7 @@ def test_d1_nested_directory_and_mixed_case_allowed_in(make_repo):
     assert v.status in ("VIOLATED", "UNKNOWN"), v.status
 
 
+@needs_case_sensitive_fs
 def test_d1_ambiguous_case_twin_directories_never_decisive_wrong(make_repo):
     repo = make_repo({"Payments/x.py": F_, "payments/y.py": F_, "app/a.py": "import payments.y\n"})
     v = offline(repo, mk("boundary", {"target": ["PAYMENTS"], "allowed_in": ["billing/"]}))

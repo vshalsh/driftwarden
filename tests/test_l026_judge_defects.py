@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,29 @@ from driftwarden.llm import OfflineProvider, RetryPolicy
 from driftwarden.models import WORKTREE, Claim, Provenance, Verdict
 
 F_ = "import os\n\nVALUE = os.sep\n"
+
+
+@cache
+def fs_case_sensitive() -> bool:
+    """True when the filesystem holding test repositories keeps ``Payments/`` and
+    ``payments/`` apart (Linux); False on case-insensitive ones (default macOS APFS,
+    Windows NTFS), where a case-twin fixture collapses into one directory."""
+    with tempfile.TemporaryDirectory(prefix="driftwarden-case-") as tmp:
+        (Path(tmp) / "Probe").mkdir()
+        try:
+            (Path(tmp) / "probe").mkdir()
+        except FileExistsError:
+            return False
+        return len(list(Path(tmp).iterdir())) == 2
+
+
+needs_case_sensitive_fs = pytest.mark.skipif(
+    not fs_case_sensitive(),
+    reason="case-insensitive filesystem (e.g. macOS): Payments/ and payments/ cannot both "
+    "exist on disk, so the twin fixture collapses; the same fail-closed path is covered "
+    "on every platform by the *_listed_twin test, which injects the twin into the "
+    "snapshot's directory listing",
+)
 REQ = "import requests\n"
 
 
@@ -429,6 +454,7 @@ def test_d10_bare_target_naming_a_module_file(make_repo):
 # ------------------------------------------------------------------ PR #20 review (Codex P2s)
 
 
+@needs_case_sensitive_fs
 def test_d1_case_twin_directories_stay_unknown_with_a_model(make_repo):
     """Payments/ + payments/, target PAYMENTS: the rules fail closed, and a model citing
     the verifiable `import payments.core` line must not turn that into a verdict."""
@@ -499,3 +525,23 @@ def test_d3_unreadable_terraform_file_blocks_inference(make_repo):
     )
     v = offline(repo, claim("forbid", {"forbid": ["hashicorp/random"]}))
     assert v.status != "VIOLATED"
+
+
+def test_d1_listed_twin_stays_unknown_offline_and_with_a_model(make_repo, monkeypatch):
+    """Platform-independent twin: the repository has payments/ only; the snapshot's
+    directory listing also reports Payments/ (what a case-sensitive checkout shows).
+    resolve_dir/_boundary must fail closed, and the model must not decide it."""
+    from driftwarden.judge import evidence
+
+    repo = make_repo({"payments/core.py": F_, "app/a.py": "import payments.core\n"})
+    real = evidence.Snapshot.directories
+    monkeypatch.setattr(evidence.Snapshot, "directories", lambda self: real(self) | {"Payments"})
+    c = claim("boundary", {"target": ["PAYMENTS"], "allowed_in": ["billing/"]})
+    v = offline(repo, c)
+    assert v.status == "UNKNOWN" and "differ only in case" in v.rationale, v.rationale
+    for status in ("VIOLATED", "HOLDING"):
+        m = Judge(repo, mode="llm", provider=_fake(status)).judge(c)
+        assert m.status == "UNKNOWN", (status, m.rationale)
+    # control: the exact spelling still resolves and decides
+    exact = offline(repo, claim("boundary", {"target": ["payments"], "allowed_in": ["billing/"]}))
+    assert exact.status == "VIOLATED", exact.rationale
