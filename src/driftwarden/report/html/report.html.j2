@@ -1,0 +1,294 @@
+{#- DriftWarden HTML report (L-013). Autoescape is on; no report value is ever marked safe. -#}
+{%- set LABELS = {"VIOLATED": "Violated", "DRIFTING": "Drifting", "HOLDING": "Holding", "UNKNOWN": "Unknown", "UNVERIFIED": "Could not verify", "UNDOCUMENTED": "Undocumented", "DRAFT": "Draft ADR", "VERIFIED": "Verified", "NOT_JUDGED": "Not judged"} -%}
+{%- set CLASSES = {"VIOLATED": "violated", "DRIFTING": "drifting", "HOLDING": "holding", "UNKNOWN": "unknown", "UNVERIFIED": "unverified", "UNDOCUMENTED": "undocumented", "DRAFT": "undocumented", "VERIFIED": "holding", "NOT_JUDGED": "unknown"} -%}
+{%- macro icon(name) -%}
+<svg class="dw-icon" aria-hidden="true" focusable="false" viewBox="0 0 16 16"><use href="#dw-i-{{ name }}"></use></svg>
+{%- endmacro -%}
+{%- macro badge(state, count=none) -%}
+<span class="dw-badge dw-badge--{{ CLASSES[state] }}">{{ icon(CLASSES[state]) }}<span>{{ LABELS[state] }}</span>{% if count is not none %} <span class="dw-count">{{ count }}</span>{% endif %}</span>
+{%- endmacro -%}
+{%- macro grounding(g, extra=none) -%}
+<span class="dw-ground{% if not g["all"] %} dw-ground--partial{% endif %}" title="Re-checked against the repository by the deterministic verifier">
+{{- icon("holding" if g["all"] else "unverified") -}}
+<span>{{ "Verified" if g["all"] else "Partly verified" }}</span>
+{%- for c in g["items"] %} <span class="dw-mono">{{ c["id"] }}&nbsp;{{ c["ok"] }}/{{ c["total"] }}</span>{% endfor %}
+{%- if extra %} <span class="dw-mono">{{ extra }}</span>{% endif -%}
+</span>
+{%- endmacro -%}
+{%- macro evidence_list(items) -%}
+<ol class="dw-evidence">
+{% for e in items %}
+<li>
+<div class="dw-evidence__head"><code class="dw-loc" dir="ltr">{{ e["label"] }}</code> <span class="dw-tags">{{ e["id"] }} · {{ e["tags"]|join(" · ") }}</span></div>
+{% if e["detail"] %}<div class="dw-evidence__detail">{{ e["detail"] }}</div>{% endif %}
+<pre class="dw-snippet" dir="ltr"><code>{{ e["snippet"] }}</code></pre>
+</li>
+{% endfor %}
+</ol>
+{%- endmacro -%}
+{%- macro finding(f) -%}
+<article class="dw-card dw-card--{{ CLASSES[f["status"]] }} dw-filterable" aria-labelledby="{{ f["uid"] }}-t">
+<header class="dw-card__head">
+{{ badge(f["status"]) }}
+<h3 id="{{ f["uid"] }}-t" class="dw-card__title"><span class="dw-mono dw-id">{{ f["decision_id"] }}</span> {{ f["decision_title"] }}</h3>
+</header>
+<dl class="dw-kv">
+<dt>ADR</dt><dd><code class="dw-loc" dir="ltr">{{ f["adr_label"] }}</code></dd>
+<dt>Claim</dt><dd><code class="dw-mono">{{ f["id"] }}</code> <code class="dw-rule">{{ f["rule"] }}</code></dd>
+<dt>Quote</dt><dd><q>{{ f["quote"] }}</q></dd>
+{% if f["rationale"] %}<dt>Why</dt><dd>{{ f["rationale"] }}</dd>{% endif %}
+{% if f["since"] %}<dt>Since</dt><dd>{% if f["since"]["known"] %}first violated at commit <code class="dw-mono" title="{{ f["since"]["full"] }}">{{ f["since"]["commit"] }}</code>{% if f["since"]["date"] %} ({{ f["since"]["date"] }}){% endif %}{% if f["since"]["subject"] %} <q>{{ f["since"]["subject"] }}</q>{% endif %}{% else %}first seen: unknown (the timeline entry did not pass G4){% endif %}</dd>{% endif %}
+{% for n in f["notes"] %}<dt>Note</dt><dd>{{ n }}</dd>{% endfor %}
+</dl>
+<h4 class="dw-sub">Evidence ({{ f["evidence"]|length }})</h4>
+{{ evidence_list(f["evidence"]) }}
+<footer class="dw-card__foot">{{ grounding(f["grounding"], f["consistency"]) }}</footer>
+</article>
+{%- endmacro -%}
+{%- macro claim_row(f) -%}
+<li class="dw-row dw-filterable">
+{{ badge(f["status"]) }}
+<code class="dw-mono">{{ f["id"] }}</code>
+<code class="dw-rule">{{ f["rule"] }}</code>
+<span class="dw-row__title">{{ f["decision_title"] }}</span>
+<code class="dw-loc dw-row__loc" dir="ltr">{{ f["adr_label"] }}</code>
+{% if f["rationale"] %}<span class="dw-row__why">{{ f["rationale"] }}</span>{% endif %}
+{% if f["not_judged_reason"] %}<span class="dw-row__why">Not judged: {{ f["not_judged_reason"] }}</span>{% endif %}
+{% if f["evidence"] %}<span class="dw-row__why">{{ f["evidence"]|length }} evidence item{{ "" if f["evidence"]|length == 1 else "s" }}: {% for e in f["evidence"] %}<code class="dw-loc" dir="ltr">{{ e["label"] }}</code>{{ ", " if not loop.last }}{% endfor %}</span>{% endif %}
+</li>
+{%- endmacro -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{{ csp }}">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta name="generator" content="{{ v.meta.tool }} {{ v.meta.tool_version }}">
+<title>DriftWarden report: {{ v.meta.repo }} @ {{ v.meta.commit }}</title>
+<script>{{ head_js }}</script>
+<style>
+{{ tokens_css }}
+{{ report_css }}
+</style>
+</head>
+<body>
+<svg class="dw-sprite" aria-hidden="true" focusable="false">
+<symbol id="dw-i-holding" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 8.3l2 2 4-4.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="dw-i-drifting" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5a6.5 6.5 0 0 0 0 13z" fill="currentColor"/></symbol>
+<symbol id="dw-i-violated" viewBox="0 0 16 16"><path d="M5.1 1.5h5.8l3.6 3.6v5.8l-3.6 3.6H5.1l-3.6-3.6V5.1z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+<symbol id="dw-i-undocumented" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.4 1.7"/><path d="M8 5v6M5 8h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+<symbol id="dw-i-unverified" viewBox="0 0 16 16"><path d="M8 1.1L14.9 8 8 14.9 1.1 8z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M6.4 6.4a1.7 1.7 0 1 1 2.4 1.5c-.5.3-.8.6-.8 1.2v.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.1" r=".85" fill="currentColor"/></symbol>
+<symbol id="dw-i-unknown" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 8h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+</svg>
+<a class="dw-skip" href="#main">Skip to findings</a>
+<header class="dw-header">
+<div class="dw-wrap">
+<div class="dw-header__top">
+<p class="dw-brand">DriftWarden report</p>
+<div class="dw-controls" data-dw-controls hidden>
+<button type="button" class="dw-btn" data-dw-theme aria-live="polite">Theme: system</button>
+</div>
+</div>
+<h1 class="dw-h1">{{ v.meta.repo }}</h1>
+<dl class="dw-meta">
+<div><dt>Commit</dt><dd><code class="dw-mono" title="{{ v.meta.commit_full }}">{{ v.meta.commit }}</code></dd></div>
+<div><dt>Scanned</dt><dd><time datetime="{{ v.meta.scanned_at }}">{{ v.meta.scanned_at }}</time></dd></div>
+<div><dt>Mode</dt><dd>{{ v.meta.mode }}{% if v.meta.requested_mode != v.meta.mode %} (requested {{ v.meta.requested_mode }}){% endif %}{% if v.meta.provider %} · {{ v.meta.provider }}{% if v.meta.model %} / {{ v.meta.model }}{% endif %}{% endif %}</dd></div>
+{% if v.meta.changed_paths is not none %}<div><dt>PR mode</dt><dd>{{ v.meta.changed_paths }} changed path{{ "" if v.meta.changed_paths == 1 else "s" }}</dd></div>{% endif %}
+<div><dt>Tool</dt><dd>{{ v.meta.tool }} {{ v.meta.tool_version }}</dd></div>
+<div><dt>Exit code</dt><dd><code class="dw-mono">{{ v.meta.exit_code }}</code></dd></div>
+</dl>
+</div>
+</header>
+
+<nav class="dw-summary" aria-label="Summary">
+<div class="dw-wrap">
+<p class="dw-score"><abbr title="{{ v.score_definition }}">Drift score</abbr> <strong class="dw-score__value">{{ v.score if v.score is not none else "n/a" }}</strong>
+<span class="dw-score__def">{% if v.score is not none %}{{ v.not_holding }} of {{ v.decided }} decided claims drift or violate their ADR.{% else %}No claim was decided, so there is no score.{% endif %} <span class="dw-visually-hidden">Definition: {{ v.score_definition }}</span></span></p>
+<ul class="dw-chips">
+<li><a href="#violated">{{ badge("VIOLATED", v.violated|length) }}</a></li>
+<li><a href="#drifting">{{ badge("DRIFTING", v.drifting|length) }}</a></li>
+<li><a href="#could-not-verify">{{ badge("UNVERIFIED", v.cnv|length) }}</a></li>
+<li><a href="#undocumented">{{ badge("UNDOCUMENTED", v.undocumented|length) }}</a></li>
+<li><a href="#holding">{{ badge("HOLDING", v.holding|length) }}</a></li>
+<li><a href="#unknown">{{ badge("UNKNOWN", v.unknown|length) }}</a></li>
+</ul>
+<p class="dw-scope">{{ v.summary.decisions_judged }} of {{ v.summary.decisions }} decisions judged · {{ v.summary.claims_judged }} of {{ v.summary.claims }} claims judged · {{ v.gs.verified }} of {{ v.gs.total }} verifier checks passed</p>
+</div>
+</nav>
+
+<main id="main" class="dw-wrap">
+<div class="dw-toolbar" data-dw-controls hidden>
+<label class="dw-search"><span class="dw-visually-hidden">Filter findings</span><input type="search" placeholder="Filter by ADR, claim, path or text" data-dw-search autocomplete="off" spellcheck="false"></label>
+<span class="dw-filter-count" data-dw-count aria-live="polite"></span>
+<button type="button" class="dw-btn" data-dw-expand>Expand all</button>
+<button type="button" class="dw-btn" data-dw-collapse>Collapse all</button>
+</div>
+
+<section id="violated" class="dw-section" aria-labelledby="violated-h">
+<h2 id="violated-h" class="dw-h2">{{ icon("violated") }} Violated <span class="dw-count">{{ v.violated|length }}</span></h2>
+{% if v.violated %}
+{% for f in v.violated %}{{ finding(f) }}
+{% endfor %}
+{% else %}<p class="dw-empty">No ADR constraint is violated by verified evidence.</p>{% endif %}
+</section>
+
+<section id="drifting" class="dw-section" aria-labelledby="drifting-h">
+<h2 id="drifting-h" class="dw-h2">{{ icon("drifting") }} Drifting <span class="dw-count">{{ v.drifting|length }}</span></h2>
+{% if v.drifting %}
+{% for f in v.drifting %}{{ finding(f) }}
+{% endfor %}
+{% else %}<p class="dw-empty">No drift detected in verified evidence.</p>{% endif %}
+</section>
+
+<section id="could-not-verify" class="dw-section dw-section--unverified" aria-labelledby="cnv-h">
+<h2 id="cnv-h" class="dw-h2">{{ icon("unverified") }} Could not verify <span class="dw-count">{{ v.cnv|length }}</span></h2>
+<p class="dw-lede">DriftWarden could not ground these items in repository evidence, so they are not reported as findings. They are not violations. Each one lists the verifier's reason.</p>
+{% if v.cnv %}
+{% for u in v.cnv %}
+<article class="dw-card dw-card--unverified dw-filterable" aria-labelledby="{{ u["uid"] }}-t">
+<header class="dw-card__head">
+{{ badge("UNVERIFIED") }}
+<h3 id="{{ u["uid"] }}-t" class="dw-card__title"><span class="dw-kind">{{ u["kind"] }}</span> <span class="dw-mono dw-id">{{ u["id"] }}</span>{% if u["decision_title"] %} {{ u["decision_title"] }}{% endif %}</h3>
+</header>
+<dl class="dw-kv">
+{% if u["check_id"] %}<dt>Failed check</dt><dd><code class="dw-mono">{{ u["check_id"] }}</code></dd>{% endif %}
+{% if u["decision_id"] and u["decision_id"] != u["id"] %}<dt>ADR</dt><dd><code class="dw-mono">{{ u["decision_id"] }}</code></dd>{% endif %}
+{% if u["claim_id"] %}<dt>Claim</dt><dd><code class="dw-mono">{{ u["claim_id"] }}</code></dd>{% endif %}
+{% if u["proposed_status"] %}<dt>Proposed</dt><dd>{{ LABELS.get(u["proposed_status"], u["proposed_status"]) }} (not shown as a finding: it did not pass grounding)</dd>{% endif %}
+{% if u["prov"] %}<dt>Cited</dt><dd><code class="dw-loc" dir="ltr">{{ u["prov"]["label"] }}</code>{% if u["prov"]["quote"] %}<pre class="dw-snippet" dir="ltr"><code>{{ u["prov"]["quote"] }}</code></pre>{% endif %}</dd>{% endif %}
+</dl>
+<h4 class="dw-sub">Reason{{ "" if u["reasons"]|length == 1 else "s" }}</h4>
+<ul class="dw-reasons">
+{% for reason in u["reasons"] %}<li>{{ reason }}</li>
+{% else %}<li>No reason was recorded.</li>
+{% endfor %}
+</ul>
+</article>
+{% endfor %}
+{% else %}
+<p class="dw-empty dw-empty--ok">{{ icon("holding") }} Nothing here: every decision, claim, verdict, evidence item and draft in this run passed its grounding checks ({{ v.gs.verified }} of {{ v.gs.total }} verifier checks).</p>
+{% endif %}
+</section>
+
+<section id="undocumented" class="dw-section" aria-labelledby="undoc-h">
+<h2 id="undoc-h" class="dw-h2">{{ icon("undocumented") }} Undocumented decisions <span class="dw-count">{{ v.undocumented|length }}</span></h2>
+{% if v.undocumented %}
+<p class="dw-lede">Technology choices present in the code that no ADR records. Each one cites the commits that introduced it.</p>
+{% for u in v.undocumented %}
+<article class="dw-card dw-card--undocumented dw-filterable" aria-labelledby="{{ u["uid"] }}-t">
+<header class="dw-card__head">
+{{ badge("UNDOCUMENTED") }}
+<h3 id="{{ u["uid"] }}-t" class="dw-card__title"><span class="dw-mono dw-id">{{ u["id"] }}</span> {{ u["title"] }}</h3>
+</header>
+<dl class="dw-kv">
+<dt>Technology</dt><dd><code class="dw-mono">{{ u["technology"] }}</code> ({{ u["category"] }})</dd>
+<dt>Introduced by</dt><dd><ul class="dw-commits">{% for c in u["commits"] %}<li><code class="dw-mono" title="{{ c["full"] }}">{{ c["short"] }}</code>{% if c["refs"] %} <span class="dw-tags">{% for ref in c["refs"] %}<code class="dw-loc" dir="ltr">{{ ref }}</code>{{ ", " if not loop.last }}{% endfor %}</span>{% endif %}</li>{% endfor %}</ul></dd>
+{% if u["searched_terms"] %}<dt>Searched ADRs for</dt><dd>{% for t in u["searched_terms"] %}<code class="dw-mono">{{ t }}</code>{{ " " if not loop.last }}{% endfor %}</dd>{% endif %}
+</dl>
+<h4 class="dw-sub">Evidence at {{ u["commit"] }} ({{ u["evidence"]|length }})</h4>
+{{ evidence_list(u["evidence"]) }}
+{% if u["draft"] %}
+<details class="dw-draft">
+<summary>{{ badge("DRAFT") }} Draft ADR{% if u["draft"]["path"] %}: <code class="dw-loc" dir="ltr">{{ u["draft"]["path"] }}</code>{% endif %}</summary>
+<div class="dw-draft__bar"><span class="dw-tags">{{ u["draft"]["origin"] }} draft · not written to the repository</span> {{ grounding(u["draft"]["grounding"]) }} <button type="button" class="dw-btn" data-dw-copy="{{ u["draft"]["uid"] }}" hidden>Copy Markdown</button></div>
+<pre class="dw-snippet dw-draft__md" id="{{ u["draft"]["uid"] }}" dir="ltr"><code>{{ u["draft"]["markdown"] }}</code></pre>
+</details>
+{% endif %}
+<footer class="dw-card__foot">{{ grounding(u["grounding"]) }}</footer>
+</article>
+{% endfor %}
+{% else %}<p class="dw-empty">No undocumented technology choice found.</p>{% endif %}
+</section>
+
+<section id="holding" class="dw-section" aria-labelledby="holding-h">
+<details class="dw-fold">
+<summary><h2 id="holding-h" class="dw-h2">{{ icon("holding") }} Holding <span class="dw-count">{{ v.holding|length }}</span></h2></summary>
+{% if v.holding %}<ul class="dw-rows">
+{% for f in v.holding %}{{ claim_row(f) }}
+{% endfor %}</ul>
+{% else %}<p class="dw-empty">No claim was verified as holding.</p>{% endif %}
+</details>
+</section>
+
+<section id="unknown" class="dw-section" aria-labelledby="unknown-h">
+<details class="dw-fold">
+<summary><h2 id="unknown-h" class="dw-h2">{{ icon("unknown") }} Unknown <span class="dw-count">{{ v.unknown|length }}</span></h2></summary>
+<p class="dw-lede">Judged claims the rules could not decide (for example free-form text). Their evidence verified, but there is no verdict to report.</p>
+{% if v.unknown %}<ul class="dw-rows">
+{% for f in v.unknown %}{{ claim_row(f) }}
+{% endfor %}</ul>
+{% else %}<p class="dw-empty">No undecided claims.</p>{% endif %}
+</details>
+</section>
+
+{% if v.not_judged or v.decisions_not_judged %}
+<section id="not-judged" class="dw-section" aria-labelledby="nj-h">
+<details class="dw-fold">
+<summary><h2 id="nj-h" class="dw-h2">{{ icon("unknown") }} Not judged <span class="dw-count">{{ v.not_judged|length + v.decisions_not_judged|length }}</span></h2></summary>
+<ul class="dw-rows">
+{% for d in v.decisions_not_judged %}
+<li class="dw-row dw-filterable"><code class="dw-mono">{{ d["id"] }}</code> <span class="dw-row__title">{{ d["title"] }}</span> <span class="dw-tags">status {{ d["status"] }}</span>{% if d["reason"] %}<span class="dw-row__why">{{ d["reason"] }}</span>{% endif %}</li>
+{% endfor %}
+{% for f in v.not_judged %}{{ claim_row(f) }}
+{% endfor %}
+</ul>
+</details>
+</section>
+{% endif %}
+
+{% if v.timeline %}
+<section id="timeline" class="dw-section" aria-labelledby="tl-h">
+<h2 id="tl-h" class="dw-h2">Drift timeline <span class="dw-count">{{ v.timeline|length }}</span></h2>
+<div class="dw-table-wrap">
+<table class="dw-table">
+<caption class="dw-visually-hidden">First violating commit per claim (G4)</caption>
+<thead><tr><th scope="col">Claim</th><th scope="col">First violated</th><th scope="col">Parent</th><th scope="col">Date</th><th scope="col">Commit subject</th><th scope="col">G4</th></tr></thead>
+<tbody>
+{% for t in v.timeline %}
+<tr class="dw-filterable"><th scope="row"><code class="dw-mono">{{ t["claim_id"] }}</code></th>
+{% if t["verified"] %}<td><code class="dw-mono" title="{{ t["full"] }}">{{ t["commit"] }}</code></td><td>{% if t["parent"] %}<code class="dw-mono">{{ t["parent"] }}</code>{% endif %}</td><td>{{ t["date"] }}</td><td>{{ t["subject"] }}</td><td>{{ badge("VERIFIED") }}</td>
+{% else %}<td colspan="4">first seen: unknown</td><td>{{ badge("UNVERIFIED") }}</td>{% endif %}</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</section>
+{% endif %}
+
+<section id="grounding" class="dw-section" aria-labelledby="gs-h">
+<h2 id="gs-h" class="dw-h2">Grounding summary</h2>
+<p class="dw-lede">Every row is a deterministic verifier run recorded in this scan's grounding ledger. A check with no rows did not apply to this run.</p>
+<div class="dw-table-wrap">
+<table class="dw-table">
+<caption class="dw-visually-hidden">Verifier checks by grounding requirement</caption>
+<thead><tr><th scope="col">Check</th><th scope="col">What is verified</th><th scope="col" class="dw-num">Total</th><th scope="col" class="dw-num">Verified</th><th scope="col" class="dw-num">Mismatch</th><th scope="col" class="dw-num">Pass rate</th></tr></thead>
+<tbody>
+{% for c in v.checks %}
+<tr><th scope="row"><code class="dw-mono">{{ c["id"] }}</code></th><td>{{ c["name"] }}</td><td class="dw-num">{{ c["total"] }}</td><td class="dw-num">{{ c["verified"] }}</td><td class="dw-num">{% if c["mismatch"] %}<span class="dw-mismatch">{{ icon("unverified") }}{{ c["mismatch"] }}</span>{% else %}0{% endif %}</td><td class="dw-num">{{ c["rate"] if c["rate"] is not none else "not run" }}</td></tr>
+{% endfor %}
+</tbody>
+<tfoot><tr><th scope="row">All</th><td></td><td class="dw-num">{{ v.gs.total }}</td><td class="dw-num">{{ v.gs.verified }}</td><td class="dw-num">{{ v.gs.mismatch }}</td><td class="dw-num">{{ v.gs.rate if v.gs.rate is not none else "not run" }}</td></tr></tfoot>
+</table>
+</div>
+</section>
+
+{% if v.notes %}
+<section id="notes" class="dw-section" aria-labelledby="notes-h">
+<h2 id="notes-h" class="dw-h2">Scan notes</h2>
+<ul class="dw-reasons">{% for n in v.notes %}<li>{{ n }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+</main>
+
+<footer class="dw-footer">
+<div class="dw-wrap">
+<p>Every finding above was re-checked against the repository by a deterministic verifier (G1–G6). Items that failed are listed under <a href="#could-not-verify">Could not verify</a>, never as violations.</p>
+<p>Generated by {{ v.meta.tool }} {{ v.meta.tool_version }} · <a href="{{ project_url }}" rel="noopener noreferrer">{{ project_url }}</a></p>
+</div>
+</footer>
+<script>{{ report_js }}</script>
+</body>
+</html>
