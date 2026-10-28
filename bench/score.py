@@ -305,14 +305,14 @@ def score(
 
     # ---- confusion matrix
     full = {t: {c: matrix[t][c] for c in COLS} for t in STATUSES}
-    core = {
-        t: {
-            "HOLDING": matrix[t]["HOLDING"],
-            "VIOLATED": matrix[t]["VIOLATED"],
-            "UNKNOWN": sum(matrix[t][x] for x in ("UNKNOWN", "DRIFTING", "SKIPPED", "NONE")),
-        }
-        for t in CORE
-    }
+
+    def _fold(x: str) -> str:
+        return x if x in CORE else "UNKNOWN"
+
+    core: dict[str, dict[str, int]] = {t: {c: 0 for c in CORE} for t in CORE}
+    for t in STATUSES:
+        for c in COLS:
+            core[_fold(t)][_fold(c)] += matrix[t][c]
     confusion = {
         "labels": COLS,
         "rows_are": "ground truth",
@@ -320,7 +320,8 @@ def score(
         "core": {
             "labels": CORE,
             "matrix": core,
-            "note": "DRIFTING / SKIPPED / no prediction are folded into UNKNOWN",
+            "note": "DRIFTING / SKIPPED / no prediction are folded into UNKNOWN, on the "
+            "truth rows and the prediction columns alike, so the matrix sums to the full count",
         },
     }
 

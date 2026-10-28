@@ -8,6 +8,7 @@
   "counts": {
     "claim": 14,
     "evidence_decoy": 2,
+    "evidence_proof": 3,
     "evidence_violation": 9,
     "undocumented": 6
   },
@@ -30,6 +31,9 @@
       "tags": [
         "supported",
         "violated"
+      ],
+      "terms": [
+        "mongo"
       ],
       "title": "PostgreSQL is the only datastore",
       "type": "claim"
@@ -61,8 +65,21 @@
         "unsupported-phrasing",
         "holding"
       ],
+      "terms": [],
       "title": "Infrastructure as code",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "id": "cloudbase:ADR-0002:p:infra/core/main.tf:1",
+      "introduced_commit": "5b7e0b8978948454aad0a68c4fb598331931232f",
+      "kind": "terraform-config",
+      "line": 1,
+      "needle": "terraform {",
+      "path": "infra/core/main.tf",
+      "repo": "cloudbase",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/adr/0003-no-google-cloud.md",
@@ -79,6 +96,9 @@
       "tags": [
         "supported",
         "violated"
+      ],
+      "terms": [
+        "google"
       ],
       "title": "No Google Cloud",
       "type": "claim"
@@ -133,6 +153,9 @@
         "adversarial",
         "dev-only"
       ],
+      "terms": [
+        "memcached"
+      ],
       "title": "Redis is the only cache",
       "type": "claim"
     },
@@ -162,6 +185,9 @@
       "tags": [
         "supported",
         "violated"
+      ],
+      "terms": [
+        "rabbit"
       ],
       "title": "Kafka is the sole broker",
       "type": "claim"
@@ -193,8 +219,21 @@
         "unsupported-phrasing",
         "holding"
       ],
+      "terms": [],
       "title": "Kubernetes orchestration",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0006",
+      "id": "cloudbase:ADR-0006:p:k8s/api.yaml:2",
+      "introduced_commit": "5b7e0b8978948454aad0a68c4fb598331931232f",
+      "kind": "k8s-manifest",
+      "line": 2,
+      "needle": "kind: Deployment",
+      "path": "k8s/api.yaml",
+      "repo": "cloudbase",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/adr/0007-swarm-orchestration.md",
@@ -212,6 +251,7 @@
         "skipped",
         "superseded"
       ],
+      "terms": [],
       "title": "Swarm orchestration",
       "type": "claim"
     },
@@ -231,6 +271,7 @@
         "skipped",
         "proposed"
       ],
+      "terms": [],
       "title": "Pulumi",
       "type": "claim"
     },
@@ -250,8 +291,26 @@
         "supported",
         "holding"
       ],
+      "terms": [
+        "solr",
+        "opensearch",
+        "meilisearch",
+        "typesense"
+      ],
       "title": "Elasticsearch is the only search engine",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0009",
+      "id": "cloudbase:ADR-0009:p:docker-compose.yml:14",
+      "introduced_commit": "5b7e0b8978948454aad0a68c4fb598331931232f",
+      "kind": "compose-service",
+      "line": 14,
+      "needle": "image: elasticsearch",
+      "path": "docker-compose.yml",
+      "repo": "cloudbase",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/adr/0010-no-datadog.md",
@@ -269,6 +328,9 @@
         "supported",
         "violated",
         "prompt-injection"
+      ],
+      "terms": [
+        "datadog"
       ],
       "title": "No Datadog",
       "type": "claim"
@@ -324,6 +386,9 @@
         "hint",
         "adversarial"
       ],
+      "terms": [
+        "mysql"
+      ],
       "title": "Small datastore footprint",
       "type": "claim"
     },
@@ -353,6 +418,9 @@
       "tags": [
         "unsupported-phrasing",
         "violated"
+      ],
+      "terms": [
+        ":latest"
       ],
       "title": "No latest image tags",
       "type": "claim"
@@ -384,6 +452,7 @@
         "qualifier",
         "unknown"
       ],
+      "terms": [],
       "title": "Remote state",
       "type": "claim"
     },
@@ -403,6 +472,7 @@
         "skipped",
         "rejected"
       ],
+      "terms": [],
       "title": "Nomad",
       "type": "claim"
     },

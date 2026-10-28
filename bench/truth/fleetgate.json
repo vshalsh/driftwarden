@@ -7,11 +7,12 @@
   "counts": {
     "claim": 12,
     "evidence_decoy": 5,
+    "evidence_proof": 2,
     "evidence_violation": 6,
     "undocumented": 6
   },
   "ecosystem": "go",
-  "head": "5572dde6e620ff3e33efb05a1918083d63cbe30f",
+  "head": "d5508b577b3b568f1082eed94255b74cfa9a339d",
   "layout": "single",
   "records": [
     {
@@ -30,8 +31,21 @@
         "supported",
         "holding"
       ],
+      "terms": [],
       "title": "Gin as web framework",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0001",
+      "id": "fleetgate:ADR-0001:p:cmd/fleetgate/main.go:8",
+      "introduced_commit": "789c38e610e13d12b8142e41d8b60b015a911844",
+      "kind": "call",
+      "line": 8,
+      "needle": "gin.Default()",
+      "path": "cmd/fleetgate/main.go",
+      "repo": "fleetgate",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/architecture/decisions/0002-postgresql-is-the-only-datastore.md",
@@ -49,13 +63,16 @@
         "supported",
         "violated"
       ],
+      "terms": [
+        "mysql"
+      ],
       "title": "PostgreSQL is the only datastore",
       "type": "claim"
     },
     {
       "decision_id": "ADR-0002",
       "id": "fleetgate:ADR-0002:v:internal/legacy/reports.go:4",
-      "introduced_commit": "a6c4083e4631cc552fc8f579309a57c9aab0a9da",
+      "introduced_commit": "338b951896d522b008fffc40fb6f47e0880c1d80",
       "kind": "import",
       "line": 4,
       "path": "internal/legacy/reports.go",
@@ -66,7 +83,7 @@
     {
       "decision_id": "ADR-0002",
       "id": "fleetgate:ADR-0002:v:go.mod:9",
-      "introduced_commit": "923891b130cc3474413fc2dad088bee752e4640c",
+      "introduced_commit": "81000a712cb920300abd7dada0aa6c27fc5a2d5e",
       "kind": "dependency",
       "line": 9,
       "path": "go.mod",
@@ -91,6 +108,9 @@
         "holding",
         "adversarial"
       ],
+      "terms": [
+        "logrus"
+      ],
       "title": "No logrus",
       "type": "claim"
     },
@@ -98,7 +118,7 @@
       "decision_id": "ADR-0003",
       "decoy_kind": "comment",
       "id": "fleetgate:ADR-0003:d:internal/log/log.go:5",
-      "introduced_commit": "435fd53f4d17f4a3e243e54ee05aab2d570da09c",
+      "introduced_commit": "789c38e610e13d12b8142e41d8b60b015a911844",
       "line": 5,
       "path": "internal/log/log.go",
       "repo": "fleetgate",
@@ -122,13 +142,16 @@
         "violated",
         "adversarial"
       ],
+      "terms": [
+        "aws-sdk"
+      ],
       "title": "Cloud SDKs only in internal/cloud",
       "type": "claim"
     },
     {
       "decision_id": "ADR-0004",
       "id": "fleetgate:ADR-0004:v:cmd/fleetgate/export.go:4",
-      "introduced_commit": "e6c4158270c4a7206a2a50ee870f0586c3f18813",
+      "introduced_commit": "536f7258a441e7a791aa7e0db3d7b780634104d4",
       "kind": "import",
       "line": 4,
       "path": "cmd/fleetgate/export.go",
@@ -140,7 +163,7 @@
       "decision_id": "ADR-0004",
       "decoy_kind": "allowed-location",
       "id": "fleetgate:ADR-0004:d:internal/cloud/s3.go:4",
-      "introduced_commit": "435fd53f4d17f4a3e243e54ee05aab2d570da09c",
+      "introduced_commit": "789c38e610e13d12b8142e41d8b60b015a911844",
       "line": 4,
       "path": "internal/cloud/s3.go",
       "repo": "fleetgate",
@@ -151,7 +174,7 @@
       "decision_id": "ADR-0004",
       "decoy_kind": "vendored",
       "id": "fleetgate:ADR-0004:d:third_party/awsmock/mock.go:3",
-      "introduced_commit": "e6c4158270c4a7206a2a50ee870f0586c3f18813",
+      "introduced_commit": "536f7258a441e7a791aa7e0db3d7b780634104d4",
       "line": 3,
       "path": "third_party/awsmock/mock.go",
       "repo": "fleetgate",
@@ -174,13 +197,16 @@
         "supported",
         "violated"
       ],
+      "terms": [
+        "nats"
+      ],
       "title": "Kafka is the only broker",
       "type": "claim"
     },
     {
       "decision_id": "ADR-0005",
       "id": "fleetgate:ADR-0005:v:internal/events/nats.go:4",
-      "introduced_commit": "38abb13a3a2c0cbb182f2e0e2b2850d956c3362a",
+      "introduced_commit": "3bf136bc99201e9d1b73148dfbbce5973e67deef",
       "kind": "import",
       "line": 4,
       "path": "internal/events/nats.go",
@@ -191,7 +217,7 @@
     {
       "decision_id": "ADR-0005",
       "id": "fleetgate:ADR-0005:v:go.mod:8",
-      "introduced_commit": "1b8c7bc53ced01c72039376a94fdccf4836deced",
+      "introduced_commit": "3628a43d46a02902eabdbc51e4763b98a6ed3876",
       "kind": "dependency",
       "line": 8,
       "path": "go.mod",
@@ -215,6 +241,7 @@
         "skipped",
         "superseded"
       ],
+      "terms": [],
       "title": "Echo framework",
       "type": "claim"
     },
@@ -234,6 +261,7 @@
         "skipped",
         "proposed"
       ],
+      "terms": [],
       "title": "Redis cache",
       "type": "claim"
     },
@@ -254,6 +282,9 @@
         "adversarial",
         "dev-only"
       ],
+      "terms": [
+        "gorm.io"
+      ],
       "title": "No ORMs",
       "type": "claim"
     },
@@ -261,7 +292,7 @@
       "decision_id": "ADR-0008",
       "decoy_kind": "test-file",
       "id": "fleetgate:ADR-0008:d:internal/store/store_test.go:4",
-      "introduced_commit": "786f67f2519860f6aa2adfd154c11877e47e1345",
+      "introduced_commit": "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb",
       "line": 4,
       "path": "internal/store/store_test.go",
       "repo": "fleetgate",
@@ -284,13 +315,16 @@
         "unsupported-phrasing",
         "violated"
       ],
+      "terms": [
+        "go-redis"
+      ],
       "title": "Redis import boundary",
       "type": "claim"
     },
     {
       "decision_id": "ADR-0009",
       "id": "fleetgate:ADR-0009:v:internal/handlers/session.go:4",
-      "introduced_commit": "786f67f2519860f6aa2adfd154c11877e47e1345",
+      "introduced_commit": "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb",
       "kind": "import",
       "line": 4,
       "path": "internal/handlers/session.go",
@@ -302,7 +336,7 @@
       "decision_id": "ADR-0009",
       "decoy_kind": "allowed-location",
       "id": "fleetgate:ADR-0009:d:internal/cache/cache.go:4",
-      "introduced_commit": "786f67f2519860f6aa2adfd154c11877e47e1345",
+      "introduced_commit": "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb",
       "line": 4,
       "path": "internal/cache/cache.go",
       "repo": "fleetgate",
@@ -325,8 +359,21 @@
         "unsupported-phrasing",
         "holding"
       ],
+      "terms": [],
       "title": "Prometheus metrics",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0010",
+      "id": "fleetgate:ADR-0010:p:cmd/fleetgate/main.go:10",
+      "introduced_commit": "789c38e610e13d12b8142e41d8b60b015a911844",
+      "kind": "prometheus-exposition",
+      "line": 10,
+      "needle": "# TYPE fleetgate_up gauge",
+      "path": "cmd/fleetgate/main.go",
+      "repo": "fleetgate",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/architecture/decisions/0011-idempotent-consumers.md",
@@ -344,6 +391,7 @@
         "qualifier",
         "unknown"
       ],
+      "terms": [],
       "title": "Idempotent consumers",
       "type": "claim"
     },
@@ -364,6 +412,9 @@
         "holding",
         "prompt-injection"
       ],
+      "terms": [
+        "mongo"
+      ],
       "title": "No MongoDB",
       "type": "claim"
     },
@@ -371,15 +422,15 @@
       "category": "datastore",
       "evidence": [
         {
-          "commit": "a6c4083e4631cc552fc8f579309a57c9aab0a9da",
+          "commit": "338b951896d522b008fffc40fb6f47e0880c1d80",
           "line": 4,
           "path": "internal/legacy/reports.go"
         }
       ],
-      "first_commit": "a6c4083e4631cc552fc8f579309a57c9aab0a9da",
+      "first_commit": "338b951896d522b008fffc40fb6f47e0880c1d80",
       "id": "fleetgate:ud:mysql:positive",
       "introducing_commits": [
-        "a6c4083e4631cc552fc8f579309a57c9aab0a9da"
+        "338b951896d522b008fffc40fb6f47e0880c1d80"
       ],
       "reason": "",
       "repo": "fleetgate",
@@ -391,15 +442,15 @@
       "category": "queue",
       "evidence": [
         {
-          "commit": "38abb13a3a2c0cbb182f2e0e2b2850d956c3362a",
+          "commit": "3bf136bc99201e9d1b73148dfbbce5973e67deef",
           "line": 4,
           "path": "internal/events/nats.go"
         }
       ],
-      "first_commit": "38abb13a3a2c0cbb182f2e0e2b2850d956c3362a",
+      "first_commit": "3bf136bc99201e9d1b73148dfbbce5973e67deef",
       "id": "fleetgate:ud:nats:positive",
       "introducing_commits": [
-        "38abb13a3a2c0cbb182f2e0e2b2850d956c3362a"
+        "3bf136bc99201e9d1b73148dfbbce5973e67deef"
       ],
       "reason": "",
       "repo": "fleetgate",
@@ -411,21 +462,21 @@
       "category": "cloud-sdk",
       "evidence": [
         {
-          "commit": "435fd53f4d17f4a3e243e54ee05aab2d570da09c",
+          "commit": "789c38e610e13d12b8142e41d8b60b015a911844",
           "line": 4,
           "path": "internal/cloud/s3.go"
         },
         {
-          "commit": "e6c4158270c4a7206a2a50ee870f0586c3f18813",
+          "commit": "536f7258a441e7a791aa7e0db3d7b780634104d4",
           "line": 4,
           "path": "cmd/fleetgate/export.go"
         }
       ],
-      "first_commit": "435fd53f4d17f4a3e243e54ee05aab2d570da09c",
+      "first_commit": "789c38e610e13d12b8142e41d8b60b015a911844",
       "id": "fleetgate:ud:aws-sdk:positive",
       "introducing_commits": [
-        "435fd53f4d17f4a3e243e54ee05aab2d570da09c",
-        "e6c4158270c4a7206a2a50ee870f0586c3f18813"
+        "789c38e610e13d12b8142e41d8b60b015a911844",
+        "536f7258a441e7a791aa7e0db3d7b780634104d4"
       ],
       "reason": "",
       "repo": "fleetgate",
@@ -437,15 +488,15 @@
       "category": "vendor-sdk",
       "evidence": [
         {
-          "commit": "786f67f2519860f6aa2adfd154c11877e47e1345",
+          "commit": "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb",
           "line": 4,
           "path": "internal/billing/charge.go"
         }
       ],
-      "first_commit": "786f67f2519860f6aa2adfd154c11877e47e1345",
+      "first_commit": "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb",
       "id": "fleetgate:ud:stripe:positive",
       "introducing_commits": [
-        "786f67f2519860f6aa2adfd154c11877e47e1345"
+        "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb"
       ],
       "reason": "",
       "repo": "fleetgate",
@@ -457,15 +508,15 @@
       "category": "vendor-sdk",
       "evidence": [
         {
-          "commit": "786f67f2519860f6aa2adfd154c11877e47e1345",
+          "commit": "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb",
           "line": 4,
           "path": "internal/obs/obs_test.go"
         }
       ],
-      "first_commit": "786f67f2519860f6aa2adfd154c11877e47e1345",
+      "first_commit": "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb",
       "id": "fleetgate:ud:sentry:negative",
       "introducing_commits": [
-        "786f67f2519860f6aa2adfd154c11877e47e1345"
+        "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb"
       ],
       "reason": "nonproduction",
       "repo": "fleetgate",
@@ -477,15 +528,15 @@
       "category": "datastore",
       "evidence": [
         {
-          "commit": "786f67f2519860f6aa2adfd154c11877e47e1345",
+          "commit": "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb",
           "line": 3,
           "path": "internal/obs/obs.go"
         }
       ],
-      "first_commit": "786f67f2519860f6aa2adfd154c11877e47e1345",
+      "first_commit": "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb",
       "id": "fleetgate:ud:cassandra:negative",
       "introducing_commits": [
-        "786f67f2519860f6aa2adfd154c11877e47e1345"
+        "d295291ab6fc9b5cb0cf59856dec0ccb52e961cb"
       ],
       "reason": "comment-only",
       "repo": "fleetgate",

@@ -5,12 +5,13 @@
   "commits": 18,
   "counts": {
     "claim": 15,
-    "evidence_decoy": 4,
+    "evidence_decoy": 5,
+    "evidence_proof": 7,
     "evidence_violation": 3,
     "undocumented": 6
   },
   "ecosystem": "java/maven",
-  "head": "2b51bf8c1c643a961a972fe0e0b8935a5d8be3d9",
+  "head": "4de1ef5bd4b28b4e6755c41252494b4fb36267d9",
   "layout": "single",
   "records": [
     {
@@ -29,8 +30,21 @@
         "unsupported-phrasing",
         "holding"
       ],
+      "terms": [],
       "title": "Record architecture decisions",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0001",
+      "id": "ledgerboot:ADR-0001:p:.adr-dir:1",
+      "introduced_commit": "d680f37cd8059d24e0583ad5f36afc614d7c2dcd",
+      "kind": "adr-dir",
+      "line": 1,
+      "needle": "doc/arch",
+      "path": ".adr-dir",
+      "repo": "ledgerboot",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "doc/arch/0002-spring-boot-as-application-framework.md",
@@ -48,8 +62,21 @@
         "unsupported-phrasing",
         "holding"
       ],
+      "terms": [],
       "title": "Spring Boot as application framework",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "id": "ledgerboot:ADR-0002:p:src/main/java/com/acme/ledger/LedgerApplication.java:6",
+      "introduced_commit": "d680f37cd8059d24e0583ad5f36afc614d7c2dcd",
+      "kind": "annotation",
+      "line": 6,
+      "needle": "@SpringBootApplication",
+      "path": "src/main/java/com/acme/ledger/LedgerApplication.java",
+      "repo": "ledgerboot",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "doc/arch/0003-postgresql-is-the-only-datastore.md",
@@ -67,6 +94,9 @@
         "supported",
         "violated",
         "prompt-injection"
+      ],
+      "terms": [
+        "mongo"
       ],
       "title": "PostgreSQL is the only datastore",
       "type": "claim"
@@ -110,6 +140,9 @@
         "adversarial",
         "dev-only"
       ],
+      "terms": [
+        "okhttp"
+      ],
       "title": "No OkHttp",
       "type": "claim"
     },
@@ -117,7 +150,7 @@
       "decision_id": "ADR-0004",
       "decoy_kind": "test-file",
       "id": "ledgerboot:ADR-0004:d:src/test/java/com/acme/ledger/HttpStubTest.java:3",
-      "introduced_commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+      "introduced_commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
       "line": 3,
       "path": "src/test/java/com/acme/ledger/HttpStubTest.java",
       "repo": "ledgerboot",
@@ -128,7 +161,7 @@
       "decision_id": "ADR-0004",
       "decoy_kind": "test-scoped-dependency",
       "id": "ledgerboot:ADR-0004:d:pom.xml:17",
-      "introduced_commit": "7f366c9c84a912bbdce93be8debf008e498b52d0",
+      "introduced_commit": "916d7c26e1dc6faf90b3da76f180c8aeb6075d33",
       "line": 17,
       "path": "pom.xml",
       "repo": "ledgerboot",
@@ -152,8 +185,25 @@
         "holding",
         "adversarial"
       ],
+      "terms": [
+        "rabbit",
+        "activemq",
+        "pulsar"
+      ],
       "title": "Kafka as sole broker",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "id": "ledgerboot:ADR-0005:p:src/main/java/com/acme/ledger/events/Publisher.java:3",
+      "introduced_commit": "d680f37cd8059d24e0583ad5f36afc614d7c2dcd",
+      "kind": "import",
+      "line": 3,
+      "needle": "import org.apache.kafka",
+      "path": "src/main/java/com/acme/ledger/events/Publisher.java",
+      "repo": "ledgerboot",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "decision_id": "ADR-0005",
@@ -181,6 +231,9 @@
       "tags": [
         "supported",
         "violated"
+      ],
+      "terms": [
+        "software.amazon.awssdk"
       ],
       "title": "Cloud SDKs only in the gateway package",
       "type": "claim"
@@ -223,6 +276,7 @@
         "skipped",
         "superseded"
       ],
+      "terms": [],
       "title": "Log4j logging",
       "type": "claim"
     },
@@ -242,8 +296,21 @@
         "supported",
         "holding"
       ],
+      "terms": [],
       "title": "Logback logging",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0008",
+      "id": "ledgerboot:ADR-0008:p:pom.xml:12",
+      "introduced_commit": "916d7c26e1dc6faf90b3da76f180c8aeb6075d33",
+      "kind": "dependency",
+      "line": 12,
+      "needle": "logback-classic",
+      "path": "pom.xml",
+      "repo": "ledgerboot",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "doc/arch/0009-money-as-integer-minor-units.md",
@@ -261,8 +328,25 @@
         "unsupported-phrasing",
         "holding"
       ],
+      "terms": [
+        "double amount",
+        "float amount",
+        "bigdecimal"
+      ],
       "title": "Money as integer minor units",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0009",
+      "id": "ledgerboot:ADR-0009:p:src/main/java/com/acme/ledger/billing/Money.java:4",
+      "introduced_commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
+      "kind": "integer-minor-units",
+      "line": 4,
+      "needle": "long minorUnits",
+      "path": "src/main/java/com/acme/ledger/billing/Money.java",
+      "repo": "ledgerboot",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "doc/arch/0010-redis-for-rate-limiting.md",
@@ -280,6 +364,7 @@
         "qualifier",
         "unknown"
       ],
+      "terms": [],
       "title": "Redis for rate limiting",
       "type": "claim"
     },
@@ -298,6 +383,9 @@
       "tags": [
         "unsupported-phrasing",
         "holding"
+      ],
+      "terms": [
+        "cassandra"
       ],
       "title": "Cassandra",
       "type": "claim"
@@ -318,6 +406,7 @@
         "skipped",
         "proposed"
       ],
+      "terms": [],
       "title": "gRPC between services",
       "type": "claim"
     },
@@ -337,6 +426,7 @@
         "skipped",
         "rejected"
       ],
+      "terms": [],
       "title": "Oracle",
       "type": "claim"
     },
@@ -356,8 +446,34 @@
         "supported",
         "holding"
       ],
+      "terms": [
+        "import com.stripe"
+      ],
       "title": "Stripe in billing only",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0014",
+      "id": "ledgerboot:ADR-0014:p:src/main/java/com/acme/ledger/billing/Charges.java:3",
+      "introduced_commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
+      "kind": "import",
+      "line": 3,
+      "needle": "import com.stripe.Stripe",
+      "path": "src/main/java/com/acme/ledger/billing/Charges.java",
+      "repo": "ledgerboot",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0014",
+      "decoy_kind": "allowed-location",
+      "id": "ledgerboot:ADR-0014:d:src/main/java/com/acme/ledger/billing/Charges.java:3",
+      "introduced_commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
+      "line": 3,
+      "path": "src/main/java/com/acme/ledger/billing/Charges.java",
+      "repo": "ledgerboot",
+      "role": "decoy",
+      "type": "evidence"
     },
     {
       "adr_path": "doc/arch/0015-hibernate-is-the-only-orm.md",
@@ -375,8 +491,26 @@
         "supported",
         "holding"
       ],
+      "terms": [
+        "mybatis",
+        "jooq",
+        "eclipse.persistence",
+        "ebean"
+      ],
       "title": "Hibernate is the only ORM",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0015",
+      "id": "ledgerboot:ADR-0015:p:src/main/java/com/acme/ledger/store/Account.java:3",
+      "introduced_commit": "d680f37cd8059d24e0583ad5f36afc614d7c2dcd",
+      "kind": "import",
+      "line": 3,
+      "needle": "import org.hibernate.Session",
+      "path": "src/main/java/com/acme/ledger/store/Account.java",
+      "repo": "ledgerboot",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "category": "datastore",
@@ -428,15 +562,15 @@
       "category": "vendor-sdk",
       "evidence": [
         {
-          "commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+          "commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
           "line": 3,
           "path": "src/main/java/com/acme/ledger/notify/Sms.java"
         }
       ],
-      "first_commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+      "first_commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
       "id": "ledgerboot:ud:twilio:positive",
       "introducing_commits": [
-        "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3"
+        "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d"
       ],
       "reason": "",
       "repo": "ledgerboot",
@@ -448,15 +582,15 @@
       "category": "vendor-sdk",
       "evidence": [
         {
-          "commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+          "commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
           "line": 3,
           "path": "src/main/java/com/acme/ledger/billing/Charges.java"
         }
       ],
-      "first_commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+      "first_commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
       "id": "ledgerboot:ud:stripe:negative",
       "introducing_commits": [
-        "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3"
+        "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d"
       ],
       "reason": "documented",
       "repo": "ledgerboot",
@@ -468,15 +602,15 @@
       "category": "search",
       "evidence": [
         {
-          "commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+          "commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
           "line": 3,
           "path": "src/test/java/com/acme/ledger/SearchIT.java"
         }
       ],
-      "first_commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+      "first_commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
       "id": "ledgerboot:ud:elasticsearch:negative",
       "introducing_commits": [
-        "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3"
+        "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d"
       ],
       "reason": "nonproduction",
       "repo": "ledgerboot",
@@ -488,15 +622,15 @@
       "category": "cache",
       "evidence": [
         {
-          "commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+          "commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
           "line": 5,
           "path": "src/main/java/com/acme/ledger/notify/Sms.java"
         }
       ],
-      "first_commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+      "first_commit": "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d",
       "id": "ledgerboot:ud:memcached:negative",
       "introducing_commits": [
-        "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3"
+        "c6dbc0a054db6b477309c1b5ab7ed1dfc7bc929d"
       ],
       "reason": "comment-only",
       "repo": "ledgerboot",

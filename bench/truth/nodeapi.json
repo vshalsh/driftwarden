@@ -8,11 +8,12 @@
   "counts": {
     "claim": 16,
     "evidence_decoy": 6,
+    "evidence_proof": 5,
     "evidence_violation": 7,
     "undocumented": 6
   },
   "ecosystem": "javascript/typescript",
-  "head": "dddc2e28048d8803a52596ad2ac0846c6e0ae50b",
+  "head": "fd4b6e63069daf75551a473a12902dba3c1c46c9",
   "layout": "single",
   "records": [
     {
@@ -31,8 +32,21 @@
         "supported",
         "holding"
       ],
+      "terms": [],
       "title": "Express as web framework",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0001",
+      "id": "nodeapi:ADR-0001:p:src/server.ts:1",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "kind": "import",
+      "line": 1,
+      "needle": "import express",
+      "path": "src/server.ts",
+      "repo": "nodeapi",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/decisions/0002-single-datastore-postgresql.md",
@@ -51,13 +65,16 @@
         "violated",
         "hint"
       ],
+      "terms": [
+        "mongoose"
+      ],
       "title": "Single datastore: PostgreSQL",
       "type": "claim"
     },
     {
       "decision_id": "ADR-0002",
       "id": "nodeapi:ADR-0002:v:src/legacy/importer.ts:1",
-      "introduced_commit": "7035baa3927e2ec35781f5ac5f27a3ee6e1caafd",
+      "introduced_commit": "e41416cee0cf0c6fe0c58fe86ecaf2a2006da7ee",
       "kind": "import",
       "line": 1,
       "path": "src/legacy/importer.ts",
@@ -68,7 +85,7 @@
     {
       "decision_id": "ADR-0002",
       "id": "nodeapi:ADR-0002:v:package.json:13",
-      "introduced_commit": "18e01ead15f41bb35a3a61f8d51cb8e48a1c7e2e",
+      "introduced_commit": "31b066fd3f1c6b763ece0d77d673070bb16510f1",
       "kind": "dependency",
       "line": 13,
       "path": "package.json",
@@ -93,6 +110,9 @@
         "holding",
         "adversarial"
       ],
+      "terms": [
+        "node-fetch"
+      ],
       "title": "No node-fetch",
       "type": "claim"
     },
@@ -100,7 +120,7 @@
       "decision_id": "ADR-0003",
       "decoy_kind": "comment",
       "id": "nodeapi:ADR-0003:d:src/http/legacy.ts:1",
-      "introduced_commit": "a181a49ac33dc86f07b5e6d4545958b1ac5c8741",
+      "introduced_commit": "6ec6d8715ddb152356f186cf2449763a7f7c508d",
       "line": 1,
       "path": "src/http/legacy.ts",
       "repo": "nodeapi",
@@ -123,8 +143,21 @@
         "supported",
         "holding"
       ],
+      "terms": [],
       "title": "Axios as HTTP client",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "id": "nodeapi:ADR-0004:p:src/http/client.ts:1",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "kind": "import",
+      "line": 1,
+      "needle": "import axios",
+      "path": "src/http/client.ts",
+      "repo": "nodeapi",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/decisions/0005-cloud-sdks-only-in-adapters.md",
@@ -143,13 +176,16 @@
         "violated",
         "adversarial"
       ],
+      "terms": [
+        "@aws-sdk/"
+      ],
       "title": "Cloud SDKs only in adapters",
       "type": "claim"
     },
     {
       "decision_id": "ADR-0005",
       "id": "nodeapi:ADR-0005:v:src/routes/upload.ts:1",
-      "introduced_commit": "6bf57710307d1c9227f3d90e9074b42944635ba7",
+      "introduced_commit": "0e82cd953535a868734a4b8e0863edee138a61c0",
       "kind": "import",
       "line": 1,
       "path": "src/routes/upload.ts",
@@ -161,7 +197,7 @@
       "decision_id": "ADR-0005",
       "decoy_kind": "allowed-location",
       "id": "nodeapi:ADR-0005:d:src/adapters/s3.ts:1",
-      "introduced_commit": "3dde6239b3c548833e90b54c536769c498601154",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
       "line": 1,
       "path": "src/adapters/s3.ts",
       "repo": "nodeapi",
@@ -172,7 +208,7 @@
       "decision_id": "ADR-0005",
       "decoy_kind": "vendored",
       "id": "nodeapi:ADR-0005:d:vendor/aws-sdk-shim/index.js:1",
-      "introduced_commit": "a181a49ac33dc86f07b5e6d4545958b1ac5c8741",
+      "introduced_commit": "6ec6d8715ddb152356f186cf2449763a7f7c508d",
       "line": 1,
       "path": "vendor/aws-sdk-shim/index.js",
       "repo": "nodeapi",
@@ -195,8 +231,23 @@
         "supported",
         "holding"
       ],
+      "terms": [
+        "memcache"
+      ],
       "title": "Redis as the only cache",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0006",
+      "id": "nodeapi:ADR-0006:p:src/cache.ts:1",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "kind": "import",
+      "line": 1,
+      "needle": "import Redis",
+      "path": "src/cache.ts",
+      "repo": "nodeapi",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/decisions/0007-kafka-for-events.md",
@@ -214,6 +265,7 @@
         "skipped",
         "proposed"
       ],
+      "terms": [],
       "title": "Kafka for events",
       "type": "claim"
     },
@@ -233,8 +285,33 @@
         "unsupported-phrasing",
         "holding"
       ],
+      "terms": [],
       "title": "Cursor pagination",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0008",
+      "id": "nodeapi:ADR-0008:p:src/server.ts:10",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "kind": "cursor-pagination",
+      "line": 10,
+      "needle": "const nextCursor",
+      "path": "src/server.ts",
+      "repo": "nodeapi",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0008",
+      "id": "nodeapi:ADR-0008:p:src/server.ts:8",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "kind": "cursor-pagination",
+      "line": 8,
+      "needle": "req.query.cursor",
+      "path": "src/server.ts",
+      "repo": "nodeapi",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/decisions/0009-no-sequelize.md",
@@ -252,13 +329,16 @@
         "unsupported-phrasing",
         "violated"
       ],
+      "terms": [
+        "sequelize"
+      ],
       "title": "No Sequelize",
       "type": "claim"
     },
     {
       "decision_id": "ADR-0009",
       "id": "nodeapi:ADR-0009:v:src/db/orm.ts:1",
-      "introduced_commit": "9716438eedd9ce258ad30534f9b6676877817832",
+      "introduced_commit": "102d59dfa739df0c6cd3063763f8d33064843f7d",
       "kind": "import",
       "line": 1,
       "path": "src/db/orm.ts",
@@ -269,7 +349,7 @@
     {
       "decision_id": "ADR-0009",
       "id": "nodeapi:ADR-0009:v:package.json:14",
-      "introduced_commit": "3e4cc87e1bd5e738029d5524f9b1515e8285e905",
+      "introduced_commit": "b853375fa44b9bcf1f4d0b3cf383bc8f8c68e756",
       "kind": "dependency",
       "line": 14,
       "path": "package.json",
@@ -294,13 +374,16 @@
         "violated",
         "prompt-injection"
       ],
+      "terms": [
+        "winston"
+      ],
       "title": "No Winston",
       "type": "claim"
     },
     {
       "decision_id": "ADR-0010",
       "id": "nodeapi:ADR-0010:v:src/log.ts:1",
-      "introduced_commit": "f9133f7f010b489ab99cd7b3b09054cc3bfac7d1",
+      "introduced_commit": "5a07ef0823e81b0190c75302f0007eff4896994d",
       "kind": "import",
       "line": 1,
       "path": "src/log.ts",
@@ -311,7 +394,7 @@
     {
       "decision_id": "ADR-0010",
       "id": "nodeapi:ADR-0010:v:package.json:15",
-      "introduced_commit": "70349a5d286dbb02db3a7e6a9ea3448572c83e50",
+      "introduced_commit": "8dfdc41c52c1083d4af4a8719099419e445b9617",
       "kind": "dependency",
       "line": 15,
       "path": "package.json",
@@ -335,6 +418,7 @@
         "skipped",
         "deprecated"
       ],
+      "terms": [],
       "title": "Request library",
       "type": "claim"
     },
@@ -355,6 +439,9 @@
         "adversarial",
         "dev-only"
       ],
+      "terms": [
+        "lodash"
+      ],
       "title": "No lodash in services",
       "type": "claim"
     },
@@ -362,7 +449,7 @@
       "decision_id": "ADR-0012",
       "decoy_kind": "test-file",
       "id": "nodeapi:ADR-0012:d:test/util.test.ts:1",
-      "introduced_commit": "cc2059500a0c4cd63779e347516c0ee15a674e49",
+      "introduced_commit": "4fea2821ac9b060d02b75a4358fb2e8e94288827",
       "line": 1,
       "path": "test/util.test.ts",
       "repo": "nodeapi",
@@ -373,7 +460,7 @@
       "decision_id": "ADR-0012",
       "decoy_kind": "dev-dependency",
       "id": "nodeapi:ADR-0012:d:package.json:23",
-      "introduced_commit": "cc2059500a0c4cd63779e347516c0ee15a674e49",
+      "introduced_commit": "4fea2821ac9b060d02b75a4358fb2e8e94288827",
       "line": 23,
       "path": "package.json",
       "repo": "nodeapi",
@@ -397,6 +484,9 @@
         "holding",
         "hint"
       ],
+      "terms": [
+        "moment"
+      ],
       "title": "No heavyweight date libraries",
       "type": "claim"
     },
@@ -416,6 +506,7 @@
         "qualifier",
         "unknown"
       ],
+      "terms": [],
       "title": "GraphQL scope",
       "type": "claim"
     },
@@ -435,6 +526,7 @@
         "skipped",
         "superseded"
       ],
+      "terms": [],
       "title": "Express 4",
       "type": "claim"
     },
@@ -455,6 +547,9 @@
         "holding",
         "adversarial"
       ],
+      "terms": [
+        "twilio"
+      ],
       "title": "No Twilio",
       "type": "claim"
     },
@@ -462,7 +557,7 @@
       "decision_id": "ADR-0016",
       "decoy_kind": "vendored",
       "id": "nodeapi:ADR-0016:d:vendor/sms-shim/index.js:1",
-      "introduced_commit": "57290db537dd4053ab064b6cdb73241ef3f567f1",
+      "introduced_commit": "a86dd3964015504d4d6898cc469d4115890a7b9a",
       "line": 1,
       "path": "vendor/sms-shim/index.js",
       "repo": "nodeapi",
@@ -473,15 +568,15 @@
       "category": "datastore",
       "evidence": [
         {
-          "commit": "7035baa3927e2ec35781f5ac5f27a3ee6e1caafd",
+          "commit": "e41416cee0cf0c6fe0c58fe86ecaf2a2006da7ee",
           "line": 1,
           "path": "src/legacy/importer.ts"
         }
       ],
-      "first_commit": "7035baa3927e2ec35781f5ac5f27a3ee6e1caafd",
+      "first_commit": "e41416cee0cf0c6fe0c58fe86ecaf2a2006da7ee",
       "id": "nodeapi:ud:mongodb:positive",
       "introducing_commits": [
-        "7035baa3927e2ec35781f5ac5f27a3ee6e1caafd"
+        "e41416cee0cf0c6fe0c58fe86ecaf2a2006da7ee"
       ],
       "reason": "",
       "repo": "nodeapi",
@@ -493,15 +588,15 @@
       "category": "cloud-sdk",
       "evidence": [
         {
-          "commit": "3dde6239b3c548833e90b54c536769c498601154",
+          "commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
           "line": 1,
           "path": "src/adapters/s3.ts"
         }
       ],
-      "first_commit": "3dde6239b3c548833e90b54c536769c498601154",
+      "first_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
       "id": "nodeapi:ud:aws-sdk:positive",
       "introducing_commits": [
-        "3dde6239b3c548833e90b54c536769c498601154"
+        "497406aed97a2b0615a02fca58b108f2efb2652f"
       ],
       "reason": "",
       "repo": "nodeapi",
@@ -513,15 +608,15 @@
       "category": "vendor-sdk",
       "evidence": [
         {
-          "commit": "6bf57710307d1c9227f3d90e9074b42944635ba7",
+          "commit": "0e82cd953535a868734a4b8e0863edee138a61c0",
           "line": 1,
           "path": "src/billing.ts"
         }
       ],
-      "first_commit": "6bf57710307d1c9227f3d90e9074b42944635ba7",
+      "first_commit": "0e82cd953535a868734a4b8e0863edee138a61c0",
       "id": "nodeapi:ud:stripe:positive",
       "introducing_commits": [
-        "6bf57710307d1c9227f3d90e9074b42944635ba7"
+        "0e82cd953535a868734a4b8e0863edee138a61c0"
       ],
       "reason": "",
       "repo": "nodeapi",
@@ -533,15 +628,15 @@
       "category": "vendor-sdk",
       "evidence": [
         {
-          "commit": "6bf57710307d1c9227f3d90e9074b42944635ba7",
+          "commit": "0e82cd953535a868734a4b8e0863edee138a61c0",
           "line": 1,
           "path": "src/mail.ts"
         }
       ],
-      "first_commit": "6bf57710307d1c9227f3d90e9074b42944635ba7",
+      "first_commit": "0e82cd953535a868734a4b8e0863edee138a61c0",
       "id": "nodeapi:ud:sendgrid:positive",
       "introducing_commits": [
-        "6bf57710307d1c9227f3d90e9074b42944635ba7"
+        "0e82cd953535a868734a4b8e0863edee138a61c0"
       ],
       "reason": "",
       "repo": "nodeapi",
@@ -553,15 +648,15 @@
       "category": "search",
       "evidence": [
         {
-          "commit": "cc2059500a0c4cd63779e347516c0ee15a674e49",
+          "commit": "4fea2821ac9b060d02b75a4358fb2e8e94288827",
           "line": 1,
           "path": "test/search.test.ts"
         }
       ],
-      "first_commit": "cc2059500a0c4cd63779e347516c0ee15a674e49",
+      "first_commit": "4fea2821ac9b060d02b75a4358fb2e8e94288827",
       "id": "nodeapi:ud:elasticsearch:negative",
       "introducing_commits": [
-        "cc2059500a0c4cd63779e347516c0ee15a674e49"
+        "4fea2821ac9b060d02b75a4358fb2e8e94288827"
       ],
       "reason": "nonproduction",
       "repo": "nodeapi",
@@ -573,15 +668,15 @@
       "category": "cloud-sdk",
       "evidence": [
         {
-          "commit": "a181a49ac33dc86f07b5e6d4545958b1ac5c8741",
+          "commit": "6ec6d8715ddb152356f186cf2449763a7f7c508d",
           "line": 1,
           "path": "vendor/aws-sdk-shim/index.js"
         }
       ],
-      "first_commit": "a181a49ac33dc86f07b5e6d4545958b1ac5c8741",
+      "first_commit": "6ec6d8715ddb152356f186cf2449763a7f7c508d",
       "id": "nodeapi:ud:aws-sdk-shim:negative",
       "introducing_commits": [
-        "a181a49ac33dc86f07b5e6d4545958b1ac5c8741"
+        "6ec6d8715ddb152356f186cf2449763a7f7c508d"
       ],
       "reason": "vendored",
       "repo": "nodeapi",

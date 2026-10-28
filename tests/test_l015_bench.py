@@ -374,7 +374,8 @@ def test_scorer_perfect():
     assert res["errors"] == []
     cm = res["confusion"]["full"]
     assert cm["VIOLATED"]["VIOLATED"] == 4 and cm["HOLDING"]["HOLDING"] == 3
-    assert res["confusion"]["core"]["matrix"]["UNKNOWN"]["UNKNOWN"] == 1
+    # UNKNOWN + SKIPPED + DRIFTING truth rows are all folded into the core UNKNOWN row
+    assert res["confusion"]["core"]["matrix"]["UNKNOWN"]["UNKNOWN"] == 3
 
 
 def test_scorer_all_wrong():
@@ -703,3 +704,238 @@ def test_labels_agree_with_the_offline_library(corpus):
     assert res["undocumented"]["negatives_reported"] == []
     assert res["breakdown"]["prompt_injection"]["flipped_to_holding"] == 0
     assert res["localisation"]["accuracy"] == 1.0
+
+
+# ------------------------------------------------------------------------ matrix folding
+
+
+def _matrix_total(m: dict) -> int:
+    return sum(sum(row.values()) for row in m.values())
+
+
+def test_core_matrix_total_equals_full_matrix_total():
+    """Truth rows are folded exactly like prediction columns: nothing is dropped."""
+    for preds in (PERFECT, [], [_p("r1", "ADR-0005", "VIOLATED", [("z.py", 1)])]):
+        res = S.score(synthetic(), preds)
+        cm = res["confusion"]
+        assert _matrix_total(cm["core"]["matrix"]) == _matrix_total(cm["full"]) == 10
+        assert set(cm["core"]["matrix"]) == set(S.CORE)
+
+
+def test_core_matrix_total_on_real_corpus(corpus):
+    truths = corpus[1]
+    n = sum(1 for t in truths.values() for r in t["records"] if r["type"] == "claim")
+    res = S.score(truths, [])
+    cm = res["confusion"]
+    assert _matrix_total(cm["core"]["matrix"]) == _matrix_total(cm["full"]) == n
+
+
+def test_violated_on_drifting_or_skipped_truth_is_a_false_positive():
+    truths = {
+        "r": {
+            "records": [
+                _claim("r", "ADR-0001", "DRIFTING"),
+                _claim("r", "ADR-0002", "SKIPPED"),
+                _claim("r", "ADR-0003", "VIOLATED"),
+                _ev("r", "ADR-0003", "violation", "a.py", 1),
+            ]
+        }
+    }
+    preds = [
+        _p("r", "ADR-0001", "VIOLATED", [("x.py", 1)]),
+        _p("r", "ADR-0002", "VIOLATED", [("y.py", 1)]),
+        _p("r", "ADR-0003", "VIOLATED", [("a.py", 1)]),
+    ]
+    res = S.score(truths, preds)
+    o = res["violated"]["overall"]
+    assert (o["tp"], o["fp"], o["fn"]) == (1, 2, 0)
+    assert o["precision"] == pytest.approx(1 / 3)
+    core = res["confusion"]["core"]["matrix"]
+    # DRIFTING and SKIPPED truth rows land in the UNKNOWN row, so the false VIOLATED shows up
+    assert core["UNKNOWN"]["VIOLATED"] == 2
+    assert core["VIOLATED"]["VIOLATED"] == 1
+    assert _matrix_total(core) == _matrix_total(res["confusion"]["full"]) == 3
+    assert {e["truth"] for e in res["errors"]} == {"DRIFTING", "SKIPPED"}
+
+
+# --------------------------------------------------------------------------- label audit
+
+_NONPROD_DIRS = {"test", "tests", "vendor", "third_party", "testdata", "__tests__"}
+_NONPROD_NAME = re.compile(
+    r"(_test\.go|\.test\.[jt]sx?|Test\.java|IT\.java|^test_.*\.py|requirements-dev\.txt"
+    r"|docker-compose\.test\.ya?ml)$"
+)
+_COMMENT = ("//", "#", "*", "/*", "<!--")
+
+
+def _nonprod_path(path: str) -> bool:
+    parts = path.split("/")
+    return bool(_NONPROD_DIRS & set(parts[:-1])) or bool(_NONPROD_NAME.search(parts[-1]))
+
+
+def _nonprod_line(path: str, lines: list[str], i: int) -> bool:
+    """True when line ``i`` is not production code: test/vendored/dev path, a pure comment,
+    a dev/optional dependency section, or a test-scoped dependency."""
+    text = lines[i].strip()
+    if _nonprod_path(path) or text.startswith(_COMMENT):
+        return True
+    name = path.split("/")[-1]
+    if name == "package.json":
+        for j in range(i, -1, -1):
+            m = re.match(r'\s*"(\w*[dD]ependencies)"\s*:', lines[j])
+            if m:
+                return m.group(1).lower().startswith(("dev", "peer", "optional"))
+    elif name == "pyproject.toml":
+        for j in range(i, -1, -1):
+            if lines[j].startswith("["):
+                return lines[j].strip() == "[project.optional-dependencies]"
+    elif name == "pom.xml":
+        lo = (
+            max(j for j in range(i + 1) if "<dependency>" in lines[j])
+            if any("<dependency>" in lines[j] for j in range(i + 1))
+            else i
+        )
+        hi = next((j for j in range(i, len(lines)) if "</dependency>" in lines[j]), i)
+        return any("<scope>test</scope>" in lines[j] for j in range(lo, hi + 1))
+    elif name.startswith("build.gradle"):
+        return text.startswith(("testImplementation", "testRuntimeOnly", "developmentOnly"))
+    return False
+
+
+def audit_labels(out: Path, truths: dict) -> tuple[int, list[str]]:
+    """Check every HOLDING / VIOLATED / DRIFTING label against the generated repo at HEAD."""
+    problems: list[str] = []
+    checked = 0
+    for name, t in sorted(truths.items()):
+        root = out / name
+        adr_paths = {r["adr_path"] for r in t["records"] if r["type"] == "claim"}
+        files: dict[str, list[str]] = {}
+        for rel in _git(root, "ls-files").split("\n"):
+            if rel and rel not in adr_paths and rel != "README.md":
+                files[rel] = (root / rel).read_text(encoding="utf-8").split("\n")
+        ev: dict[tuple[str, str], list[dict]] = {}
+        for r in t["records"]:
+            if r["type"] == "evidence":
+                ev.setdefault((r["decision_id"], r["role"]), []).append(r)
+
+        def line_of(r: dict, files: dict = files) -> tuple[list[str], int]:
+            lines = files.get(r["path"])
+            if lines is None:
+                raise AssertionError(f"{r['id']}: {r['path']} does not exist at HEAD")
+            if not 1 <= r["line"] <= len(lines):
+                raise AssertionError(f"{r['id']}: line {r['line']} is past the end of the file")
+            return lines, r["line"] - 1
+
+        for c in (r for r in t["records"] if r["type"] == "claim"):
+            if c["status"] not in ("HOLDING", "VIOLATED", "DRIFTING"):
+                continue
+            checked += 1
+            try:
+                _audit_claim(name, c, files, ev, line_of, problems)
+            except AssertionError as exc:
+                problems.append(f"{name} {c['decision_id']} {c['status']}: {exc}")
+    return checked, problems
+
+
+def _audit_claim(name, c, files, ev, line_of, problems) -> None:
+    did, tag = c["decision_id"], f"{name} {c['decision_id']} {c['status']}"
+    terms = [x.lower() for x in c.get("terms", [])]
+    proof = ev.get((did, "proof"), [])
+    allowed = {
+        (d["path"], d["line"])
+        for d in ev.get((did, "decoy"), [])
+        if d.get("decoy_kind") == "allowed-location"
+    }
+    hits = []
+    for path, lines in files.items():
+        for i, ln in enumerate(lines):
+            if any(x in ln.lower() for x in terms):
+                hits.append((path, i + 1, _nonprod_line(path, lines, i)))
+    prod = [(p, n) for p, n, np_ in hits if not np_ and (p, n) not in allowed]
+    nonprod = [(p, n) for p, n, np_ in hits if np_]
+    if c["status"] == "HOLDING":
+        if not terms and not proof:
+            problems.append(f"{tag}: nothing checkable (no terms, no proof)")
+        if prod:
+            problems.append(f"{tag}: forbidden term in production code at {prod}")
+        for p in proof:
+            lines, i = line_of(p)
+            if p["needle"] not in lines[i]:
+                problems.append(f"{tag}: proof {p['path']}:{p['line']} lacks {p['needle']!r}")
+            if _nonprod_line(p["path"], lines, i):
+                problems.append(f"{tag}: proof {p['path']}:{p['line']} is not production code")
+    elif c["status"] == "VIOLATED":
+        viol = ev.get((did, "violation"), [])
+        if not viol or not terms:
+            problems.append(f"{tag}: no seeded violation or no terms")
+        for v in viol:
+            lines, i = line_of(v)
+            if _nonprod_line(v["path"], lines, i):
+                problems.append(f"{tag}: violation {v['path']}:{v['line']} is not production code")
+            if not any(x in lines[i].lower() for x in terms):
+                problems.append(f"{tag}: violation {v['path']}:{v['line']} has none of {terms}")
+    else:  # DRIFTING
+        if not terms:
+            problems.append(f"{tag}: no terms")
+        if prod:
+            problems.append(f"{tag}: production hit at {prod}, so it is VIOLATED")
+        if not nonprod:
+            problems.append(f"{tag}: no non-production evidence exists at all")
+        if ev.get((did, "violation")):
+            problems.append(f"{tag}: has a violation row")
+        for d in ev.get((did, "decoy"), []):
+            lines, i = line_of(d)
+            if not _nonprod_line(d["path"], lines, i):
+                problems.append(f"{tag}: decoy {d['path']}:{d['line']} is production code")
+
+
+def test_labels_are_true_of_the_generated_repos(corpus):
+    """Seeded evidence (or its absence) really exists at the stated file:line for every
+    HOLDING / VIOLATED / DRIFTING record."""
+    out, truths, _ = corpus
+    checked, problems = audit_labels(out, truths)
+    want = sum(
+        1
+        for t in truths.values()
+        for r in t["records"]
+        if r["type"] == "claim" and r["status"] in ("HOLDING", "VIOLATED", "DRIFTING")
+    )
+    assert checked == want >= 80
+    assert not problems, "\n".join(problems)
+
+
+def test_label_audit_catches_a_lying_fixture(tmp_path):
+    """The audit is not vacuous: the original nodeapi defect (a cursor-pagination ADR over a
+    handler with no cursor) and a forbidden import seeded into a HOLDING repo both fail."""
+    truths = build_corpus(tmp_path, ["nodeapi"])
+    root = tmp_path / "nodeapi"
+    assert audit_labels(tmp_path, truths)[1] == []
+    server = root / "src" / "server.ts"
+    server.write_text(
+        "import express from 'express';\nexport const app = express();\n"
+        "app.get('/orders', (_req, res) => res.json([]));\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@e.invalid", "commit", "-qm", "x"],
+        cwd=root,
+        check=True,
+    )
+    (root / "src" / "http" / "legacy.ts").write_text(
+        "import fetch from 'node-fetch';\nexport { fetch };\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@e.invalid", "commit", "-qm", "y"],
+        cwd=root,
+        check=True,
+    )
+    try:
+        _, problems = audit_labels(tmp_path, truths)
+    except AssertionError as exc:  # a proof line that no longer exists is also a failure
+        problems = [str(exc)]
+        pytest.fail(f"audit should report, not raise: {exc}")
+    joined = "\n".join(problems)
+    assert "nodeapi ADR-0008 HOLDING" in joined, joined
+    assert "nodeapi ADR-0003 HOLDING: forbidden term in production code" in joined, joined

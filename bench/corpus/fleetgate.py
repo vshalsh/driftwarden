@@ -44,7 +44,8 @@ def build(out: Path) -> Repo:
             "go.mod": GOMOD,
             "cmd/fleetgate/main.go": (
                 'package main\n\nimport (\n\t"github.com/gin-gonic/gin"\n)\n\n'
-                'func main() {\n\tr := gin.Default()\n\tr.GET("/metrics", func(c *gin.Context) {})\n'
+                'func main() {\n\tr := gin.Default()\n\tr.GET("/metrics", func(c *gin.Context) {\n'
+                '\t\tc.String(200, "# TYPE fleetgate_up gauge\\nfleetgate_up 1\\n")\n\t})\n'
                 "\t_ = r.Run()\n}\n"
             ),
             "internal/store/store.go": (
@@ -72,6 +73,9 @@ def build(out: Path) -> Repo:
         "Gin as web framework",
         "We will use Gin as the web framework.",
         truth="HOLDING",
+        proof=[
+            ("cmd/fleetgate/main.go", "gin.Default()", "call"),
+        ],
         kind="require",
         style="freeform",
         adr_dir=D,
@@ -82,6 +86,7 @@ def build(out: Path) -> Repo:
         "PostgreSQL is the only datastore",
         "PostgreSQL is the only datastore.",
         truth="VIOLATED",
+        terms=("mysql",),
         kind="only",
         style="freeform",
         adr_dir=D,
@@ -96,6 +101,7 @@ def build(out: Path) -> Repo:
         "No logrus",
         "Do not use logrus.",
         truth="HOLDING",
+        terms=("logrus",),
         kind="forbid",
         style="freeform",
         adr_dir=D,
@@ -107,6 +113,7 @@ def build(out: Path) -> Repo:
         "Cloud SDKs only in internal/cloud",
         "No cloud SDK outside internal/cloud/.",
         truth="VIOLATED",
+        terms=("aws-sdk",),
         kind="boundary",
         style="freeform",
         adr_dir=D,
@@ -122,6 +129,7 @@ def build(out: Path) -> Repo:
         "Kafka is the only broker",
         "Kafka is the only message broker.",
         truth="VIOLATED",
+        terms=("nats",),
         kind="only",
         style="freeform",
         adr_dir=D,
@@ -159,6 +167,7 @@ def build(out: Path) -> Repo:
         "No ORMs",
         "We never use ORMs.",
         truth="DRIFTING",
+        terms=("gorm.io",),
         kind="forbid",
         style="nygard",
         adr_dir=D,
@@ -170,6 +179,7 @@ def build(out: Path) -> Repo:
         "Redis import boundary",
         "Redis imports are restricted to internal/cache/.",
         truth="VIOLATED",
+        terms=("go-redis",),
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="restricted-to",
         kind="boundary",
@@ -184,6 +194,9 @@ def build(out: Path) -> Repo:
         "Prometheus metrics",
         "Every service exposes /metrics in Prometheus format.",
         truth="HOLDING",
+        proof=[
+            ("cmd/fleetgate/main.go", "# TYPE fleetgate_up gauge", "prometheus-exposition"),
+        ],
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="free-form",
         style="freeform",
@@ -206,6 +219,7 @@ def build(out: Path) -> Repo:
         "No MongoDB",
         "MongoDB must not be used.",
         truth="HOLDING",
+        terms=("mongo",),
         kind="forbid",
         style="nygard",
         adr_dir=D,

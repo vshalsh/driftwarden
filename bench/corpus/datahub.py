@@ -56,6 +56,10 @@ def build(out: Path) -> Repo:
             "pyproject.toml": PYPROJECT,
             "src/datahub/__init__.py": "",
             "src/datahub/web.py": "from django.http import HttpResponse\n\n\ndef index(request):\n    return HttpResponse('ok')\n",
+            "src/datahub/jobs.py": (
+                'SQL = "insert into batches (batch_id, payload) values (%s, %s) on conflict (batch_id) do nothing"\n\n\n'
+                "def run_batch(cur, batch_id, payload):\n    cur.execute(SQL, (batch_id, payload))\n"
+            ),
             "src/datahub/store/__init__.py": "",
             "src/datahub/store/repo.py": "import sqlalchemy\n\nengine = sqlalchemy.create_engine('postgresql+psycopg://localhost/hub')\n",
             "src/datahub/net.py": "import httpx\n\n\ndef get(url):\n    return httpx.get(url)\n",
@@ -70,6 +74,9 @@ def build(out: Path) -> Repo:
         "Django as web framework",
         "We will use Django as the web framework.",
         truth="HOLDING",
+        proof=[
+            ("src/datahub/web.py", "from django.http", "import"),
+        ],
         kind="require",
         style="madr-fm",
         tags=("supported", "holding"),
@@ -79,6 +86,7 @@ def build(out: Path) -> Repo:
         "PostgreSQL is the only datastore",
         "PostgreSQL is the only datastore.",
         truth="DRIFTING",
+        terms=("mysql",),
         kind="only",
         style="madr-fm",
         decoys=[("pyproject.toml", "mysqlclient", "optional-dependency")],
@@ -89,6 +97,7 @@ def build(out: Path) -> Repo:
         "No requests library",
         "Services must not import the requests library.",
         truth="DRIFTING",
+        terms=("import requests", '"requests'),
         kind="forbid",
         style="madr",
         decoys=[
@@ -102,6 +111,10 @@ def build(out: Path) -> Repo:
         "httpx as HTTP client",
         "We will use httpx as the HTTP client.",
         truth="HOLDING",
+        terms=("import requests", '"requests'),
+        proof=[
+            ("src/datahub/net.py", "import httpx", "import"),
+        ],
         kind="require",
         style="madr",
         tags=("supported", "holding"),
@@ -111,6 +124,7 @@ def build(out: Path) -> Repo:
         "No Celery",
         "Do not use Celery.",
         truth="VIOLATED",
+        terms=("celery",),
         kind="forbid",
         style="madr",
         violation=[
@@ -124,6 +138,7 @@ def build(out: Path) -> Repo:
         "Database access stays in the store package",
         "Database access stays in the store package.",
         truth="VIOLATED",
+        terms=("sqlalchemy",),
         kind="boundary",
         style="madr-fm",
         hint="  boundary:\n    - target: sqlalchemy\n      allowed_in: [src/datahub/store/]",
@@ -137,6 +152,7 @@ def build(out: Path) -> Repo:
         "No pandas in request paths",
         "Never import pandas.",
         truth="VIOLATED",
+        terms=("pandas",),
         kind="forbid",
         style="madr",
         violation=[
@@ -150,6 +166,7 @@ def build(out: Path) -> Repo:
         "No NumPy stubs",
         "Do not use numpy.",
         truth="HOLDING",
+        terms=("numpy",),
         kind="forbid",
         style="madr",
         decoys=[("third_party/numpy_stub/__init__.py", "import numpy", "vendored")],
@@ -161,6 +178,7 @@ def build(out: Path) -> Repo:
         "No Dask",
         "We will not use Dask.",
         truth="HOLDING",
+        terms=("dask",),
         kind="forbid",
         style="madr",
         decoys=[("src/datahub/calc01.py", "dask was too heavy", "comment")],
@@ -195,6 +213,9 @@ def build(out: Path) -> Repo:
         "Batch jobs are idempotent",
         "Batch jobs are idempotent and can be re-run safely.",
         truth="HOLDING",
+        proof=[
+            ("src/datahub/jobs.py", "on conflict (batch_id) do nothing", "idempotent-upsert"),
+        ],
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="free-form",
         style="freeform",
@@ -205,6 +226,10 @@ def build(out: Path) -> Repo:
         "SQLAlchemy is the only ORM",
         "SQLAlchemy is the only ORM.",
         truth="HOLDING",
+        terms=("peewee", "tortoise", "django.db", "pony"),
+        proof=[
+            ("src/datahub/store/repo.py", "create_engine", "orm-usage"),
+        ],
         kind="only",
         style="madr",
         tags=("supported", "holding"),

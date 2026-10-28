@@ -46,7 +46,7 @@ def build(out: Path) -> Repo:
             ),
             "services/orders/app/__init__.py": "",
             "services/orders/app/main.py": ("from fastapi import FastAPI\n\napp = FastAPI()\n"),
-            "services/orders/app/db.py": "import psycopg2\n\n\ndef connect(dsn):\n    return psycopg2.connect(dsn)\n",
+            "services/orders/app/db.py": 'import psycopg2\n\nSCHEMA = "orders"\n\n\ndef connect(dsn):\n    return psycopg2.connect(dsn, options=f"-c search_path={SCHEMA}")\n',
             "services/orders/app/log.py": "import structlog\n\nlog = structlog.get_logger()\n",
             "services/orders/app/cache.py": "import redis\n\nclient = redis.Redis()\n",
             "services/orders/app/events.py": "from kafka import KafkaProducer\n\nproducer = KafkaProducer\n",
@@ -65,7 +65,7 @@ def build(out: Path) -> Repo:
             ),
             "services/billing/cmd/main.go": (
                 'package main\n\nimport (\n\t"github.com/gin-gonic/gin"\n\t"github.com/jackc/pgx/v5"\n)\n\n'
-                "func main() {\n\t_ = gin.Default()\n\t_ = pgx.Connect\n}\n"
+                'const schema = "billing"\n\nfunc main() {\n\t_ = gin.Default()\n\t_ = pgx.Connect\n\t_ = schema\n}\n'
             ),
             "libs/cloud/s3.py": "import boto3\n\n\ndef client():\n    return boto3.client('s3')\n",
         },
@@ -77,6 +77,7 @@ def build(out: Path) -> Repo:
         "React is the only frontend framework",
         "React is our only frontend framework.",
         truth="VIOLATED",
+        terms=("vue",),
         kind="only",
         style="nygard",
         adr_dir=D,
@@ -91,6 +92,7 @@ def build(out: Path) -> Repo:
         "PostgreSQL is the only datastore",
         "PostgreSQL is the only datastore.",
         truth="VIOLATED",
+        terms=("mongo",),
         kind="only",
         style="nygard",
         adr_dir=D,
@@ -106,6 +108,7 @@ def build(out: Path) -> Repo:
         "No requests library",
         "Services must not import the requests library.",
         truth="HOLDING",
+        terms=("import requests", "requests=="),
         kind="forbid",
         style="nygard",
         adr_dir=D,
@@ -117,6 +120,7 @@ def build(out: Path) -> Repo:
         "Cloud SDKs live in libs/cloud",
         "No cloud SDK outside libs/cloud/.",
         truth="VIOLATED",
+        terms=("boto3",),
         kind="boundary",
         style="nygard",
         adr_dir=D,
@@ -129,6 +133,7 @@ def build(out: Path) -> Repo:
         "Services talk over Kafka",
         "Services communicate only via Kafka.",
         truth="VIOLATED",
+        terms=("httpx",),
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="communicate-only-via",
         kind="only",
@@ -143,6 +148,7 @@ def build(out: Path) -> Repo:
         "No Celery",
         "We will not use Celery.",
         truth="HOLDING",
+        terms=("celery",),
         kind="forbid",
         style="madr",
         adr_dir=D,
@@ -163,6 +169,9 @@ def build(out: Path) -> Repo:
         "Structured logging",
         "We will use structlog for logging.",
         truth="HOLDING",
+        proof=[
+            ("services/orders/app/log.py", "import structlog", "import"),
+        ],
         kind="require",
         style="madr",
         adr_dir=D,
@@ -173,6 +182,10 @@ def build(out: Path) -> Repo:
         "Python web framework",
         "FastAPI is the only Python web framework.",
         truth="HOLDING",
+        terms=("flask", "django", "import bottle"),
+        proof=[
+            ("services/orders/app/main.py", "from fastapi", "import"),
+        ],
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="scoped-category",
         kind="only",
@@ -196,11 +209,12 @@ def build(out: Path) -> Repo:
         },
     )
     r.commit(
-        "Add Flask admin with Mongo store",
+        "Add FastAPI admin with Mongo store and error tracking",
         {
-            "services/admin/requirements.txt": "flask==3.0.2\npymongo==4.6.2\n",
+            "services/admin/requirements.txt": "fastapi==0.110.0\npymongo==4.6.2\nsentry-sdk==1.40.0\n",
             "services/admin/app/__init__.py": "",
-            "services/admin/app/web.py": "from flask import Flask\n\napp = Flask(__name__)\n",
+            "services/admin/app/web.py": "from fastapi import FastAPI\n\napp = FastAPI()\n",
+            "services/admin/app/errors.py": "import sentry_sdk\n\nsentry_sdk.init()\n",
             "services/admin/app/store.py": "import pymongo\n\nclient = pymongo.MongoClient\n",
         },
     )
@@ -231,6 +245,10 @@ def build(out: Path) -> Repo:
         "Redis is the only cache",
         "Redis is the only cache.",
         truth="HOLDING",
+        terms=("memcache",),
+        proof=[
+            ("services/orders/app/cache.py", "import redis", "import"),
+        ],
         kind="only",
         style="nygard",
         adr_dir=D,
@@ -262,6 +280,10 @@ def build(out: Path) -> Repo:
         "Database per service",
         "Each service owns its schema and shares no tables.",
         truth="HOLDING",
+        proof=[
+            ("services/orders/app/db.py", 'SCHEMA = "orders"', "own-schema"),
+            ("services/billing/cmd/main.go", 'const schema = "billing"', "own-schema"),
+        ],
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="free-form",
         style="freeform",
@@ -289,7 +311,7 @@ def build(out: Path) -> Repo:
     r.filler(3, _filler)
 
     r.undocumented("mongodb", "datastore", [("services/admin/app/store.py", "import pymongo")])
-    r.undocumented("flask", "web-framework", [("services/admin/app/web.py", "from flask")])
+    r.undocumented("sentry", "vendor-sdk", [("services/admin/app/errors.py", "import sentry_sdk")])
     r.undocumented(
         "httpx", "http-client", [("services/orders/app/billing_client.py", "import httpx")]
     )

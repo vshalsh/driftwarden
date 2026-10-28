@@ -87,6 +87,7 @@ class _Decision:
     row: dict[str, Any]
     violation: list[tuple[str, str, str]]
     decoys: list[tuple[str, str, str]]
+    proof: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -214,6 +215,8 @@ class Repo:
         kind: str | None = None,
         violation: list[tuple[str, str, str]] | None = None,
         decoys: list[tuple[str, str, str]] | None = None,
+        terms: tuple[str, ...] = (),
+        proof: list[tuple[str, str, str]] | None = None,
         tags: tuple[str, ...] = (),
         context: str | None = None,
         hint: str | None = None,
@@ -224,7 +227,17 @@ class Repo:
         consequences: str | None = None,
     ) -> str:
         """Write an ADR and declare its ground truth. ``offline`` is None (the offline rule
-        library is expected to reach ``truth``) or ``UNKNOWN_OR_SKIPPED`` (it cannot)."""
+        library is expected to reach ``truth``) or ``UNKNOWN_OR_SKIPPED`` (it cannot).
+
+        Label audit (tests/test_l015_bench.py): ``terms`` is the vocabulary the label hinges
+        on (case-insensitive substrings). HOLDING: no term may occur in production code at
+        HEAD (tests, vendored code, dev/optional dependency sections and comments do not
+        count). VIOLATED: every seeded violation line is production code and contains a term.
+        DRIFTING: no production hit, at least one non-production hit. ``proof`` lists
+        ``(path, needle, kind)`` lines that must exist, emitted as ``role=proof`` evidence
+        rows with the resolved line; a HOLDING decision needs ``proof`` and/or ``terms``
+        so its label is checkable.
+        """
         assert truth in ("HOLDING", "VIOLATED", "DRIFTING", "UNKNOWN", "SKIPPED"), truth
         assert offline in (None, "UNKNOWN_OR_SKIPPED"), offline
         slug = "".join(c if c.isalnum() else "-" for c in title.lower()).strip("-")[:40]
@@ -281,8 +294,9 @@ class Repo:
             "kind": kind,
             "tags": list(tags),
             "note": note,
+            "terms": list(terms),
         }
-        self._decisions.append(_Decision(num, row, violation or [], decoys or []))
+        self._decisions.append(_Decision(num, row, violation or [], decoys or [], proof or []))
         return path
 
     # ------------------------------------------------------------------ undocumented
@@ -349,6 +363,22 @@ class Repo:
                         "path": path,
                         "line": line,
                         "kind": kind,
+                        "introduced_commit": sha,
+                    }
+                )
+            for path, needle, kind in d.proof:
+                line, sha, _ = self._locate(path, needle)
+                records.append(
+                    {
+                        "type": "evidence",
+                        "role": "proof",
+                        "repo": self.name,
+                        "id": f"{self.name}:{row['decision_id']}:p:{path}:{line}",
+                        "decision_id": row["decision_id"],
+                        "path": path,
+                        "line": line,
+                        "kind": kind,
+                        "needle": needle,
                         "introduced_commit": sha,
                     }
                 )

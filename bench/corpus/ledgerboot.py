@@ -98,6 +98,9 @@ def build(out: Path) -> Repo:
         "Record architecture decisions",
         "We will use Architecture Decision Records, as described by Michael Nygard.",
         truth="HOLDING",
+        proof=[
+            (".adr-dir", "doc/arch", "adr-dir"),
+        ],
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="meta",
         style="adrtools",
@@ -109,6 +112,13 @@ def build(out: Path) -> Repo:
         "Spring Boot as application framework",
         "We will use Spring Boot as the application framework.",
         truth="HOLDING",
+        proof=[
+            (
+                "src/main/java/com/acme/ledger/LedgerApplication.java",
+                "@SpringBootApplication",
+                "annotation",
+            ),
+        ],
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="category-not-in-catalog",
         kind="require",
@@ -121,6 +131,7 @@ def build(out: Path) -> Repo:
         "PostgreSQL is the only datastore",
         "PostgreSQL is the only datastore.",
         truth="VIOLATED",
+        terms=("mongo",),
         kind="only",
         style="adrtools",
         adr_dir=D,
@@ -137,6 +148,7 @@ def build(out: Path) -> Repo:
         "No OkHttp",
         "Services must not use OkHttp.",
         truth="DRIFTING",
+        terms=("okhttp",),
         kind="forbid",
         style="adrtools",
         adr_dir=D,
@@ -151,6 +163,14 @@ def build(out: Path) -> Repo:
         "Kafka as sole broker",
         "Kafka will be the sole message broker.",
         truth="HOLDING",
+        terms=("rabbit", "activemq", "pulsar"),
+        proof=[
+            (
+                "src/main/java/com/acme/ledger/events/Publisher.java",
+                "import org.apache.kafka",
+                "import",
+            ),
+        ],
         kind="only",
         style="adrtools",
         adr_dir=D,
@@ -162,6 +182,7 @@ def build(out: Path) -> Repo:
         "Cloud SDKs only in the gateway package",
         "No cloud SDK outside com/acme/ledger/gateway/.",
         truth="VIOLATED",
+        terms=("software.amazon.awssdk",),
         kind="boundary",
         style="adrtools",
         adr_dir=D,
@@ -186,6 +207,9 @@ def build(out: Path) -> Repo:
         "Logback logging",
         "We will use Logback for logging.",
         truth="HOLDING",
+        proof=[
+            ("pom.xml", "logback-classic", "dependency"),
+        ],
         kind="require",
         style="adrtools",
         adr_dir=D,
@@ -199,6 +223,14 @@ def build(out: Path) -> Repo:
         "Money as integer minor units",
         "All monetary amounts are stored as integer minor units.",
         truth="HOLDING",
+        terms=("double amount", "float amount", "bigdecimal"),
+        proof=[
+            (
+                "src/main/java/com/acme/ledger/billing/Money.java",
+                "long minorUnits",
+                "integer-minor-units",
+            ),
+        ],
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="free-form",
         style="adrtools",
@@ -222,6 +254,7 @@ def build(out: Path) -> Repo:
         "Cassandra",
         "We decided not to use Cassandra.",
         truth="HOLDING",
+        terms=("cassandra",),
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="decided-not-to",
         kind="forbid",
@@ -254,6 +287,21 @@ def build(out: Path) -> Repo:
         "Stripe in billing only",
         "Stripe may be imported only from com/acme/ledger/billing/.",
         truth="HOLDING",
+        terms=("import com.stripe",),
+        decoys=[
+            (
+                "src/main/java/com/acme/ledger/billing/Charges.java",
+                "import com.stripe.Stripe",
+                "allowed-location",
+            )
+        ],
+        proof=[
+            (
+                "src/main/java/com/acme/ledger/billing/Charges.java",
+                "import com.stripe.Stripe",
+                "import",
+            ),
+        ],
         kind="boundary",
         style="adrtools",
         adr_dir=D,
@@ -264,6 +312,14 @@ def build(out: Path) -> Repo:
         "Hibernate is the only ORM",
         "Hibernate is the only ORM.",
         truth="HOLDING",
+        terms=("mybatis", "jooq", "eclipse.persistence", "ebean"),
+        proof=[
+            (
+                "src/main/java/com/acme/ledger/store/Account.java",
+                "import org.hibernate.Session",
+                "import",
+            ),
+        ],
         kind="only",
         style="adrtools",
         adr_dir=D,
@@ -303,6 +359,11 @@ def build(out: Path) -> Repo:
             f"{J}/billing/Charges.java": (
                 "package com.acme.ledger.billing;\n\nimport com.stripe.Stripe;\n\n"
                 "public class Charges {\n    String v = Stripe.VERSION;\n}\n"
+            ),
+            f"{J}/billing/Money.java": (
+                "package com.acme.ledger.billing;\n\n"
+                "// amounts are integer minor units (cents), never floating point\n"
+                "public record Money(long minorUnits, String currency) {}\n"
             ),
             f"{J}/notify/Sms.java": (
                 "package com.acme.ledger.notify;\n\nimport com.twilio.Twilio;\n\n"

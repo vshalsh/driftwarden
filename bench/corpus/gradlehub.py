@@ -68,6 +68,15 @@ def build(out: Path) -> Repo:
                 "package com.acme.hub.net;\n\nimport okhttp3.OkHttpClient;\n\n"
                 "public class Fetch {\n    OkHttpClient client = new OkHttpClient();\n}\n"
             ),
+            f"{J}/web/ApiErrors.java": (
+                "package com.acme.hub.web;\n\nimport org.springframework.http.ResponseEntity;\n"
+                "import org.springframework.web.bind.annotation.ExceptionHandler;\n"
+                "import org.springframework.web.bind.annotation.RestControllerAdvice;\n\n"
+                "@RestControllerAdvice\npublic class ApiErrors {\n    @ExceptionHandler(Exception.class)\n"
+                "    ResponseEntity<String> handle(Exception e) {\n        return ResponseEntity.status(500)\n"
+                '            .header("Content-Type", "application/problem+json")\n'
+                '            .body("{\\"title\\":\\"Internal error\\",\\"status\\":500}");\n    }\n}\n'
+            ),
             f"{J}/infra/Blob.java": (
                 "package com.acme.hub.infra;\n\nimport com.google.cloud.storage.Storage;\n\n"
                 "public class Blob {\n    Storage storage;\n}\n"
@@ -87,6 +96,13 @@ def build(out: Path) -> Repo:
         "Spring Boot as web framework",
         "We will use Spring Boot as the web framework.",
         truth="HOLDING",
+        proof=[
+            (
+                "src/main/java/com/acme/hub/HubApplication.java",
+                "@SpringBootApplication",
+                "annotation",
+            ),
+        ],
         kind="require",
         style="madr-fm",
         adr_dir=D,
@@ -97,6 +113,7 @@ def build(out: Path) -> Repo:
         "MySQL is the only datastore",
         "MySQL is the only datastore.",
         truth="VIOLATED",
+        terms=("postgres",),
         kind="only",
         style="madr-fm",
         adr_dir=D,
@@ -111,6 +128,7 @@ def build(out: Path) -> Repo:
         "No Hibernate",
         "Do not use Hibernate.",
         truth="DRIFTING",
+        terms=("hibernate",),
         kind="forbid",
         style="madr",
         adr_dir=D,
@@ -125,6 +143,7 @@ def build(out: Path) -> Repo:
         "Cloud SDKs only in infra",
         "Cloud SDKs must not be used outside com/acme/hub/infra/.",
         truth="VIOLATED",
+        terms=("google.cloud.storage",),
         kind="boundary",
         style="madr",
         adr_dir=D,
@@ -140,6 +159,7 @@ def build(out: Path) -> Repo:
         "RabbitMQ is the sole broker",
         "RabbitMQ will be the sole message broker.",
         truth="VIOLATED",
+        terms=("kafka",),
         kind="only",
         style="madr",
         adr_dir=D,
@@ -154,6 +174,7 @@ def build(out: Path) -> Repo:
         "No Jedis",
         "We do not talk to Redis from Java.",
         truth="HOLDING",
+        terms=("redis", "jedis", "lettuce"),
         kind="forbid",
         style="madr-fm",
         adr_dir=D,
@@ -166,6 +187,7 @@ def build(out: Path) -> Repo:
         "No Stripe",
         "Do not use Stripe.",
         truth="VIOLATED",
+        terms=("stripe",),
         kind="forbid",
         style="madr",
         adr_dir=D,
@@ -181,6 +203,13 @@ def build(out: Path) -> Repo:
         "Problem JSON errors",
         "Controllers return problem+json errors.",
         truth="HOLDING",
+        proof=[
+            (
+                "src/main/java/com/acme/hub/web/ApiErrors.java",
+                "application/problem+json",
+                "error-media-type",
+            ),
+        ],
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="free-form",
         style="freeform",
@@ -234,6 +263,7 @@ def build(out: Path) -> Repo:
         "Database drivers in the persistence layer",
         "Database drivers may only be imported from com/acme/hub/store/.",
         truth="VIOLATED",
+        terms=("org.postgresql",),
         phrasing="category-boundary",
         kind="boundary",
         style="madr",
@@ -246,6 +276,10 @@ def build(out: Path) -> Repo:
         "OkHttp is the only HTTP client",
         "OkHttp is the only HTTP client.",
         truth="HOLDING",
+        terms=("apache.http", "retrofit", "java.net.http", "resttemplate", "webclient"),
+        proof=[
+            ("src/main/java/com/acme/hub/net/Fetch.java", "import okhttp3.OkHttpClient", "import"),
+        ],
         kind="only",
         style="madr",
         adr_dir=D,

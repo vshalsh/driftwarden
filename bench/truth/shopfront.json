@@ -9,6 +9,7 @@
   "counts": {
     "claim": 15,
     "evidence_decoy": 4,
+    "evidence_proof": 5,
     "evidence_violation": 7,
     "undocumented": 6
   },
@@ -31,6 +32,9 @@
       "tags": [
         "supported",
         "violated"
+      ],
+      "terms": [
+        "pymongo"
       ],
       "title": "PostgreSQL is the only datastore",
       "type": "claim"
@@ -72,6 +76,9 @@
       "tags": [
         "supported",
         "violated"
+      ],
+      "terms": [
+        "boto3"
       ],
       "title": "Cloud SDKs live in adapters",
       "type": "claim"
@@ -126,8 +133,24 @@
         "holding",
         "adversarial"
       ],
+      "terms": [
+        "import requests",
+        "requests=="
+      ],
       "title": "No requests library",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "id": "shopfront:ADR-0003:p:src/shopfront/http.py:2",
+      "introduced_commit": "08f6510786244a51d439c4914e4142b724c521d8",
+      "kind": "import",
+      "line": 2,
+      "needle": "import urllib.request",
+      "path": "src/shopfront/http.py",
+      "repo": "shopfront",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "decision_id": "ADR-0003",
@@ -156,8 +179,21 @@
         "supported",
         "holding"
       ],
+      "terms": [],
       "title": "Structured logging",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "id": "shopfront:ADR-0004:p:src/shopfront/log.py:1",
+      "introduced_commit": "d9875d2de77bbf5af7ac7a8a5c85a4bfb616195a",
+      "kind": "import",
+      "line": 1,
+      "needle": "import structlog",
+      "path": "src/shopfront/log.py",
+      "repo": "shopfront",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/adr/0005-no-celery.md",
@@ -175,6 +211,9 @@
         "supported",
         "adversarial",
         "dev-only"
+      ],
+      "terms": [
+        "celery"
       ],
       "title": "No Celery",
       "type": "claim"
@@ -206,8 +245,21 @@
         "supported",
         "holding"
       ],
+      "terms": [],
       "title": "FastAPI as web framework",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0006",
+      "id": "shopfront:ADR-0006:p:src/shopfront/app.py:1",
+      "introduced_commit": "d9875d2de77bbf5af7ac7a8a5c85a4bfb616195a",
+      "kind": "import",
+      "line": 1,
+      "needle": "from fastapi",
+      "path": "src/shopfront/app.py",
+      "repo": "shopfront",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/adr/0007-graphql-for-the-public-api.md",
@@ -225,6 +277,7 @@
         "skipped",
         "proposed"
       ],
+      "terms": [],
       "title": "GraphQL for the public API",
       "type": "claim"
     },
@@ -244,6 +297,7 @@
         "skipped",
         "superseded"
       ],
+      "terms": [],
       "title": "Redis cache",
       "type": "claim"
     },
@@ -263,8 +317,23 @@
         "supported",
         "holding"
       ],
+      "terms": [
+        "redis"
+      ],
       "title": "Memcached cache",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0009",
+      "id": "shopfront:ADR-0009:p:src/shopfront/cache.py:1",
+      "introduced_commit": "675ad862d18d4a5fafa0d1ba068c2a2331bae92b",
+      "kind": "import",
+      "line": 1,
+      "needle": "from pymemcache",
+      "path": "src/shopfront/cache.py",
+      "repo": "shopfront",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/adr/0010-health-endpoint.md",
@@ -282,8 +351,21 @@
         "unsupported-phrasing",
         "holding"
       ],
+      "terms": [],
       "title": "Health endpoint",
       "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0010",
+      "id": "shopfront:ADR-0010:p:src/shopfront/app.py:6",
+      "introduced_commit": "d9875d2de77bbf5af7ac7a8a5c85a4bfb616195a",
+      "kind": "route",
+      "line": 6,
+      "needle": "@app.get(\"/healthz\")",
+      "path": "src/shopfront/app.py",
+      "repo": "shopfront",
+      "role": "proof",
+      "type": "evidence"
     },
     {
       "adr_path": "docs/adr/0011-message-broker.md",
@@ -300,6 +382,9 @@
       "tags": [
         "unsupported-phrasing",
         "violated"
+      ],
+      "terms": [
+        "pika"
       ],
       "title": "Message broker",
       "type": "claim"
@@ -343,6 +428,9 @@
         "violated",
         "prompt-injection"
       ],
+      "terms": [
+        "elasticsearch"
+      ],
       "title": "No Elasticsearch",
       "type": "claim"
     },
@@ -384,6 +472,7 @@
         "qualifier",
         "unknown"
       ],
+      "terms": [],
       "title": "Sentry only in production",
       "type": "claim"
     },
@@ -403,6 +492,7 @@
         "skipped",
         "rejected"
       ],
+      "terms": [],
       "title": "DynamoDB for sessions",
       "type": "claim"
     },
@@ -422,6 +512,7 @@
         "skipped",
         "deprecated"
       ],
+      "terms": [],
       "title": "Flask admin",
       "type": "claim"
     },

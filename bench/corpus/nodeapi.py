@@ -53,7 +53,14 @@ def build(out: Path) -> Repo:
             "tsconfig.json": '{ "compilerOptions": { "strict": true, "target": "es2022" } }\n',
             "src/server.ts": (
                 "import express from 'express';\n\nexport const app = express();\n"
-                "app.get('/orders', (_req, res) => res.json([]));\n"
+                "const orders: { id: number }[] = [];\n\n"
+                "app.get('/orders', (req, res) => {\n"
+                "  const limit = Math.min(Number(req.query.limit ?? 20), 100);\n"
+                "  const after = Number(req.query.cursor ?? 0);\n"
+                "  const page = orders.filter((o) => o.id > after).slice(0, limit);\n"
+                "  const nextCursor = page.length === limit ? String(page[page.length - 1].id) : null;\n"
+                "  res.json({ items: page, nextCursor });\n"
+                "});\n"
             ),
             "src/db/pool.ts": ("import { Pool } from 'pg';\n\nexport const pool = new Pool();\n"),
             "src/http/client.ts": (
@@ -82,6 +89,9 @@ def build(out: Path) -> Repo:
         "Express as web framework",
         "We will use Express as the web framework.",
         truth="HOLDING",
+        proof=[
+            ("src/server.ts", "import express", "import"),
+        ],
         kind="require",
         style="madr",
         adr_dir=D,
@@ -92,6 +102,7 @@ def build(out: Path) -> Repo:
         "Single datastore: PostgreSQL",
         "We keep a single datastore for orders.",
         truth="VIOLATED",
+        terms=("mongoose",),
         kind="only",
         style="madr-fm",
         adr_dir=D,
@@ -108,6 +119,7 @@ def build(out: Path) -> Repo:
         "No node-fetch",
         "Services must not import node-fetch.",
         truth="HOLDING",
+        terms=("node-fetch",),
         kind="forbid",
         style="madr",
         adr_dir=D,
@@ -119,6 +131,9 @@ def build(out: Path) -> Repo:
         "Axios as HTTP client",
         "We will use axios as the HTTP client.",
         truth="HOLDING",
+        proof=[
+            ("src/http/client.ts", "import axios", "import"),
+        ],
         kind="require",
         style="madr",
         adr_dir=D,
@@ -129,6 +144,7 @@ def build(out: Path) -> Repo:
         "Cloud SDKs only in adapters",
         "No cloud SDK outside src/adapters/.",
         truth="VIOLATED",
+        terms=("@aws-sdk/",),
         kind="boundary",
         style="madr",
         adr_dir=D,
@@ -154,6 +170,10 @@ def build(out: Path) -> Repo:
         "Redis as the only cache",
         "Redis will be the only cache.",
         truth="HOLDING",
+        terms=("memcache",),
+        proof=[
+            ("src/cache.ts", "import Redis", "import"),
+        ],
         kind="only",
         style="madr",
         adr_dir=D,
@@ -174,6 +194,10 @@ def build(out: Path) -> Repo:
         "Cursor pagination",
         "Public API responses are paginated with cursor tokens.",
         truth="HOLDING",
+        proof=[
+            ("src/server.ts", "const nextCursor", "cursor-pagination"),
+            ("src/server.ts", "req.query.cursor", "cursor-pagination"),
+        ],
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="free-form",
         style="freeform",
@@ -185,6 +209,7 @@ def build(out: Path) -> Repo:
         "No Sequelize",
         "The team decided not to use Sequelize.",
         truth="VIOLATED",
+        terms=("sequelize",),
         offline="UNKNOWN_OR_SKIPPED",
         phrasing="decided-not-to",
         kind="forbid",
@@ -201,6 +226,7 @@ def build(out: Path) -> Repo:
         "No Winston",
         "Do not use Winston.",
         truth="VIOLATED",
+        terms=("winston",),
         kind="forbid",
         style="madr",
         adr_dir=D,
@@ -262,6 +288,7 @@ def build(out: Path) -> Repo:
         "No lodash in services",
         "Services must not import lodash.",
         truth="DRIFTING",
+        terms=("lodash",),
         kind="forbid",
         style="madr",
         adr_dir=D,
@@ -276,6 +303,7 @@ def build(out: Path) -> Repo:
         "No heavyweight date libraries",
         "We avoid heavyweight date libraries.",
         truth="HOLDING",
+        terms=("moment",),
         kind="forbid",
         style="madr-fm",
         adr_dir=D,
@@ -309,6 +337,7 @@ def build(out: Path) -> Repo:
         "No Twilio",
         "Do not use Twilio.",
         truth="HOLDING",
+        terms=("twilio",),
         kind="forbid",
         style="madr",
         adr_dir=D,
