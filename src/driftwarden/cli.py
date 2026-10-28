@@ -100,15 +100,15 @@ def _default_out(root: Path) -> Path:
                 ignore.write_text("# Written by driftwarden scan; run output, not source.\n*\n")
             except OSError as exc:
                 err.print(
-                    f"[yellow]warning:[/yellow] could not write {escape(str(ignore))}: "
-                    f"{escape(exc.strerror or str(exc))}; the ledger may show in git status"
+                    f"[yellow]warning:[/yellow] could not write {safe(str(ignore))}: "
+                    f"{safe(exc.strerror or str(exc))}; the ledger may show in git status"
                 )
         return base
     for alt in _fallback_dirs(root):
         if _writable(alt):
             err.print(
-                f"[yellow]warning:[/yellow] cannot write {escape(str(base))}; "
-                f"writing the grounding ledger to {escape(str(alt))} instead (use --out DIR)",
+                f"[yellow]warning:[/yellow] cannot write {safe(str(base))}; "
+                f"writing the grounding ledger to {safe(str(alt))} instead (use --out DIR)",
                 highlight=False,
             )
             return alt
@@ -131,17 +131,17 @@ def _resolve_provider(requested: str, cfg, root: Path) -> tuple[str, object | No
         provider = get_provider(cfg.model_copy(update={"mode": requested}), root)
     except Exception as exc:  # noqa: BLE001 - any init failure: fallback or exit 2
         if requested == "llm":
-            err.print(f"[red]error:[/red] LLM provider failed to initialise: {escape(str(exc))}")
+            err.print(f"[red]error:[/red] LLM provider failed to initialise: {safe(str(exc))}")
             raise typer.Exit(2) from exc
         err.print(
             f"[yellow]warning:[/yellow] LLM provider failed to initialise "
-            f"({escape(str(exc))}); falling back to offline mode",
+            f"({safe(str(exc))}); falling back to offline mode",
             highlight=False,
         )
         return "offline", None
     if provider.offline:
         reason = getattr(provider, "reason", "offline mode")
-        err.print(f"[dim]auto mode: {escape(reason)}[/dim]", highlight=False)
+        err.print(f"[dim]auto mode: {safe(reason)}[/dim]", highlight=False)
         return "offline", None
     return "llm", provider
 
@@ -152,12 +152,23 @@ def _loc(path: str, a: int, b: int, commit: str) -> str:
     return f"{path}:{lines}@{sha}"
 
 
-def terminal_safe(text: str) -> str:
-    """``text`` with every control, format or separator character except newline and tab
-    replaced by a visible ``\\uXXXX`` escape, so it cannot drive the terminal."""
+def safe(value: object) -> str:
+    """THE output helper (L-028 D3): every repo-, user- or OS-derived value the CLI prints
+    goes through here. ``terminal_safe`` first (ESC, OSC-8, C1, bidi and other control /
+    format characters, and newlines, become visible ``\\uXXXX``, so one value is one inert
+    line), then rich ``escape`` (so ``[...]`` is never markup). ``tests/test_l028_pipeline``
+    checks with an AST walk that no f-string value printed by this module bypasses it."""
+    return escape(terminal_safe(str(value), multiline=False))
+
+
+def terminal_safe(text: str, *, multiline: bool = True) -> str:
+    """``text`` with every control, format or separator character replaced by a visible
+    ``\\uXXXX`` escape, so it cannot drive the terminal. ``multiline`` keeps newline and tab
+    (for a whole document such as a draft); otherwise they are escaped too."""
     out = []
+    keep = "\n\t" if multiline else ""
     for ch in text:
-        if ch in "\n\t":
+        if ch in keep:
             out.append(ch)
         elif unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") or ch == "\x7f":
             out.append(f"\\u{ord(ch):04x}")
@@ -193,56 +204,56 @@ def _print_report(report: Report) -> None:
             assert v is not None
             src = c.source
             console.print(
-                f"  {escape(c.id)}  {escape(rule_text(c))}  "
-                f"{escape(_loc(src.path, src.line_start, src.line_end, src.commit))}",
+                f"  {safe(c.id)}  {safe(rule_text(c))}  "
+                f"{safe(_loc(src.path, src.line_start, src.line_end, src.commit))}",
                 highlight=False,
             )
-            console.print(f"    {escape(v.rationale)}", highlight=False)
+            console.print(f"    {safe(v.rationale)}", highlight=False)
             for ev in v.evidence:
                 r = ev.ref
                 console.print(
-                    f"    evidence  {escape(_loc(r.path, r.line_start, r.line_end, r.commit))}"
-                    f"  {escape(_detail(ev))}",
+                    f"    evidence  {safe(_loc(r.path, r.line_start, r.line_end, r.commit))}"
+                    f"  {safe(_detail(ev))}",
                     highlight=False,
                 )
     skipped = [c for c in report.claims if not c.judged]
     for cr in skipped:
         console.print(
-            f"[dim]not judged {escape(cr.id)}: {escape(cr.not_judged_reason or '')}[/dim]",
+            f"[dim]not judged {safe(cr.id)}: {safe(cr.not_judged_reason or '')}[/dim]",
             highlight=False,
         )
     for item in report.could_not_verify:
         check = f" [{item.check_id}]" if item.check_id else ""
         reason = "; ".join(item.reasons)
         console.print(
-            f"[red]Could not verify[/red] {item.kind} {escape(item.id)}{escape(check)}: "
-            f"{escape(reason)}",
+            f"[red]Could not verify[/red] {safe(item.kind)} {safe(item.id)}{safe(check)}: "
+            f"{safe(reason)}",
             highlight=False,
         )
     for rec in report.undocumented:
         first = rec.introducing_commits[0][:7] if rec.introducing_commits else "?"
         console.print(
-            f"[yellow]Undocumented[/yellow] {escape(rec.id)}: {escape(rec.title)} "
-            f"(introduced {first})",
+            f"[yellow]Undocumented[/yellow] {safe(rec.id)}: {safe(rec.title)} "
+            f"(introduced {safe(first)})",
             highlight=False,
         )
         for ev in rec.evidence:
             r = ev.ref
             console.print(
-                f"    evidence  {escape(_loc(r.path, r.line_start, r.line_end, r.commit))}"
-                f"  {escape(_detail(ev))}",
+                f"    evidence  {safe(_loc(r.path, r.line_start, r.line_end, r.commit))}"
+                f"  {safe(_detail(ev))}",
                 highlight=False,
             )
     for d in report.drafts:
         console.print(
-            f"Draft ADR for {escape(d.record_id)}: {escape(d.title)} -> suggested path "
-            f"{escape(d.path or '?')} (shown only, not written)",
+            f"Draft ADR for {safe(d.record_id)}: {safe(d.title)} -> suggested path "
+            f"{safe(d.path or '?')} (shown only, not written)",
             highlight=False,
         )
         # The verified markdown, as inert text: never parsed as rich markup, and any
         # control / format character (ANSI escapes included) shown as a visible escape.
         console.print(
-            Panel(Text(terminal_safe(d.markdown or "")), title=escape(d.path or d.record_id)),
+            Panel(Text(terminal_safe(d.markdown or "")), title=safe(d.path or d.record_id)),
             highlight=False,
             soft_wrap=False,
         )
@@ -310,7 +321,7 @@ def scan(
     """
     fmts = _parse_formats(format)
     if not path.exists():
-        err.print(f"[red]error:[/red] path does not exist: {path}")
+        err.print(f"[red]error:[/red] path does not exist: {safe(path)}")
         raise typer.Exit(2)
     # Config errors are reported first (D-002): a broken config is a usage error the
     # user must see even when the path is also not a git repository.
@@ -323,18 +334,19 @@ def scan(
     try:
         cfg = load_config(root, config)
     except ConfigError as exc:
-        err.print(f"[red]config error:[/red] {escape(str(exc))}")
+        err.print(f"[red]config error:[/red] {safe(str(exc))}")
         raise typer.Exit(2) from exc
     if git_error is not None:
-        err.print(f"[red]error:[/red] {git_error}")
+        err.print(f"[red]error:[/red] {safe(git_error)}")
         raise typer.Exit(2) from git_error
 
     requested = cfg.mode if mode is Mode.auto else mode.value
     resolved, provider = _resolve_provider(requested, cfg, root)
 
-    console.print(f"driftwarden {__version__} - scan {root}")
+    console.print(f"driftwarden {__version__} - scan {safe(root)}")
     console.print(
-        f"mode={resolved} formats={','.join(fmts) or '(none)'} config={cfg.source or 'defaults'}",
+        f"mode={resolved} formats={','.join(fmts) or '(none)'} "
+        f"config={safe(cfg.source or 'defaults')}",
         highlight=False,
     )
 
@@ -342,20 +354,20 @@ def scan(
     if result.head is None:
         console.print("[yellow]note:[/yellow] repository has no commits; reading working tree")
     for rel, msg in result.errors:
-        err.print(f"[yellow]warning:[/yellow] could not read {rel}: {msg}")
+        err.print(f"[yellow]warning:[/yellow] could not read {safe(rel)}: {safe(msg)}")
     for rel, note in result.skipped:
-        console.print(f"[yellow]skipped[/yellow] {escape(rel)}: {escape(note)}", highlight=False)
+        console.print(f"[yellow]skipped[/yellow] {safe(rel)}: {safe(note)}", highlight=False)
 
     if out is not None:
         if not _writable(out):
-            err.print(f"[red]error:[/red] cannot write ledger to {escape(str(out))}; use --out DIR")
+            err.print(f"[red]error:[/red] cannot write ledger to {safe(str(out))}; use --out DIR")
             raise typer.Exit(2)
         ledger_base = out
     else:
         try:
             ledger_base = _default_out(root)
         except LedgerLocationError as exc:
-            err.print(f"[red]error:[/red] cannot write ledger to {escape(str(exc))}; use --out DIR")
+            err.print(f"[red]error:[/red] cannot write ledger to {safe(str(exc))}; use --out DIR")
             raise typer.Exit(2) from exc
     ledger = Ledger(ledger_base)
     try:
@@ -369,7 +381,7 @@ def scan(
             adrs=result,
         )
     except git.GitError as exc:
-        err.print(f"[red]error:[/red] {escape(str(exc))}")
+        err.print(f"[red]error:[/red] {safe(str(exc))}")
         raise typer.Exit(2) from exc
 
     decisions = report.decisions
@@ -381,12 +393,14 @@ def scan(
         commit = "worktree" if src.commit == WORKTREE else src.commit[:7]
         lines = f"{src.path}:{src.line_start}-{src.line_end}@{commit}"
         g = "[green]VERIFIED[/green]" if dec.g1.status == "VERIFIED" else "[red]MISMATCH[/red]"
-        table.add_row(escape(dec.id), escape(dec.title), dec.status, dec.format, escape(lines), g)
+        table.add_row(
+            safe(dec.id), safe(dec.title), safe(dec.status), safe(dec.format), safe(lines), g
+        )
     console.print(table)
     for dec in decisions:
         if not dec.judged and dec.g1.status == "VERIFIED":
             console.print(
-                f"[dim]not judged {escape(dec.id)}: {escape(dec.not_judged_reason or '')}[/dim]",
+                f"[dim]not judged {safe(dec.id)}: {safe(dec.not_judged_reason or '')}[/dim]",
                 highlight=False,
             )
 
@@ -408,16 +422,16 @@ def scan(
 
     _print_report(report)
     ledger.write_summary()
-    console.print(f"Ledger: {ledger.path}", highlight=False, soft_wrap=True)
+    console.print(f"Ledger: {safe(ledger.path)}", highlight=False, soft_wrap=True)
 
     if json_out is not None:
         try:
             json_out.parent.mkdir(parents=True, exist_ok=True)
             json_out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
         except OSError as exc:
-            err.print(f"[red]error:[/red] cannot write {escape(str(json_out))}: {escape(str(exc))}")
+            err.print(f"[red]error:[/red] cannot write {safe(str(json_out))}: {safe(str(exc))}")
             raise typer.Exit(2) from exc
-        console.print(f"Report JSON: {json_out}", highlight=False, soft_wrap=True)
+        console.print(f"Report JSON: {safe(json_out)}", highlight=False, soft_wrap=True)
     if fmts:
         console.print(
             "[dim]--format: report file formats arrive in L-012/L-013; nothing was written "

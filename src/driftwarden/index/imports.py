@@ -459,7 +459,7 @@ def parse_go_mod(text: str) -> tuple[str | None, list[tuple[str, str]]]:
     module = m.group(1) if m else None
     replaces: list[tuple[str, str]] = []
     in_block = False
-    for raw in text.splitlines():
+    for raw in text.split("\n"):  # as the go tool does; not splitlines() (L-028 D2 audit)
         line = raw.split("//", 1)[0].strip()
         if line.startswith("replace") and line.rstrip().endswith("("):
             in_block = True

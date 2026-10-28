@@ -266,7 +266,8 @@ def shallow_boundary(repo: str | Path) -> frozenset[str]:
         text = p.read_text(encoding="utf-8")
     except OSError:
         return frozenset()
-    return frozenset(line.strip() for line in text.splitlines() if line.strip())
+    lines = text.split("\n")  # git's format; not splitlines() (L-028 D2 audit)
+    return frozenset(line.strip() for line in lines if line.strip())
 
 
 def list_dir(repo: str | Path, commit: str, directory: str) -> list[str]:

@@ -62,6 +62,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from driftwarden import __version__, git
 from driftwarden.claims.structure import resolve_mode, structure_scan
 from driftwarden.config import Config
@@ -173,21 +175,52 @@ def _not_judged_reason(dec: Decision, g1: GroundingResult) -> str | None:
     return None
 
 
-def _ledger_rows(ledger: Ledger, start: int) -> list[dict[str, Any]]:
-    """Rows this run appended to ``ledger`` (those after line ``start``)."""
+def _ledger_lines(ledger: Ledger) -> list[str]:
+    """The ledger's JSONL records. Split on "\\n" ONLY (D2): the ledger is written with
+    ``ensure_ascii=False``, so NEL, U+2028 and U+2029 can sit unescaped inside a record,
+    and ``str.splitlines()`` would cut the record there. The empty string after the
+    trailing newline is dropped."""
     try:
-        lines = ledger.path.read_text(encoding="utf-8").splitlines()
+        text = ledger.path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
-    rows = [json.loads(line) for line in lines[start:] if line.strip()]
-    return [r for r in rows if r.get("run_id") == ledger.run_id]
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+_ROW_KEYS = {"run_id": str, "check_id": str, "status": str, "reason": str}
+
+
+def _ledger_rows(ledger: Ledger, start: int) -> tuple[list[dict[str, Any]], list[str]]:
+    """Rows this run appended to ``ledger`` (after record ``start``), and a reason for
+    every record that is not a valid row. Bad records are reported, never a crash."""
+    rows: list[dict[str, Any]] = []
+    bad: list[str] = []
+    for n, line in enumerate(_ledger_lines(ledger)[start:], start + 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError as exc:
+            bad.append(f"{ledger.path.name} record {n} is not valid JSON ({exc})")
+            continue
+        if not isinstance(row, dict) or any(
+            not isinstance(row.get(k), t) for k, t in _ROW_KEYS.items()
+        ):
+            bad.append(f"{ledger.path.name} record {n} is not a grounding result row")
+            continue
+        if row["status"] not in ("VERIFIED", "MISMATCH"):
+            bad.append(f"{ledger.path.name} record {n} has unknown status {row['status']!r}")
+            continue
+        if row["run_id"] == ledger.run_id:
+            rows.append(row)
+    return rows, bad
 
 
 def _line_count(ledger: Ledger) -> int:
-    try:
-        return len(ledger.path.read_text(encoding="utf-8").splitlines())
-    except FileNotFoundError:
-        return 0
+    return len(_ledger_lines(ledger))
 
 
 def grounding_summary(rows: list[dict[str, Any]]) -> GroundingSummary:
@@ -448,24 +481,24 @@ def run_scan(
     seen: set[tuple] = {
         (g.check_id, g.subject or "", g.reason) for g in reported if g.status != "VERIFIED"
     }
-    rows = _ledger_rows(ledger, start)
+    rows, bad_rows = _ledger_rows(ledger, start)
     for r in rows:
         if r["status"] == "VERIFIED":
             continue
-        subject = r.get("subject") or ""
+        subject = r.get("subject") if isinstance(r.get("subject"), str) else ""
         key = (r["check_id"], subject, r["reason"])
         if key in seen:
             continue
         seen.add(key)
-        items.append(
-            UnverifiedItem(
-                kind="check",
-                id=subject or r["check_id"],
-                check_id=r["check_id"],
-                reasons=[r["reason"]],
-                provenance=r.get("provenance"),
-            )
-        )
+        item = dict(kind="check", id=subject or r["check_id"], check_id=r["check_id"],
+                    reasons=[r["reason"]])  # fmt: skip
+        try:
+            items.append(UnverifiedItem(**item, provenance=r.get("provenance")))
+        except ValidationError:  # an unreadable provenance must not hide the failure
+            items.append(UnverifiedItem(**item))
+    for n, why in enumerate(bad_rows, 1):
+        # A ledger record that cannot be read is itself a grounding gap: report it.
+        items.append(UnverifiedItem(kind="check", id=f"ledger-record-{n}", reasons=[why]))
     items = _sort_items(items)
 
     claim_ids: dict[str, list[str]] = {}

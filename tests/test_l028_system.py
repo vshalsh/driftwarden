@@ -1517,11 +1517,7 @@ def _hostile_repo(tmp: Path, surface: str) -> Path:
     return repo
 
 
-LEAKING_SURFACES = {
-    "title": "D3: the Decisions table prints dec.title through rich escape() only, "
-    "so ESC / bidi / C1 in an ADR title reach the terminal (terminal_safe is applied to the "
-    "draft panel only). Also on main.",
-}
+LEAKING_SURFACES: dict[str, str] = {}  # D3 fixed: every printed value goes through cli.safe
 SURFACES = ["title", "decision", "subject", "filename"]
 
 
@@ -1574,7 +1570,6 @@ def test_draft_markup_like_text_is_not_parsed_as_rich_markup(tmp_path):
 # --------------------------------------------------------------------------- D2 ledger split
 
 
-@pytest.mark.xfail(strict=True, reason="D2: pipeline._ledger_rows/_line_count use str.splitlines()")
 @pytest.mark.parametrize("ch", ["\u2028", "\u2029", "\x85"])
 def test_unicode_line_separators_in_ledger_rows_do_not_crash_a_scan(ch, tmp_path):
     """A line separator inside a path lands unescaped in a ledger JSON line (ensure_ascii is

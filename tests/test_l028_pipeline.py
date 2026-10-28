@@ -483,3 +483,113 @@ def test_cli_help_documents_exit_codes():
     plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", res.output)
     for text in ("--json-out", "--draft-adrs", "Exit codes", "VIOLATED", "mismatch"):
         assert text in plain
+
+
+# Values cli.py may print without safe(): numbers and labels the CLI itself computes.
+# Anything else interpolated into printed text must be safe(...) (D3).
+CLI_TRUSTED_VALUES = {
+    "__version__", "resolved", "len(decisions)", "len(judged)", "report.summary.claims",
+    "len(group)", "by.get(s, 0)", "s", "status", "colour[status]", "cid", "cs.verified",
+    "cs.total", "gs.verified", "gs.total", "rate", "drift", "s.unknown", "s.could_not_verify",
+    "s.undocumented", "s.drafts", "s.exit_code", "g1_ok", "len(result.skipped)",
+    "','.join(fmts) or '(none)'", "', '.join(parts)", "check",
+}  # fmt: skip
+
+
+def _unsafe_print_values() -> list[str]:
+    import ast
+    import inspect
+
+    import driftwarden.cli as mod
+
+    bad: list[str] = []
+    for node in ast.walk(ast.parse(inspect.getsource(mod))):
+        if not isinstance(node, ast.Call):
+            continue
+        name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+        if name not in ("print", "add_row", "Panel", "Text", "Table"):
+            continue
+        for arg in [*node.args, *(k.value for k in node.keywords)]:
+            for sub in ast.walk(arg):
+                if not isinstance(sub, ast.FormattedValue):
+                    continue
+                v = sub.value
+                if isinstance(v, ast.Call) and getattr(v.func, "id", None) == "safe":
+                    continue
+                if sub.format_spec is not None or ast.unparse(v) in CLI_TRUSTED_VALUES:
+                    continue
+                bad.append(f"line {sub.lineno}: {ast.unparse(v)}")
+            if name in ("add_row", "Text"):
+                for a in node.args:
+                    plain_call = isinstance(a, ast.Call) and getattr(a.func, "id", None) in (
+                        "safe", "terminal_safe")  # fmt: skip
+                    if not (plain_call or isinstance(a, ast.Constant) or ast.unparse(a) == "g"):
+                        bad.append(f"line {a.lineno}: {name}({ast.unparse(a)})")
+    return sorted(set(bad))
+
+
+def test_malformed_ledger_record_is_reported_not_a_crash(pyshop, tmp_path, monkeypatch):
+    """D2: a record that is not valid JSON (or not a row) becomes a 'check' item."""
+    import driftwarden.pipeline as pipeline
+
+    real = pipeline.detect_undocumented
+
+    def corrupting(*a, **k):
+        led = k["ledger"]
+        with led.path.open("a", encoding="utf-8") as fh:
+            fh.write('{"half a row\n[1, 2]\n{"run_id": "x", "check_id": "G2"}\n')
+        return real(*a, **k)
+
+    monkeypatch.setattr(pipeline, "detect_undocumented", corrupting)
+    r = scan(pyshop, tmp_path)
+    bad = [i for i in r.could_not_verify if i.id.startswith("ledger-record-")]
+    assert len(bad) == 3 and all(i.kind == "check" and i.reasons for i in bad)
+    assert "not valid JSON" in bad[0].reasons[0]
+    assert Report.model_validate_json(r.model_dump_json()) == r
+
+
+@pytest.mark.parametrize("ch", [" ", " ", "\x85"])
+def test_line_separator_in_a_path_keeps_ledger_and_summary_whole(ch, make_repo, tmp_path):
+    repo = make_repo(
+        {
+            "docs/adr/0001-a.md": ADR.format(n=1, title="No Celery", status="Accepted"),
+            f"app/odd{ch}name.py": "import celery\n",
+        }
+    )
+    ledger = Ledger(tmp_path / "lg")
+    r = run_scan(repo, config=Config(), mode="offline", ledger=ledger)
+    rows = ledger.path.read_text(encoding="utf-8").split("\n")[:-1]
+    assert r.grounding_summary.total == len(rows) == len([json.loads(x) for x in rows])
+    v = by_id(r)["ADR-0001.c1"].verdict
+    # L-023 rule: a path with a control/separator character never verifies, so the finding
+    # is Could not verify (fail closed) with the reason, never a crash and never a fact.
+    assert (v.status, v.grounding, v.proposed_status) == ("UNKNOWN", "MISMATCH", "VIOLATED")
+    assert any("control character" in x for x in v.reasons)
+    assert any(i.kind == "verdict" and i.claim_id == "ADR-0001.c1" for i in r.could_not_verify)
+    assert not any(i.id.startswith("ledger-record-") for i in r.could_not_verify)
+
+
+def test_gitignore_and_go_mod_split_on_newline_only(tmp_path):
+    from driftwarden.index.files import GitIgnore
+    from driftwarden.index.imports import parse_go_mod
+
+    p = tmp_path / ".gitignore"
+    p.write_text("build out\r\nlogs\n", encoding="utf-8")
+    gi = GitIgnore.from_file(p)
+    assert gi.match("build out", False) is True  # one pattern, as git reads it
+    assert gi.match("out", False) is None and gi.match("logs", False) is True
+    mod, replaces = parse_go_mod("module x\n// a replace a => ./b\n")
+    assert mod == "x" and replaces == []  # the comment line stays one line
+
+
+def test_every_printed_value_goes_through_safe():
+    """D3: an AST walk over cli.py; a new print path that skips safe() fails here."""
+    assert _unsafe_print_values() == []
+
+
+def test_safe_escapes_newlines_controls_and_markup():
+    from driftwarden.cli import safe
+
+    assert safe("a\nb") == "a\\u000ab"
+    assert safe("\x1b]8;;http://e\x1b\\x\u202e") == "\\u001b]8;;http://e\\u001b\\x\\u202e"
+    assert safe("[red]x[/red]") == "\\[red]x\\[/red]"
