@@ -12,36 +12,79 @@ Every finding comes with `file:line@commit` evidence that a deterministic verifi
 
 > 🚧 **Under active development.** v0.1.0 is targeted for 2026-11-02. Progress is tracked in [DELIVERY_LOG.md](DELIVERY_LOG.md).
 
-## Quick start (target for v0.1.0)
+## Quick start
 
 ```bash
-pip install driftwarden
+pip install -e ".[dev]"                     # from a checkout; not on PyPI before v0.1.0
 cd your-repo
-driftwarden scan .                          # uses ANTHROPIC_API_KEY if set, else offline mode
+driftwarden scan .                          # auto: llm if ANTHROPIC_API_KEY is set, else offline
 driftwarden scan . --mode offline           # no network, no key
-driftwarden scan . --format html,sarif,md --out reports/
+driftwarden scan . --json-out report.json   # the full Report as JSON
+driftwarden scan . --draft-adrs             # also draft ADRs for undocumented decisions (shown, never written)
 ```
 
-GitHub Action:
+`scan` runs the whole pipeline: ADR discovery, claim structuring, evidence and judgement at
+HEAD, undocumented-decision detection and (with `--draft-adrs`) ADR drafting. It prints the
+decisions table, the verdicts grouped by status, everything it *could not verify* with the
+reason, the undocumented decisions, each verified ADR draft in full (numbered consecutively,
+never written into the repository) and a grounding summary; every verifier result goes to the
+grounding ledger (`<repo>/.driftwarden/logs/grounding/`, or `--out DIR`). In auto mode, a
+provider that fails to start falls back to offline mode with a warning; `--mode llm` exits 2
+instead. Report files (`--format html,sarif,md`) arrive with L-012/L-013: today `--format`
+writes nothing, and `--json-out` is the one machine-readable output. The drift timeline
+(L-011) is not built yet.
+
+PR mode (`run_scan(..., changed_paths=[...])`, used by the Action in L-014) judges every
+accepted claim exactly as a full scan does, so a change can never hide a violation and the
+exit code counts every verified violation. The changed paths only tag each verdict
+`in_change: true/false` (the claim's ADR file changed, a changed path is one of its evidence
+files or a path its rule names, or, for require/only claims, a file was deleted or renamed or
+a manifest changed), so reports can lead with what the change touches.
+
+GitHub Action (arrives in L-014, not available yet):
 
 ```yaml
 - uses: vshalsh/driftwarden@v0
   with:
-    mode: pr            # only claims touched by this PR's diff
+    mode: pr            # judges every claim; leads with the ones this PR's diff touches
     sarif: true         # findings appear in the Security → Code scanning tab
     comment: true
 ```
 
 ## What a finding looks like
 
+Real output of `driftwarden scan . --mode offline` on the `pyshop` test fixture
+(`tests/fixtures/judge_repos/pyshop`), excerpt:
+
 ```
-VIOLATED  ADR-0007 "PostgreSQL is the only datastore"
-  claim     only(datastore) = [postgresql]           docs/adr/0007-datastore.md:12-14 @ 9f2c1e0
-  evidence  pymongo==4.6 added                        services/catalog/requirements.txt:18 @ a41d7b3
-            from pymongo import MongoClient            services/catalog/repo.py:3 @ a41d7b3
-  since     a41d7b3  "catalog: cache product docs"   (2026-07-14)
-  grounding VERIFIED (G1, G2, G3, G4)
+Verdicts (7 judged of 7 claim(s)): 3 VIOLATED, 1 DRIFTING, 2 HOLDING, 1 UNKNOWN
+VIOLATED (3), grounding VERIFIED
+  ADR-0001.c1  only(datastore) = [PostgreSQL]  docs/adr/0001-postgresql-only.md:13@f9f785c
+    other datastore mongodb used (e1, e2)
+    evidence  requirements.txt:2@f9f785c  declares pymongo ==4.6.1
+    evidence  src/shop/legacy/catalog.py:3@f9f785c  imports pymongo
+...
+Undocumented UD-queue-kafka: Use Kafka as queue / message broker (introduced f9f785c)
+    evidence  requirements.txt:6@f9f785c  declares kafka-python ==2.0.2
+    evidence  src/shop/events.py:1@f9f785c  imports kafka
+Grounding (all checks): 54/54 VERIFIED, pass rate 100.0% [G1 14/14, G2 23/23, G3 7/7, G4 n/a, G5 10/10, G6 n/a]
+Summary: drift score 66.7% (decided claims not HOLDING), 1 UNKNOWN, 0 unverified item(s), 3 undocumented decision(s), 0 draft(s); exit code 1
 ```
+
+Each verdict line is `claim id  rule  ADR file:line@commit`; each evidence line is
+`file:line@commit` plus what is there. Only VERIFIED verdicts are listed under a status.
+Anything that failed a verifier is printed as `Could not verify <kind> <id> [<check>]:
+<reason>` instead. The drift score is the share of decided claims (HOLDING, DRIFTING,
+VIOLATED) that are not HOLDING; UNKNOWN is counted separately.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | No VIOLATED claim and no G1 grounding mismatch |
+| 1 | At least one VERIFIED claim is VIOLATED |
+| 2 | Usage or config error (including `--mode llm` with no usable provider) |
+| 3 | G1 grounding mismatch: an ADR decision or claim quote is not at its cited lines. Wins over 1 |
 
 ## Architecture
 

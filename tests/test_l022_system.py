@@ -200,6 +200,8 @@ def test_repeat_scans_append_not_clobber(repo, tmp_path):
     assert len(list(d.glob("*.summary.json"))) == 3
     for j in jsonls:
         rows = [json.loads(line) for line in j.read_text(encoding="utf-8").splitlines()]
+        # L-028: claim-level rows follow the one decision-level G1 row.
+        rows = [r for r in rows if r["check_id"] == "G1" and "." not in r["subject"]]
         assert len(rows) == 1 and rows[0]["status"] == "VERIFIED"
 
 

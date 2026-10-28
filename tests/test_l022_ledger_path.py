@@ -57,7 +57,10 @@ def test_default_ledger_lands_in_scanned_repo(tmp_path, monkeypatch):
     (jsonl,) = _grounding(repo).glob("*.jsonl")
     (summ,) = _grounding(repo).glob("*.summary.json")
     assert json.loads(jsonl.read_text(encoding="utf-8").splitlines()[0])["status"] == "VERIFIED"
-    assert json.loads(summ.read_text(encoding="utf-8"))["total"] == 1
+    # L-028: the summary also counts claim-level rows; one decision-level G1 row.
+    rows = [json.loads(x) for x in jsonl.read_text(encoding="utf-8").splitlines()]
+    assert json.loads(summ.read_text(encoding="utf-8"))["total"] == len(rows)
+    assert sum(r["check_id"] == "G1" and "." not in r["subject"] for r in rows) == 1
     assert list(elsewhere.iterdir()) == []  # nothing written to CWD
     assert ".driftwarden" in res.output  # the ledger path is printed
 
