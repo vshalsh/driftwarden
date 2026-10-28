@@ -575,14 +575,16 @@ def verify_first_violation(
     ``first_violation`` passes its own); when given, ``entry.head`` must be it. The
     claim is re-judged with a fresh snapshot cache and the offline judge.
 
-    Every field of the entry is checked, re-derived from the repository, or bounded:
+    Principle: every fact the entry asserts about history is re-established from the
+    repository by this function, never taken from the entry's own counters or notes.
+    Every field is checked, re-derived from the repository, or (sampled only) bounded:
 
-    * window: ``head`` is pinned; ``commits_in_window`` = w is 1..len(first-parent
-      history of head); the window is its newest w commits; ``oldest_available`` is
-      the oldest of them (FOUND / TRUNCATED); ``truncated_by`` is re-derived
-      (``shallow`` iff that commit is a .git/shallow boundary, ``max_commits`` iff
-      older history exists, else None). So a head moved to another commit no
-      longer matches its window.
+    * window: ``head`` is a full pinned SHA (never WORKTREE); ``commits_in_window``
+      = w is 1..len(first-parent history of head); the window is its newest w
+      commits; ``oldest_available`` is the oldest of them (FOUND / TRUNCATED);
+      ``truncated_by`` is re-derived (``shallow`` iff that commit is a .git/shallow
+      boundary, ``max_commits`` iff older history exists, else None). So a head
+      moved to another commit no longer matches its window.
     * FOUND, commit C: (a) C is in the window and ``parent`` is C's first parent
       (``None`` only for a true root commit, not a shallow boundary); (b) at C the
       claim is VERIFIED VIOLATED and ``evidence`` equals, item for item and in
@@ -590,24 +592,29 @@ def verify_first_violation(
       or foreign), each item passing G2/G3 (``judge.verify_evidence``); (c) at the
       parent the claim is not VERIFIED VIOLATED; (d) ``subject`` and
       ``author_date`` match ``git log -1`` of C (subject sanitised as in
-      ``undocumented.draft.sanitise_subject``).
+      ``undocumented.draft.sanitise_subject``); (e) the claim is VERIFIED VIOLATED
+      at the pinned head, which is on the first-parent chain above C (the
+      violation is current).
     * ``earlier_transitions``: each is a real held -> violated transition in the
       window, older than C, oldest first, no duplicates. ``non_monotonic`` is
       consistent with them and with ``search``: True needs an earlier transition
       (or a violated window start in a truncated window); False needs none; a
-      ``sampled`` entry must say None and list none. *Not re-derived:* that the
-      list is complete (no unlisted transition); that would need a full re-scan.
+      ``sampled`` entry must say None and list none.
+    * ``exhaustive`` FOUND: every commit of the window is re-judged; C must be the
+      most recent held -> violated transition, and ``earlier_transitions``,
+      ``non_monotonic`` and the gap notes must equal what the fresh judgements give.
     * ``commits_judged``: exactly the window size for ``exhaustive`` and
       TRUNCATED, 1 for NOT_VIOLATED_AT_HEAD; for ``sampled`` only bounded (at
       least the sample count, at most the window): the exact count is unverified
-      metadata.
+      metadata, the one field G4 cannot re-derive without replaying the sampler.
     * ``notes``: the fixed notes are re-derived (``timeline.bisect.entry_notes``)
-      and must match exactly and in order; each per-commit gap note must name a
-      window commit, in history order, and equal the note a fresh judgement of
-      that commit gives. *Not re-derived:* that no gap note is missing.
-    * TRUNCATED: the claim is VERIFIED VIOLATED at ``oldest_available`` with
-      matching evidence, ``search`` is exhaustive, ``non_monotonic`` False, and
-      commit, parent, subject, date and earlier transitions are empty.
+      and must match exactly and in order. Gap notes: re-derived from the full
+      window (exhaustive, TRUNCATED); for ``sampled`` each must name a window
+      commit, in history order, and equal a fresh judgement's note.
+    * TRUNCATED: the claim is VERIFIED VIOLATED at **every** commit of the window
+      (all re-judged; up to the window size, snapshots cached), with matching
+      evidence at ``oldest_available``; ``search`` is exhaustive, ``non_monotonic``
+      False, and commit, parent, subject, date and earlier transitions are empty.
       NOT_VIOLATED_AT_HEAD: the claim is not VERIFIED VIOLATED at head, and every
       commit / evidence / search / window-start field is empty. UNKNOWN entries
       state nothing and get one MISMATCH.
@@ -616,7 +623,10 @@ def verify_first_violation(
       output), when present, must equal this re-verification's results exactly.
 
     Every result has check_id ``G4`` and a precise reason. Cheap structural checks
-    run first; when one fails, no judgement is made. Plain and deterministic, no
+    run first; when one fails, no judgement is made, and the full-window re-judgement
+    runs only once the boundary checks have passed. Cost: an exhaustive or TRUNCATED
+    entry costs one judgement per window commit (about the search's own cost; a
+    fresh snapshot cache, nothing reused from the search). Plain and deterministic, no
     model. Never raises for a bad entry; raises only if ``repo`` is not a git
     repository."""
     root = git.repo_root(repo)
@@ -672,7 +682,12 @@ def _verify_first_violation(
 
     # ---- window -----------------------------------------------------------------
     head = entry.head
-    bad = commit_problem(root, head) if head is not None else "no head commit"
+    if head is None:
+        bad = "no head commit"
+    elif head == WORKTREE:
+        bad = "a timeline head must be a full commit SHA, not the WORKTREE sentinel"
+    else:
+        bad = commit_problem(root, head)
     if bad is not None:
         res(False, f"head: {bad}")
         return out
@@ -835,6 +850,19 @@ def _verify_first_violation(
         _check_gap_notes(gap, [head], jud, res)
         return out
 
+    def scan() -> list:
+        """Every commit of the window judged afresh, oldest first."""
+        return [jud(sha) for sha in window]
+
+    def derived_gap(js: list) -> None:
+        want = tl.gap_notes(list(enumerate(js)))
+        res(
+            gap == want,
+            f"notes: {len(want)} gap note(s) re-derived from the full window"
+            if gap == want
+            else f"notes: gap notes {gap[:3]!r} differ from the full window's {want[:3]!r}",
+        )
+
     if status == "TRUNCATED":
         j = jud(oldest)
         ok = res(
@@ -843,7 +871,18 @@ def _verify_first_violation(
         )
         if ok:
             evidence_at(oldest, j.verdict)
-        _check_gap_notes(gap, window, jud, res)
+        if failed():
+            return out
+        js = scan()
+        held = [window[i] for i, x in enumerate(js) if not x.violated]
+        res(
+            not held,
+            f"window: claim VERIFIED VIOLATED at all {w} commit(s)"
+            if not held
+            else f"window: claim is not violated at {len(held)} of {w} commit(s) (newest "
+            f"{held[-1][:12]}): not violated throughout, so not TRUNCATED",
+        )
+        derived_gap(js)
         return out
 
     # FOUND
@@ -876,7 +915,49 @@ def _verify_first_violation(
             "non_monotonic without earlier transitions needs a violated window start; "
             f"{oldest[:12]} is " + ("violated" if v0 else "not violated"),
         )
-    _check_gap_notes(gap, window, jud, res)
+    # The violation is current: violated at the pinned head, which is above C.
+    vh = jud(head).violated
+    res(
+        vh and pos[c] <= pos[head],
+        f"head {head[:12]}: claim is "
+        + ("VERIFIED VIOLATED" if vh else "not VERIFIED VIOLATED (the violation is not current)")
+        + f"; {c[:12]} is {pos[head] - pos[c]} first-parent commit(s) below it",
+    )
+    if failed():
+        return out
+    if entry.search != "exhaustive":
+        _check_gap_notes(gap, window, jud, res)  # sampled: only what was judged
+        return out
+    # Exhaustive: re-establish the whole window, so "most recent transition", the earlier
+    # transitions, non_monotonic and the gap notes come from fresh judgements, not the entry.
+    js = scan()
+    v = [x.violated for x in js]
+    trans = [i for i in range(1, w) if v[i] and not v[i - 1]]
+    if v[0] and tb is None:
+        trans.insert(0, 0)
+    latest = window[trans[-1]] if trans else None
+    res(
+        latest == c,
+        f"window: {c[:12]} is the most recent held -> violated transition"
+        if latest == c
+        else f"window: the most recent held -> violated transition is "
+        f"{latest[:12] if latest else 'none (violated throughout)'}, not {c[:12]}",
+    )
+    if latest == c:
+        b = pos[c]
+        want_e = [window[i] for i in trans[:-1]]
+        want_nm = any(v[:b])
+        res(
+            list(entry.earlier_transitions) == want_e,
+            f"window: earlier transitions {[x[:12] for x in want_e]}"
+            + ("" if list(entry.earlier_transitions) == want_e else ", entry lists others"),
+        )
+        res(
+            entry.non_monotonic is want_nm,
+            f"window: non_monotonic is {want_nm}"
+            + ("" if entry.non_monotonic is want_nm else f", entry says {entry.non_monotonic}"),
+        )
+    derived_gap(js)
     return out
 
 

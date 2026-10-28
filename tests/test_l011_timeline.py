@@ -705,6 +705,101 @@ def test_g4_stray_fields_on_truncated_and_not_violated(tmp_path):
             assert mismatches(h.path, entry.model_copy(update=upd), claim), (entry.status, upd)
 
 
+# ------------------------------------------------------------------ Codex round 3 (PR #26)
+
+
+def extended(entry, claim, head: str, window: int, **extra):
+    """``entry`` re-pointed at a later ``head`` with a consistent window, re-derived fixed
+    notes and no recorded checks: a forgery that only a re-check of history can catch."""
+    from driftwarden.timeline.bisect import entry_notes
+
+    notes = entry_notes(
+        status=entry.status,
+        head=head,
+        window=window,
+        adr_path=claim.source.path,
+        adr_check=True,
+        search=entry.search,
+        truncated_by=entry.truncated_by,
+        oldest=entry.oldest_available,
+        root_boundary=entry.status == "FOUND" and entry.parent is None,
+        non_monotonic=entry.non_monotonic,
+        earlier=list(entry.earlier_transitions),
+        merge_parents=[entry.parent] if entry.parent else [],
+        commit=entry.first_violating_commit,
+    )
+    upd = {"head": head, "commits_in_window": window, "notes": notes, "checks": [], **extra}
+    if entry.search == "exhaustive" and entry.status != "NOT_VIOLATED_AT_HEAD":
+        upd.setdefault("commits_judged", window)
+    return entry.model_copy(update=upd)
+
+
+def test_g4_rejects_worktree_head_for_every_status(tmp_path):
+    h, shas = forbid_history(tmp_path, 20, set(range(4, 20)))
+    claim = the_claim(h.path, "forbid")
+    entries = [
+        first_violation(h.path, claim),
+        first_violation(h.path, claim, max_commits=6),
+        first_violation(h.path, claim, head=shas[2]),
+    ]
+    assert [e.status for e in entries] == ["FOUND", "TRUNCATED", "NOT_VIOLATED_AT_HEAD"]
+    for e in entries:
+        reasons = mismatches(h.path, e.model_copy(update={"head": "WORKTREE", "checks": []}), claim)
+        assert any("not the WORKTREE sentinel" in r for r in reasons), (e.status, reasons)
+
+
+def test_g4_truncated_forged_extension_across_a_holding_interval(tmp_path):
+    v = set(range(20)) | set(range(25, 30))  # all-violated prefix, held 20-24, violated again
+    h, shas = forbid_history(tmp_path, 30, v)
+    claim = the_claim(h.path, "forbid")
+    t = first_violation(h.path, claim, head=shas[19], max_commits=10)
+    assert t.status == "TRUNCATED" and t.oldest_available == shas[10]
+    assert t.grounding == "VERIFIED"
+    forged = extended(t, claim, shas[29], 20)
+    reasons = mismatches(h.path, forged, claim)
+    assert any("not violated throughout" in r for r in reasons), reasons
+    assert first_violation(h.path, claim, max_commits=20).status == "FOUND"
+
+
+def test_g4_found_forged_extension_to_a_holding_head(tmp_path):
+    h, shas = forbid_history(tmp_path, 30, set(range(10, 20)))  # holding, violated, holding
+    claim = the_claim(h.path, "forbid")
+    e = first_violation(h.path, claim, head=shas[19])
+    found(h.path, e, claim, shas[10], shas[9])
+    forged = extended(e, claim, shas[29], 30)
+    reasons = mismatches(h.path, forged, claim)
+    assert any("the violation is not current" in r for r in reasons), reasons
+    assert first_violation(h.path, claim).status == "NOT_VIOLATED_AT_HEAD"
+
+
+def test_g4_found_forged_extension_hides_a_later_transition(tmp_path):
+    v = set(range(10, 20)) | set(range(25, 30))
+    h, shas = forbid_history(tmp_path, 30, v)
+    claim = the_claim(h.path, "forbid")
+    e = first_violation(h.path, claim, head=shas[19])
+    found(h.path, e, claim, shas[10], shas[9])
+    assert e.non_monotonic is False
+    forged = extended(e, claim, shas[29], 30)
+    reasons = mismatches(h.path, forged, claim)
+    assert any("most recent held -> violated transition is" in r for r in reasons), reasons
+
+
+def test_g4_truncated_300_commit_timing(tmp_path, perf_factor):
+    h, shas = forbid_history(tmp_path, 305, set(range(305)), name="trunc300")
+    claim = the_claim(h.path, "forbid")
+    t0 = time.perf_counter()
+    e = first_violation(h.path, claim, max_commits=300)
+    total = time.perf_counter() - t0
+    assert e.status == "TRUNCATED" and e.grounding == "VERIFIED", e.reasons
+    assert e.commits_judged == 300
+    t0 = time.perf_counter()
+    results = verify_first_violation(h.path, e, claim)
+    g4 = time.perf_counter() - t0
+    assert all(r.status == "VERIFIED" for r in results)
+    print(f"\n300-commit TRUNCATED: search+G4 {total:.2f}s, G4 alone {g4:.2f}s")
+    assert g4 < 20.0 * perf_factor, g4
+
+
 # ------------------------------------------------------------------ G4 over every FOUND entry
 
 
