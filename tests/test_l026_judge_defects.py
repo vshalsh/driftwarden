@@ -545,3 +545,41 @@ def test_d1_listed_twin_stays_unknown_offline_and_with_a_model(make_repo, monkey
     # control: the exact spelling still resolves and decides
     exact = offline(repo, claim("boundary", {"target": ["payments"], "allowed_in": ["billing/"]}))
     assert exact.status == "VIOLATED", exact.rationale
+
+
+TF_JSON_ACME = '{"terraform": {"required_providers": {"acme": {"source": "mycorp/acme"}}}}\n'
+ENCODED = {
+    "utf-8-bom": TF_JSON_ACME.encode("utf-8-sig"),
+    "crlf": TF_JSON_ACME.replace("\n", "\r\n").encode("utf-8"),
+    "utf-16-bom": TF_JSON_ACME.encode("utf-16"),
+}
+
+
+@pytest.mark.parametrize("encoding", sorted(ENCODED))
+def test_d3_encoded_tf_json_does_not_disable_implicit_inference(make_repo, encoding):
+    """A .tf.json that parse_manifest reads (BOM / CRLF / UTF-16, normalised by
+    _prepare) is not "unreadable" for the local-name lookup: `provider "random" {}`
+    with no `random` declaration is still hashicorp/random (PR #20 review)."""
+    repo = make_repo({"infra/main.tf": 'provider "random" {}\n'})
+    (repo / "infra/versions.tf.json").write_bytes(ENCODED[encoding])
+    _git(repo, "add", "infra/versions.tf.json")
+    _git(repo, "commit", "-q", "-m", "encoded tf.json")
+    v = offline(repo, claim("forbid", {"forbid": ["hashicorp/acme"]}))
+    assert v.status == "HOLDING"  # the declaration is mycorp/acme, parsed through encoding
+    acme = offline(repo, claim("forbid", {"forbid": ["mycorp/acme"]}))
+    assert acme.status == "VIOLATED", acme.rationale
+    v = offline(repo, claim("forbid", {"forbid": ["hashicorp/random"]}))
+    assert v.status == "VIOLATED", v.rationale
+    grounded(repo, v)
+    dep = v.evidence[0].dependency
+    assert dep is not None and dep.package == "random"
+    assert verify_dependency(repo, dep).status == "VERIFIED"
+
+
+def test_d3_garbage_tf_json_still_blocks_inference(make_repo):
+    repo = make_repo({"infra/main.tf": 'provider "random" {}\n'})
+    (repo / "infra/versions.tf.json").write_bytes(b"\xff\xfe\x00\x01\x02garbage{")
+    _git(repo, "add", "infra/versions.tf.json")
+    _git(repo, "commit", "-q", "-m", "garbage tf.json")
+    v = offline(repo, claim("forbid", {"forbid": ["hashicorp/random"]}))
+    assert v.status != "VIOLATED", v.rationale

@@ -551,8 +551,11 @@ def _declared_provider_locals(snap: Snapshot) -> dict[str, set[str] | None]:
             names = None
         else:
             try:
+                # Same normalisation as parse_manifest (BOM, mis-decoded UTF-16), so a
+                # file the manifest layer reads is never "unreadable" here.
+                clean = _prepare(text)
                 names = {
-                    n.lower() for n in terraform_manifest.required_provider_locals(text, m.path)
+                    n.lower() for n in terraform_manifest.required_provider_locals(clean, m.path)
                 }
             except Exception:  # noqa: BLE001 - any parse failure means "unknown"
                 names = None
