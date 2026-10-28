@@ -561,3 +561,212 @@ def verify_commits_exist(
             reason += f" and is in the history of {str(ancestor_of)[:12]}"
         out.append(_result(None, ok, reason, check_id, subject))
     return out
+
+
+# --------------------------------------------------------------------------- G4
+
+
+def _first_parent_set(root: Path, head: str) -> set[str]:
+    return set(git._run(["rev-list", "--first-parent", f"{head}^{{commit}}"], root).split())
+
+
+def _g4_violated(root: Path, claim, commit: str, config, adr_check: bool):
+    """(violated, verdict, why) for ``claim`` at ``commit``, judged from scratch:
+    offline judge, own snapshot, no cache. Violated = VIOLATED with VERIFIED
+    grounding, and (when ``adr_check``) the claim's ADR file exists at ``commit``."""
+    from driftwarden.judge.judge import Judge
+
+    if adr_check and git.blob_at(root, commit, claim.source.path) is None:
+        return False, None, f"ADR {claim.source.path} not present"
+    try:
+        verdict = Judge(root, commit=commit, mode="offline", config=config).judge(claim)
+    except git.NotAGitRepoError:
+        raise
+    except git.GitError as exc:
+        return False, None, f"tree not readable ({exc})"
+    ok = verdict.status == "VIOLATED" and verdict.grounding == "VERIFIED"
+    return ok, verdict, f"{verdict.status}/{verdict.grounding}"
+
+
+def verify_first_violation(repo: str | Path, entry, claim, config=None) -> list[GroundingResult]:
+    """G4: re-check a drift-timeline entry (``timeline.TimelineEntry``) from scratch.
+
+    For a FOUND entry with commit C:
+
+    (a) C and ``entry.head`` are pinned commits, C is on the first-parent history of
+        head, and ``parent`` is C's first parent (``None`` only for a true root
+        commit, not a shallow-clone boundary);
+    (b) at C the claim is VERIFIED VIOLATED (offline judge, fresh snapshot), the entry
+        cites evidence, every item is cited by that verdict and passes G2/G3
+        (``judge.verify_evidence`` at C);
+    (c) at the parent the claim is not VERIFIED VIOLATED;
+    (d) ``subject`` and ``author_date`` match ``git log -1`` of C (subject sanitised
+        as in ``undocumented.draft.sanitise_subject``).
+
+    TRUNCATED entries: ``oldest_available`` is on head's first-parent history, the
+    claim is VERIFIED VIOLATED there, and the stated truncation is real (a
+    ``.git/shallow`` boundary, or a commit with parents for ``max_commits``).
+    NOT_VIOLATED_AT_HEAD entries: the claim is not VERIFIED VIOLATED at head. UNKNOWN
+    entries state nothing and get one MISMATCH. The ADR-presence rule follows the
+    search: applied iff the claim's ADR file is committed at head.
+
+    Every result has check_id ``G4``; any MISMATCH reason is precise. Plain and
+    deterministic, no model. Never raises for a bad entry; raises only if ``repo``
+    is not a git repository."""
+    root = git.repo_root(repo)
+    subj = f"{getattr(claim, 'id', '?')}/timeline"
+    try:
+        return _verify_first_violation(root, entry, claim, config, subj)
+    except git.NotAGitRepoError:
+        raise
+    except Exception as exc:  # a bad entry is a MISMATCH, never a crash
+        return [_result(None, False, f"could not verify ({type(exc).__name__}: {exc})", "G4", subj)]
+
+
+def _verify_first_violation(root: Path, entry, claim, config, subj: str) -> list[GroundingResult]:
+    from driftwarden.judge.judge import verify_evidence
+
+    out: list[GroundingResult] = []
+
+    def res(ok: bool, reason: str, prov=None) -> None:
+        out.append(_result(prov, ok, reason, "G4", subj))
+
+    if entry.claim_id != claim.id:
+        res(False, f"entry is for claim {entry.claim_id!r}, not {claim.id!r}")
+        return out
+    if entry.status == "UNKNOWN":
+        why = "; ".join(entry.reasons)[:300] or "no reason given"
+        res(False, f"no first-violation result to verify: {why}")
+        return out
+    head = entry.head
+    bad = commit_problem(root, head) if head is not None else "no head commit"
+    if bad is not None:
+        res(False, f"head: {bad}")
+        return out
+    try:
+        adr_check = git.blob_at(root, head, claim.source.path) is not None
+    except git.GitError:
+        adr_check = False
+
+    if entry.status == "NOT_VIOLATED_AT_HEAD":
+        if entry.first_violating_commit is not None:
+            res(False, "a NOT_VIOLATED_AT_HEAD entry must not name a first violating commit")
+        violated, _v, why = _g4_violated(root, claim, head, config, adr_check)
+        res(
+            not violated,
+            f"head {head[:12]}: claim is {why}"
+            + (", not VERIFIED VIOLATED" if not violated else ", but entry says not violated"),
+        )
+        return out
+
+    chain = _first_parent_set(root, head)
+    if entry.status == "TRUNCATED":
+        old = entry.oldest_available
+        if entry.first_violating_commit is not None:
+            res(False, "a TRUNCATED entry must not name a first violating commit (no guessing)")
+        bad = commit_problem(root, old) if old is not None else "no oldest_available commit"
+        if bad is not None:
+            res(False, f"oldest_available: {bad}")
+            return out
+        if old not in chain:
+            res(False, f"{old[:12]} is not on the first-parent history of {head[:12]}")
+            return out
+        if entry.truncated_by == "shallow":
+            ok = old in git.shallow_boundary(root)
+            what = "shallow-clone boundary" if ok else "not a shallow boundary"
+            res(ok, f"{old[:12]}: {what}")
+        elif entry.truncated_by == "max_commits":
+            ok = bool(git.parents(root, old))
+            res(ok, f"{old[:12]}: " + ("has parents beyond the cap" if ok else "is a root commit"))
+        else:
+            res(False, f"unknown truncation {entry.truncated_by!r}")
+        violated, verdict, why = _g4_violated(root, claim, old, config, adr_check)
+        res(violated, f"{old[:12]}: claim is {why}" + ("" if violated else ", not VIOLATED"))
+        if violated:
+            out.extend(_g4_evidence(root, entry.evidence, verdict, old, subj, verify_evidence))
+        return out
+
+    if entry.status != "FOUND":
+        res(False, f"unknown entry status {entry.status!r}")
+        return out
+
+    # (a) commit and parent
+    c = entry.first_violating_commit
+    bad = commit_problem(root, c) if c is not None else "no first_violating_commit"
+    if bad is not None:
+        res(False, f"(a) commit: {bad}")
+        return out
+    if c not in chain:
+        res(False, f"(a) {c[:12]} is not on the first-parent history of {head[:12]}")
+        return out
+    parents = git.parents(root, c)
+    if entry.parent is None:
+        if parents:
+            res(False, f"(a) parent is None but {c[:12]} has first parent {parents[0][:12]}")
+            return out
+        if c in git.shallow_boundary(root):
+            res(False, f"(a) {c[:12]} is a shallow-clone boundary, not a root commit")
+            return out
+        res(True, f"(a) {c[:12]} is the root commit")
+    else:
+        bad = commit_problem(root, entry.parent)
+        if bad is not None:
+            res(False, f"(a) parent: {bad}")
+            return out
+        if not parents or parents[0] != entry.parent:
+            first = parents[0][:12] if parents else "none"
+            res(False, f"(a) {entry.parent[:12]} is not the first parent of {c[:12]} ({first})")
+            return out
+        res(True, f"(a) {entry.parent[:12]} is the first parent of {c[:12]}")
+
+    # (b) violated at C, evidence verifies and is the verdict's
+    violated, verdict, why = _g4_violated(root, claim, c, config, adr_check)
+    if not violated:
+        res(False, f"(b) at {c[:12]} the claim is {why}, not VERIFIED VIOLATED")
+    else:
+        res(True, f"(b) at {c[:12]} the claim is VERIFIED VIOLATED")
+        if not entry.evidence:
+            res(False, f"(b) entry cites no evidence at {c[:12]}")
+        out.extend(_g4_evidence(root, entry.evidence, verdict, c, subj, verify_evidence))
+
+    # (c) not violated at the parent
+    if entry.parent is not None:
+        pv, _v, pwhy = _g4_violated(root, claim, entry.parent, config, adr_check)
+        res(
+            not pv,
+            f"(c) at parent {entry.parent[:12]} the claim is {pwhy}"
+            + (" (not violated)" if not pv else ": already violated, so not the first commit"),
+        )
+
+    # (d) subject and date
+    from driftwarden.undocumented.draft import sanitise_subject
+
+    logs = git.log(root, max_count=1, rev=c)
+    if not logs or logs[0].sha != c:
+        res(False, f"(d) no git log entry for {c[:12]}")
+        return out
+    want_subject = sanitise_subject(logs[0].subject)
+    problems = []
+    if entry.subject != want_subject:
+        problems.append(f"subject {entry.subject!r} != git log {want_subject!r}")
+    if entry.author_date != logs[0].date:
+        problems.append(f"author_date {entry.author_date!r} != git log {logs[0].date!r}")
+    res(not problems, f"(d) {c[:12]}: " + ("; ".join(problems) or "subject and date match"))
+    return out
+
+
+def _g4_evidence(root, evidence, verdict, commit, subj, verify_evidence) -> list[GroundingResult]:
+    """One G4 result per evidence item: cited by ``verdict`` at ``commit`` and G2/G3-verified."""
+    cited = [e.model_dump() for e in verdict.evidence] if verdict is not None else []
+    out = []
+    for ev in evidence:
+        problems = []
+        if ev.model_dump() not in cited:
+            problems.append(f"not among the evidence the verdict at {commit[:12]} cites")
+        for r in verify_evidence(root, ev, commit=commit, subject=subj):
+            if r.status != "VERIFIED":
+                problems.append(f"{r.check_id}: {r.reason}")
+        ok = not problems
+        reason = f"(b) evidence {ev.id}: " + ("; ".join(problems) if problems else "G2/G3 verified")
+        out.append(_result(ev.ref, ok, reason, "G4", subj))
+    return out
