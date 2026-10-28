@@ -1050,6 +1050,21 @@ def _forbid(c: _Collector, es: EvidenceSet) -> None:
         where = _scope_filter(dirs)
         es.notes.append(f"restricted to {', '.join(d + '/' for d in dirs)}")
     hits = c.scan(_techs(res), "forbidden", where=where)
+    if res and not hits:
+        # "Code must not use the payments module" where payments/ is the repository's
+        # own code: the scan sees manifests and external imports only, so finding
+        # nothing proves nothing (L-027).
+        for r in res:
+            if _known_literal(r, c.occ):
+                continue
+            name = target_noun_head(r.term) or r.term
+            found = local_targets(name, c.snap)
+            if found:
+                es.undecidable = es.fail_closed = (
+                    f"{r.term!r} names the repository's own code ({', '.join(found)}), which "
+                    "the forbid rule does not trace"
+                )
+                return
     if not res:
         es.undecidable = f"cannot map {', '.join(map(repr, es.unresolved))} to a technology"
     elif es.unresolved and not hits:
@@ -1138,6 +1153,71 @@ def _only(c: _Collector, es: EvidenceSet) -> None:
     )
 
 
+# A trailing generic noun on a boundary target ("the payments package", "billing
+# module", "payments service"): prose around a name, not part of it (L-027, N1).
+_DETERMINERS = frozenset("the our a an this that these those my your its their".split())
+_TARGET_NOUN = re.compile(
+    r"^(?:(?:the|our|a|an|this|that|these|those|my|your|its|their)\s+)?"
+    r"(?P<head>[^\s]+)\s+(?:packages?|modules?|librar(?:y|ies)|libs?"
+    r"|components?|folders?|director(?:y|ies)|code|services?)$",
+    re.I,
+)
+
+
+def target_noun_head(term: str) -> str | None:
+    """``"The payments package"`` -> ``"payments"``; None when ``term`` is not a
+    single name followed by a generic noun; ``""`` when the only word before the noun
+    is a determiner ("the service", "a module"): no name at all, never the directory
+    the determiner happens to spell (L-027 round 1)."""
+    m = _TARGET_NOUN.match(" ".join(term.strip().strip("`'\"").split()))
+    if m is None:
+        return None
+    head = m.group("head").strip("`'\"")
+    if head.lower() in _DETERMINERS:
+        return ""
+    return head or None
+
+
+def local_targets(name: str, snap: Snapshot) -> list[str]:
+    """Every distinct directory path (ignoring case, matched on trailing path
+    segments) and every locally imported module file named ``name``."""
+    t = name.strip().strip("`'\"")
+    while t.startswith("./"):
+        t = t[2:]
+    want = t.strip("/").lower().split("/")
+    if not want or not want[0] or ".." in want:
+        return []
+    n = len(want)
+    out = {
+        k
+        for k in snap.directories()
+        if len(k.split("/")) >= n and [p.lower() for p in k.split("/")[-n:]] == want
+    }
+    if n == 1:
+        out.update(module_files(want[0], snap))
+    return sorted(out)
+
+
+def _known_literal(r: Resolution | None, occ: list[_Occurrence]) -> bool:
+    """True for a catalog technology / category, or a literal package name that some
+    manifest dependency or external import in the repository matches. False for an
+    unresolvable term and for a literal nothing in the evidence knows (L-027)."""
+    if r is None:
+        return False
+    if r.kind != "literal":
+        return True
+    return any(
+        catalog.name_matches(tech, o.namespace, o.names) for tech in r.technologies for o in occ
+    )
+
+
+def _target_names_nothing(es: EvidenceSet, t: str) -> None:
+    es.undecidable = es.fail_closed = (
+        f"target {t!r} names no repository directory or module file, no catalog technology "
+        "and no package the manifests or imports know; its absence proves nothing"
+    )
+
+
 def _boundary(c: _Collector, es: EvidenceSet) -> None:
     rule = c.claim.rule
     if "via" in rule and "allowed_in" not in rule:
@@ -1164,6 +1244,48 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
     local_dirs: list[str] = []
     module_paths: set[str] = set()
     for t in targets:
+        head = target_noun_head(t)
+        if head == "":
+            es.undecidable = es.fail_closed = (
+                f"target {t!r} is a determiner and a generic noun; it names nothing"
+            )
+            return
+        if head is not None:
+            # "The payments package": the name without its generic noun is used only
+            # when it names exactly one directory or module file of the repository,
+            # and the phrase as written has no other meaning (a catalog technology,
+            # or a package the manifests / imports know). Several local candidates,
+            # or a local candidate and another meaning -> fail closed. No local
+            # candidate -> the phrase as written, which must be a catalog technology
+            # ("the requests library") or a known package; otherwise fail closed.
+            found = local_targets(head, c.snap)
+            full = catalog.resolve(t)
+            if len(found) > 1:
+                es.undecidable = es.fail_closed = (
+                    f"target {t!r} may name any of {', '.join(found)}; cannot tell which"
+                )
+                return
+            if len(found) == 1:
+                if full is not None and (full.kind != "literal" or _known_literal(full, c.occ)):
+                    es.undecidable = es.fail_closed = (
+                        f"target {t!r} may name {found[0]} or {full.label}; the readings "
+                        "differ, cannot tell which is meant"
+                    )
+                    return
+                p = found[0]
+                is_dir = p in set(c.snap.directories())
+                if not is_dir:
+                    module_paths.add(p)  # a module FILE: scanned as itself, never a dir
+                local_dirs.append(p)
+                es.resolved.append(
+                    f"{t} -> {'directory ' + p + '/' if is_dir else 'module file ' + p}"
+                )
+                continue
+            if not _known_literal(full, c.occ):
+                # "The ledger package" with no ledger anywhere: the sentence names a part
+                # of the codebase the evidence cannot find. Absence proves nothing.
+                _target_names_nothing(es, t)
+                return
         # A repo directory only when spelled as one ("payments/") or when it exists;
         # otherwise a technology / package name such as "@aws-sdk/client-s3".
         d = resolve_dir(t, c.snap)

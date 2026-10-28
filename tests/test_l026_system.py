@@ -180,10 +180,8 @@ def test_d1_sentence_variants_never_false_holding(make_repo, sentence):
         assert offline(repo, c).status != "HOLDING", sentence
 
 
-N1 = "N1 (not in L-026 scope; pre-existing on main): target phrase 'payments package' / 'payments module' (noun suffix on a bare directory name) is not resolved to payments/ and silently yields false HOLDING 'target not imported anywhere' while 'payments service/code/directory' correctly fail closed to UNKNOWN"
-
-
-@pytest.mark.xfail(strict=True, reason=N1)
+# N1 (found here, fixed in L-027): 'payments package' / 'payments module' gave a false
+# HOLDING 'target not imported anywhere'. Regression tests: tests/test_l027_target_noun.py.
 @pytest.mark.parametrize("noun", ["package", "module"])
 def test_n1_noun_suffixed_target_not_false_holding(make_repo, noun):
     repo = make_repo(
