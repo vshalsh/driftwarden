@@ -1155,8 +1155,10 @@ def _only(c: _Collector, es: EvidenceSet) -> None:
 
 # A trailing generic noun on a boundary target ("the payments package", "billing
 # module", "payments service"): prose around a name, not part of it (L-027, N1).
+_DETERMINERS = frozenset("the our a an this that these those my your its their".split())
 _TARGET_NOUN = re.compile(
-    r"^(?:(?:the|our|a|an)\s+)?(?P<head>[^\s]+)\s+(?:packages?|modules?|librar(?:y|ies)|libs?"
+    r"^(?:(?:the|our|a|an|this|that|these|those|my|your|its|their)\s+)?"
+    r"(?P<head>[^\s]+)\s+(?:packages?|modules?|librar(?:y|ies)|libs?"
     r"|components?|folders?|director(?:y|ies)|code|services?)$",
     re.I,
 )
@@ -1164,11 +1166,15 @@ _TARGET_NOUN = re.compile(
 
 def target_noun_head(term: str) -> str | None:
     """``"The payments package"`` -> ``"payments"``; None when ``term`` is not a
-    single name followed by a generic noun."""
+    single name followed by a generic noun; ``""`` when the only word before the noun
+    is a determiner ("the service", "a module"): no name at all, never the directory
+    the determiner happens to spell (L-027 round 1)."""
     m = _TARGET_NOUN.match(" ".join(term.strip().strip("`'\"").split()))
     if m is None:
         return None
     head = m.group("head").strip("`'\"")
+    if head.lower() in _DETERMINERS:
+        return ""
     return head or None
 
 
@@ -1239,22 +1245,43 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
     module_paths: set[str] = set()
     for t in targets:
         head = target_noun_head(t)
+        if head == "":
+            es.undecidable = es.fail_closed = (
+                f"target {t!r} is a determiner and a generic noun; it names nothing"
+            )
+            return
         if head is not None:
             # "The payments package": the name without its generic noun is used only
-            # when it names exactly one directory or module file of the repository.
-            # Several -> ambiguous, fail closed. None -> the phrase as written (a
-            # catalog technology such as "the requests library", or a literal that
-            # must be known to the manifests / imports; see below).
+            # when it names exactly one directory or module file of the repository,
+            # and the phrase as written has no other meaning (a catalog technology,
+            # or a package the manifests / imports know). Several local candidates,
+            # or a local candidate and another meaning -> fail closed. No local
+            # candidate -> the phrase as written, which must be a catalog technology
+            # ("the requests library") or a known package; otherwise fail closed.
             found = local_targets(head, c.snap)
+            full = catalog.resolve(t)
             if len(found) > 1:
                 es.undecidable = es.fail_closed = (
                     f"target {t!r} may name any of {', '.join(found)}; cannot tell which"
                 )
                 return
             if len(found) == 1:
-                es.notes.append(f"target {t!r} read as {head!r} ({found[0]})")
-                t = head
-            elif not _known_literal(catalog.resolve(t), c.occ):
+                if full is not None and (full.kind != "literal" or _known_literal(full, c.occ)):
+                    es.undecidable = es.fail_closed = (
+                        f"target {t!r} may name {found[0]} or {full.label}; the readings "
+                        "differ, cannot tell which is meant"
+                    )
+                    return
+                p = found[0]
+                is_dir = p in set(c.snap.directories())
+                if not is_dir:
+                    module_paths.add(p)  # a module FILE: scanned as itself, never a dir
+                local_dirs.append(p)
+                es.resolved.append(
+                    f"{t} -> {'directory ' + p + '/' if is_dir else 'module file ' + p}"
+                )
+                continue
+            if not _known_literal(full, c.occ):
                 # "The ledger package" with no ledger anywhere: the sentence names a part
                 # of the codebase the evidence cannot find. Absence proves nothing.
                 _target_names_nothing(es, t)

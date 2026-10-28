@@ -284,3 +284,103 @@ def test_local_targets_counts_distinct_paths(make_repo):
     assert local_targets("payments", snap) == ["a/payments", "b/Payments"]
     assert local_targets("b/payments", snap) == ["b/Payments"]
     assert local_targets("ledger", snap) == []
+
+
+# ------------------------------------------------------------------ Codex round 1 (PR #23)
+
+DETS = ["the", "a", "an", "our", "this", "that", "these", "those", "my", "your", "its"]
+
+
+@pytest.mark.parametrize("det", DETS)
+@pytest.mark.parametrize("noun", ["service", "module", "package", "lib", "code"])
+def test_determiner_only_head_never_names_a_directory(make_repo, det, noun):
+    """'the service' must not be read as a directory called the/ (P2-1)."""
+    viol = make_repo({f"{det}/x.py": F_, "app/a.py": f"import {det}.x\n", "billing/b.py": F_})
+    hold = make_repo({f"{det}/x.py": F_, "app/a.py": F_, "billing/b.py": f"import {det}.x\n"})
+    for repo in (viol, hold):
+        c = boundary(f"{det} {noun}")
+        assert offline(repo, c).status == "UNKNOWN", (det, noun)
+        assert fail_closed(repo, c)
+        assert llm(repo, c, "VIOLATED").status == "UNKNOWN"
+    assert target_noun_head(f"{det} {noun}") == ""
+
+
+@pytest.mark.parametrize("det", ["The", "A", "An", "Our"])
+def test_determiner_only_sentence_never_decisive(make_repo, det):
+    low = det.lower()
+    repo = make_repo({f"{low}/x.py": F_, "app/a.py": f"import {low}.x\n", "billing/b.py": F_})
+    for c in claims_for(f"{det} service may be imported only from billing/."):
+        assert offline(repo, c).status not in ("HOLDING", "VIOLATED")
+
+
+@pytest.mark.parametrize(
+    "target", ["./payments module", "`./payments` module", "./payments package"]
+)
+def test_relative_module_file_target_scanned_as_the_file(make_repo, target):
+    """A unique module-file match stays a FILE, never reinterpreted as a directory (P2-2)."""
+    viol = make_repo({"payments.py": F_, "app/a.py": "import payments\n", "billing/b.py": F_})
+    v = offline(viol, boundary(target))
+    assert v.status == "VIOLATED", (target, v.status, v.rationale)
+    grounded(viol, v)
+    hold = make_repo({"payments.py": F_, "app/a.py": F_, "billing/b.py": "import payments\n"})
+    assert offline(hold, boundary(target)).status == "HOLDING"
+
+
+@pytest.mark.parametrize(
+    "files,target",
+    [
+        ({"cloud/x.py": F_, "app/a.py": BOTO, "adapters/h.py": F_}, "cloud library"),
+        ({"cloud/x.py": F_, "app/a.py": F_, "adapters/h.py": "import cloud.x\n"}, "cloud library"),
+        (
+            {"redis/c.py": F_, "requirements.txt": "redis==5.0\n", "app/a.py": "import redis\n"},
+            "the redis module",
+        ),
+        ({"aws/c.py": F_, "app/a.py": F_, "adapters/h.py": BOTO}, "aws library"),
+        (
+            {
+                "tinydep/c.py": F_,
+                "requirements.txt": "tinydep==1\n",
+                "app/a.py": "import tinydep\n",
+            },
+            "tinydep package",
+        ),
+    ],
+    ids=[
+        "cloud-boto3-outside",
+        "cloud-dir-only",
+        "redis-dir-and-pkg",
+        "aws-dir",
+        "known-literal-dir",
+    ],
+)
+def test_catalog_meaning_and_local_head_disagree_fail_closed(make_repo, files, target):
+    """Stripping the noun must not drop the phrase's catalog / package meaning (P2-3)."""
+    repo = make_repo(files)
+    c = boundary(target, "adapters/")
+    v = offline(repo, c)
+    assert v.status == "UNKNOWN", (target, v.rationale)
+    assert fail_closed(repo, c)
+    for proposed in ("HOLDING", "VIOLATED"):
+        assert llm(repo, c, proposed).status == "UNKNOWN"
+
+
+@pytest.mark.parametrize("target", ["cloud library", "the cloud SDK library", "aws library"])
+def test_catalog_phrase_without_local_match_unchanged(make_repo, target):
+    viol = make_repo({"app/a.py": BOTO, "adapters/h.py": BOTO})
+    assert offline(viol, boundary(target, "adapters/")).status == "VIOLATED"
+    hold = make_repo({"app/a.py": F_, "adapters/h.py": BOTO})
+    assert offline(hold, boundary(target, "adapters/")).status == "HOLDING"
+
+
+def test_nested_directory_scanned_by_its_full_path(make_repo):
+    """The unique match is used as found (src/payments), not re-resolved by name."""
+    repo = make_repo(
+        {
+            "src/payments/core.py": F_,
+            "app/a.py": "from src.payments import core\n",
+            "billing/b.py": F_,
+        }
+    )
+    v = offline(repo, boundary("payments package"))
+    assert v.status == "VIOLATED", v.rationale
+    grounded(repo, v)

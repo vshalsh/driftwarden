@@ -540,7 +540,7 @@ def test_article_named_directory_does_not_hijack(make_repo, d):
     repo = make_repo({f"{d}/x.py": F_, "app/a.py": f"import {d}.x\n", "billing/b.py": F_})
     for sentence in (f"{d.capitalize()} service may be imported only from billing/.",):
         for c in claims_for(sentence):
-            assert offline(repo, c).status != "HOLDING"
+            assert offline(repo, c).status not in ("HOLDING", "VIOLATED")
 
 
 def test_catalog_with_local_dir_never_false_decisive(make_repo):
