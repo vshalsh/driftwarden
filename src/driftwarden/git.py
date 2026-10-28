@@ -252,6 +252,36 @@ def rev_list_topo(repo: str | Path, tip: str) -> list[str]:
     return out.split()
 
 
+def shallow_boundary(repo: str | Path) -> frozenset[str]:
+    """Commits whose parents are missing because the clone is shallow (the contents of
+    ``.git/shallow``); empty for a complete repository."""
+    if _run(["rev-parse", "--is-shallow-repository"], repo).strip() != "true":
+        return frozenset()
+    rel = _run(["rev-parse", "--git-path", "shallow"], repo).strip()
+    p = Path(rel) if Path(rel).is_absolute() else Path(repo) / rel
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        return frozenset()
+    return frozenset(line.strip() for line in text.splitlines() if line.strip())
+
+
+def list_dir(repo: str | Path, commit: str, directory: str) -> list[str]:
+    """Repo-relative paths of the blobs directly inside ``directory`` ("" = root) at
+    ``commit`` (not recursive)."""
+    args = ["ls-tree", "-z", f"{commit}^{{commit}}"]
+    if directory:
+        args += ["--", directory.rstrip("/") + "/"]
+    out = _run_bytes(args, repo).decode("utf-8", "replace")
+    paths = []
+    for rec in out.split("\0"):
+        meta, _, name = rec.partition("\t")
+        parts = meta.split()
+        if len(parts) == 3 and parts[1] == "blob":
+            paths.append(name)
+    return paths
+
+
 def commit_time(repo: str | Path, commit: str) -> int:
     """Committer timestamp (Unix seconds) of ``commit``."""
     return int(_run(["show", "-s", "--format=%ct", f"{commit}^{{commit}}"], repo).strip())

@@ -642,3 +642,317 @@ def test_verify_commits_exist(tmp_path):
     assert r.status == "MISMATCH" and "not an ancestor" in r.reason
     (r,) = verify_commits_exist(repo, [])
     assert r.status == "MISMATCH"
+
+
+# ------------------------------------------------------------------ PR #21 review (Codex P2s)
+
+GLOB_TREE = [
+    "architecture/x.md",
+    "architecture/sub/y.md",
+    "architecture/sub/deep/z.md",
+    "Architecture/up.md",
+    "docs/design/adr-1.md",
+    "docs/design/notes.txt",
+    "docs/other/adr-2.markdown",
+    "rfcs/0001.md",
+    "rfcs/README.md",
+    "rfcs/0000-template.md",
+    ".hidden/h.md",
+    "top.md",
+]
+GLOB_PATTERNS = [
+    "architecture/**/*.md",
+    "architecture/*.md",
+    "architecture/**",
+    "architecture/*/deep",
+    "**/adr-*.md",
+    "**/*.markdown",
+    "docs/*",
+    "docs/*/",
+    "rfcs/*.md",
+    "*/sub",
+    "arch*",
+    "[aA]rchitecture/*.md",
+    "?rchitecture/sub/*",
+    "**/deep/*.md",
+    "*.md",
+    "**",
+    ".hidden/*",
+    "architecture",
+    "docs/design",
+]
+
+
+@pytest.mark.parametrize("pattern", GLOB_PATTERNS)
+def test_adr_glob_discovery_at_commit_matches_worktree_discovery(tmp_path, pattern):
+    """discover_adr_files_at (git tree) == discover_adr_files (Path.glob) for adr_paths."""
+    from driftwarden.config import Config
+    from driftwarden.discover.adr import discover_adr_files, discover_adr_files_at
+
+    repo = tmp_path / "g"
+    _init(repo)
+    head = _commit(repo, {p: "# t\n\n## Decision\n\nx\n" for p in GLOB_TREE}, "tree")
+    cfg = Config(adr_paths=[pattern])
+    assert discover_adr_files_at(repo, head, cfg) == discover_adr_files(repo, cfg), pattern
+
+
+def test_double_star_matches_zero_directories(tmp_path):
+    from driftwarden.config import Config
+    from driftwarden.discover.adr import discover_adr_files_at
+
+    repo = tmp_path / "g"
+    _init(repo)
+    head = _commit(repo, {"architecture/x.md": "x\n", "architecture/a/y.md": "y\n"}, "t")
+    got = discover_adr_files_at(repo, head, Config(adr_paths=["architecture/**/*.md"]))
+    assert got == ["architecture/a/y.md", "architecture/x.md"]
+
+
+def test_extensionless_shebang_script_is_verified(tmp_path):
+    repo = tmp_path / "sb"
+    _init(repo)
+    _commit(repo, {"README.md": "x\n"}, "a")
+    c2 = _commit(repo, {"bin/worker": "#!/usr/bin/env python3\nimport redis\n"}, "worker")
+    _commit(repo, {"README.md": "y\n"}, "c")
+    scan = detect_undocumented(repo)
+    assert scan.could_not_verify == [], [r.reasons for r in scan.could_not_verify]
+    (rec,) = scan.findings
+    assert (rec.technology, rec.introducing_commits) == ("redis", [c2])
+    assert [e.ref.path for e in rec.evidence] == ["bin/worker"]
+
+
+_TF_VERSIONS = (
+    'terraform {\n  required_providers {\n    cf = {\n      source = "cloudflare/cloudflare"\n'
+    '      version = "~> 4.0"\n    }\n  }\n}\n'
+)
+
+
+def test_terraform_provider_alias_resolves_through_required_providers(tmp_path):
+    repo = tmp_path / "tf"
+    _init(repo)
+    _commit(
+        repo,
+        {
+            "infra/versions.tf": _TF_VERSIONS,
+            "infra/main.tf": 'provider "cf" {\n  api_token = var.token\n}\n',
+            "infra/extra.tf": 'provider "fastly" {\n  api_key = var.k\n}\n',
+        },
+        "tf",
+    )
+    scan = detect_undocumented(repo)
+    by = {_label(r): r for r in scan.records}
+    assert set(by) == {"iac-provider/cloudflare", "iac-provider/fastly"}  # never "cf"
+    cf = by["iac-provider/cloudflare"]
+    assert cf.grounding == "VERIFIED", cf.reasons
+    assert {e.ref.path for e in cf.evidence} == {"infra/main.tf", "infra/versions.tf"}
+    # documented as Cloudflare: neither the source nor the "cf" block is flagged
+    _commit(repo, {"docs/adr/0001-dns.md": _adr("DNS is served by Cloudflare.")}, "adr")
+    scan = detect_undocumented(repo)
+    assert {_label(r) for r in scan.records} == {"iac-provider/fastly"}
+    assert "iac-provider/cloudflare" in scan.documented
+
+
+def test_terraform_alias_record_cannot_be_retargeted(tmp_path):
+    repo = tmp_path / "tf2"
+    _init(repo)
+    _commit(
+        repo,
+        {"versions.tf": _TF_VERSIONS, "main.tf": 'provider "cf" {\n  x = 1\n}\n'},
+        "tf",
+    )
+    (rec,) = detect_undocumented(repo).findings
+    evs = [e.model_copy(update={"technology": "cf"}) for e in rec.evidence]
+    forged = rec.model_copy(
+        update={"technology": "cf", "id": "UD-iac-provider-cf", "evidence": evs}
+    )
+    assert verify_undocumented(repo, forged).could_not_verify
+
+
+def test_shallow_clone_introduction_is_could_not_verify(tmp_path):
+    import os
+    import subprocess
+
+    from conftest import GIT_ENV
+    from driftwarden.models import Introduction
+
+    src = tmp_path / "full"
+    _init(src)
+    _commit(src, {"requirements.txt": "redis==5.0.0\n"}, "add redis")
+    head = _commit(src, {"README.md": "unrelated\n"}, "readme")
+    dst = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{src}", str(dst)],
+        check=True,
+        capture_output=True,
+        env={**os.environ, **GIT_ENV},
+    )
+    assert git(dst, "rev-parse", "--is-shallow-repository").strip() == "true"
+    scan = detect_undocumented(dst)
+    assert scan.findings == []
+    (rec,) = scan.could_not_verify
+    assert rec.technology == "redis" and rec.status == "UNKNOWN"
+    assert rec.grounding == "MISMATCH" and rec.introducing_commits == []
+    assert any("shallow" in n for n in rec.notes)
+    # A record that claims the boundary commit introduced it must not verify either.
+    ev = rec.evidence[0]
+    intro = Introduction(evidence_id=ev.id, commit=head, parents=[], ref=ev.ref)
+    forged = rec.model_copy(
+        update={
+            "introductions": [intro],
+            "introducing_commits": [head],
+            "status": "UNDOCUMENTED",
+            "grounding": "VERIFIED",
+            "reasons": [],
+        }
+    )
+    out = verify_undocumented(dst, forged)
+    assert out.could_not_verify
+    assert any("shallow" in r for r in out.reasons)
+
+
+# ------------------------------------------------------------------ PR #21 review, round 2
+
+
+def test_obsolete_introduction_of_a_readded_dependency_does_not_verify(tmp_path):
+    """A adds redis, B removes it, C re-adds it: a record for C citing A is forged."""
+    from driftwarden.models import Introduction
+
+    repo = tmp_path / "readd2"
+    _init(repo)
+    a = _commit(repo, {"requirements.txt": "redis==5.0.0\n"}, "A add")
+    _commit(repo, {"requirements.txt": "flask==3.0.0\n"}, "B remove")
+    c = _commit(repo, {"requirements.txt": "flask==3.0.0\nredis==5.0.0\n"}, "C re-add")
+    scan = detect_undocumented(repo)
+    rec = next(r for r in scan.findings if r.technology == "redis")
+    assert rec.introducing_commits == [c]
+    old = git(repo, "show", f"{a}:requirements.txt").splitlines()
+    ref = Provenance(path="requirements.txt", line_start=1, line_end=1, commit=a, quote=old[0])
+    forged = rec.model_copy(
+        update={
+            "introductions": [Introduction(evidence_id="e1", commit=a, parents=[], ref=ref)],
+            "introducing_commits": [a],
+        }
+    )
+    out = verify_undocumented(repo, forged)
+    assert out.could_not_verify and out.status == "UNKNOWN"
+    assert any("removed or replaced" in r for r in out.reasons), out.reasons
+    assert verify_undocumented(repo, rec).grounding == "VERIFIED"
+
+
+def test_terraform_source_change_in_another_file_moves_the_introduction(tmp_path):
+    """versions.tf switches the "aws" local name to hashicorp/google; main.tf's
+    unchanged provider block is then GCP, introduced by the versions.tf change."""
+    repo = tmp_path / "tfswap"
+    _init(repo)
+    versions = (
+        'terraform {\n  required_providers {\n    aws = {\n      source = "hashicorp/{p}"\n'
+        "    }\n  }\n}\n"
+    )
+    _commit(
+        repo,
+        {
+            "infra/versions.tf": versions.replace("{p}", "aws"),
+            "infra/main.tf": 'provider "aws" {\n  region = "x"\n}\n',
+        },
+        "aws",
+    )
+    swap = _commit(repo, {"infra/versions.tf": versions.replace("{p}", "google")}, "swap")
+    scan = detect_undocumented(repo)
+    assert scan.could_not_verify == [], [r.reasons for r in scan.could_not_verify]
+    (rec,) = scan.findings
+    assert (rec.technology, rec.category) == ("gcp-sdk", "iac-provider")
+    assert {e.ref.path for e in rec.evidence} == {"infra/main.tf", "infra/versions.tf"}
+    assert rec.introducing_commits == [swap]
+
+
+# ------------------------------------------------------------------ PR #21 review, round 3
+
+
+def test_import_resolution_follows_the_tree_at_each_commit(tmp_path):
+    """A: app.py imports redis and redis.py is local; B deletes redis.py, so the import
+    becomes external Redis at B. B is the introduction, never A."""
+    from driftwarden.models import Introduction
+
+    repo = tmp_path / "localmod"
+    _init(repo)
+    a = _commit(repo, {"app.py": "import redis\n", "redis.py": "X = 1\n"}, "A local redis")
+    b = _commit(repo, {"redis.py": None}, "B delete local module")
+    assert {_label(r) for r in detect_undocumented(repo, a).records} == set()
+    scan = detect_undocumented(repo)
+    (rec,) = scan.findings
+    assert (rec.technology, rec.introducing_commits) == ("redis", [b])
+    ev = rec.evidence[0]
+    ref = ev.ref.model_copy(update={"commit": a})
+    forged = rec.model_copy(
+        update={
+            "introductions": [Introduction(evidence_id=ev.id, commit=a, parents=[], ref=ref)],
+            "introducing_commits": [a],
+        }
+    )
+    assert verify_undocumented(repo, forged).could_not_verify
+
+
+def test_unparsable_manifest_at_a_parent_is_not_proof_of_absence(tmp_path):
+    from driftwarden.index.manifests import MAX_MANIFEST_BYTES
+
+    repo = tmp_path / "bigparent"
+    _init(repo)
+    filler = "# " + "x" * 98 + "\n"
+    big = "redis==5.0.0\n" + filler * (MAX_MANIFEST_BYTES // len(filler) + 10)
+    assert MAX_MANIFEST_BYTES < len(big) < 2 * 1024 * 1024
+    _commit(repo, {"requirements.txt": big}, "A oversized manifest (not parsable)")
+    _commit(repo, {"requirements.txt": "redis==5.0.0\n"}, "B small manifest")
+    scan = detect_undocumented(repo)
+    assert scan.findings == []
+    (rec,) = scan.could_not_verify
+    assert rec.technology == "redis" and rec.status == "UNKNOWN"
+    assert any("could not be parsed" in n for n in rec.notes), rec.notes
+
+
+def test_provider_alias_is_not_an_adr_coverage_term(tmp_path):
+    """provider "cloud" maps to hashicorp/google: an ADR saying "cloud" does not document
+    GCP, in detection and in verification alike."""
+    repo = tmp_path / "alias"
+    _init(repo)
+    _commit(
+        repo,
+        {
+            "versions.tf": (
+                "terraform {\n  required_providers {\n    cloud = {\n"
+                '      source = "hashicorp/google"\n    }\n  }\n}\n'
+            ),
+            "main.tf": 'provider "cloud" {\n  project = "p"\n}\n',
+            "docs/adr/0001-hosting.md": _adr("We run in the cloud, region by region."),
+        },
+        "tf",
+    )
+    scan = detect_undocumented(repo)
+    (rec,) = scan.findings
+    assert (rec.technology, rec.category) == ("gcp-sdk", "iac-provider")
+    decisions = scan_adrs(repo).decisions
+    out = verify_undocumented(repo, rec, decisions=decisions)
+    assert out.grounding == "VERIFIED", out.reasons
+
+
+def test_committed_adr_symlink_resolves_to_its_target(tmp_path):
+    """scan_adrs_at follows an in-repo ADR symlink like the working-tree discovery does,
+    instead of parsing the stored link text; links leaving the repo are skipped."""
+    import os
+
+    from driftwarden.discover.adr import discover_adr_files, scan_adrs_at
+
+    repo = tmp_path / "links"
+    _init(repo)
+    (repo / "notes").mkdir()
+    (repo / "notes" / "0001-cache.md").write_text(_adr("Sessions are kept in Redis."))
+    (repo / "docs" / "adr").mkdir(parents=True)
+    os.symlink("../../notes/0001-cache.md", repo / "docs" / "adr" / "0001-cache.md")
+    os.symlink("../../../outside.md", repo / "docs" / "adr" / "0002-out.md")
+    (repo / "requirements.txt").write_text("redis==5.0.0\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "links")
+    head = git(repo, "rev-parse", "HEAD").strip()
+    at = scan_adrs_at(repo, head)
+    assert [d.source.path for d in at.decisions] == ["notes/0001-cache.md"]
+    assert discover_adr_files(repo) == ["notes/0001-cache.md"]
+    assert "Redis" in at.decisions[0].decision_text
+    assert detect_undocumented(repo).records == []  # documented through the link

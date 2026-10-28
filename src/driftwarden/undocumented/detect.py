@@ -64,7 +64,33 @@ introducing commit, so a dev-only dependency promoted to production is
 introduced by the promotion. The record lists the distinct introducing commits
 oldest first in topological order (an ancestor always before its descendants;
 never by timestamp). A version bump does not move the introduction (the
-technology was already there), unlike ``git blame``.
+technology was already there), unlike ``git blame``. In a shallow clone, a walk
+that reaches a boundary commit (``.git/shallow``: parents unavailable) cannot
+show absence before it, so that evidence has no introduction and the record is
+*Could not verify*; the verifier rejects a boundary commit as an introduction.
+
+Terraform ``provider "<local>"`` blocks are resolved through the module's
+``required_providers`` (all ``*.tf`` / ``*.tofu`` files in the same directory,
+at the same commit): ``provider "cf"`` with ``cf = { source =
+"cloudflare/cloudflare" }`` is Cloudflare, never a technology called ``cf``. An
+unmapped local name stays as written (implied ``hashicorp/<local>``). Because a
+provider block's meaning depends on its module's other files, the history walk
+for a Terraform file follows every commit that touched its directory: a source
+change in ``versions.tf`` (``hashicorp/aws`` -> ``hashicorp/google``) introduces the
+new provider for an unchanged ``provider`` block in ``main.tf`` too.
+
+Imports are resolved at every historical commit against the tree *at that commit*
+(the resolver ``build_import_graph`` uses, with that commit's go.mod files and Java
+packages): ``import redis`` next to a local ``redis.py`` is not Redis, so deleting
+``redis.py`` is what introduces Redis. When the file's own history cannot explain a
+change, the walk steps through every commit. A file that exists at a commit but
+cannot be read there as the snapshot would (an unparsable or oversized manifest, an
+oversized source file) is :class:`Uncheckable`: neither presence nor absence is
+inferred from it, and the record is *Could not verify*.
+
+The verifier also re-runs the walk: a claimed introduction must be the commit the
+walk gives for the occurrence at the scanned commit, so an obsolete introduction
+(added at A, removed at B, re-added at C) never verifies for a scan at C.
 
 **Grounding (fail closed).** :func:`verify_undocumented` re-checks a record from
 scratch: G2 on every evidence line and G3 (``verify_dependency``) on every
@@ -86,7 +112,10 @@ Known limits: name-based (see ``judge.catalog``), so technologies reached
 through generic clients, connection URLs or vendored code are not seen; the
 history walk follows one file path (a file renamed with the technology in it is
 "introduced" by the rename); outbound calls are seen only through HTTP client
-libraries, never through URLs in code or config.
+libraries, never through URLs in code or config; ADR discovery at a commit
+(``scan_adrs_at``) follows committed symlinks to ADR *files* inside the repository,
+but not symlinked *directories*; a manifest that is partly parsable (errors plus
+some dependencies) is trusted for the dependencies it yields.
 """
 
 from __future__ import annotations
@@ -107,19 +136,28 @@ from driftwarden.grounding.verify import (
     verify_commits_exist,
     verify_source_quote,
 )
-from driftwarden.index.files import detect_language
+from driftwarden.index.files import (
+    MAX_PARSE_BYTES,
+    SNIFF_BYTES,
+    FileEntry,
+    FileIndex,
+    _Excludes,
+    detect_language,
+)
 from driftwarden.index.imports import (
-    _js_package,
+    _Resolver,
     extract_go,
     extract_java,
     extract_js,
     extract_python,
 )
 from driftwarden.index.manifests import canonical_package, parse_manifest
+from driftwarden.index.manifests.terraform import provider_sources
 from driftwarden.judge import catalog
 from driftwarden.judge.evidence import (
     Snapshot,
     _occurrences,
+    _safe,
     _snippet,
     is_nonproduction_manifest,
     is_test_path,
@@ -139,6 +177,7 @@ from driftwarden.models import (
 )
 from driftwarden.text import decode_text, split_lines
 
+LANGUAGE_NS = catalog.LANGUAGE_NAMESPACE
 IAC_CATEGORY = "iac-provider"
 DETECTED_CATEGORIES: tuple[str, ...] = (
     "datastore",
@@ -256,31 +295,95 @@ class _Hit:
     names: tuple[str, ...] = ()  # the package / module names on the line
 
 
-def _import_names(path: str, text: str) -> list[tuple[int, int, tuple[str, ...], str]]:
-    """``(line, end_line, names, namespace)`` for each non-relative import in one file."""
-    lang = detect_language(path)
+TF_SUFFIXES = (".tf", ".tofu")
+
+
+def ref_names(ref, tf_sources: dict[str, str] | None = None) -> tuple[str, ...]:
+    """The names a dependency ref is matched by. A Terraform ``provider "cf"`` block is
+    resolved through its module's ``required_providers`` (``cf`` ->
+    ``cloudflare/cloudflare``), so an explicitly mapped local name never becomes a
+    technology of its own; an unmapped local name stays as written."""
+    if (
+        ref.ecosystem == "terraform-provider"
+        and ref.scope == "provider-block"
+        and tf_sources
+        and ref.package in tf_sources
+    ):
+        return (tf_sources[ref.package],)
+    return (ref.package,)
+
+
+class Uncheckable(Exception):
+    """A file at some commit cannot be read the way the snapshot would read it (an
+    unparsable or oversized manifest, an oversized source file, an unreadable tree):
+    neither presence nor absence can be proved there, so the record is *Could not
+    verify*."""
+
+
+def _resolver_for(files: list[FileEntry], blobs: dict[str, str]) -> _Resolver:
+    """The import resolver ``build_import_graph`` would build for these files (``blobs``:
+    path -> text of the go.mod and Java files it reads)."""
+    res = _Resolver(FileIndex(root=Path("."), files=files, source="git"))
+    for path, text in sorted(blobs.items()):
+        if path == "go.mod" or path.endswith("/go.mod"):
+            res.add_go_mod(path, text)
+        else:
+            package, _ = extract_java(text)
+            res.add_java(path, package)
+    return res
+
+
+def _edge_names(module: str, names: tuple[str, ...], package: str | None) -> tuple[str, ...]:
+    """The names ``judge.evidence._occurrences`` matches an import edge by."""
+    module = module.lstrip(".")
+    qualified = tuple(f"{module}.{n}" for n in names if module and n and n != "*")
+    return tuple(dict.fromkeys(n for n in (package, module, *qualified) if n))
+
+
+def _import_names(
+    path: str, text: str, resolver: _Resolver | None = None
+) -> list[tuple[int, int, tuple[str, ...], str]]:
+    """``(line, end_line, names, namespace)`` for each import of one file that resolves
+    to an external or standard-library module -- resolved against ``resolver`` (the
+    repository at the same commit) exactly as ``build_import_graph`` does, so a module
+    that is local at that commit (``import redis`` next to ``redis.py``) never counts.
+    Without ``resolver`` only this one file is known.
+
+    The language is detected from the name *and* the content prefix, as
+    ``load_snapshot`` does, so extensionless shebang scripts (``bin/worker`` with
+    ``#!/usr/bin/env python3``) are read the same way in history and verification."""
+    lang = detect_language(path, text.encode("utf-8", "replace")[:SNIFF_BYTES])
+    if lang not in LANGUAGE_NS:
+        return []
+    if resolver is None:
+        resolver = _resolver_for([FileEntry(path, len(text), lang, tracked=True)], {})
+    ns = LANGUAGE_NS[lang]
     out: list[tuple[int, int, tuple[str, ...], str]] = []
+
+    def add(r, cat: str, module: str, names: tuple[str, ...], pkg: str | None) -> None:
+        if cat in ("external", "stdlib"):
+            edge = _edge_names(module, names, pkg)
+            if edge:
+                out.append((r.line, max(r.end_line, r.line), edge, ns))
+
     if lang == "python":
         raws, _ = extract_python(text)
         for r in raws:
-            if r.level or not r.module:
-                continue
-            q = tuple(f"{r.module}.{n}" for n in r.names if n and n != "*")
-            names = tuple(dict.fromkeys((r.module.split(".")[0], r.module, *q)))
-            out.append((r.line, max(r.end_line, r.line), names, "py"))
+            for cat, _t, pkg, names, module in resolver.python(path, r):
+                add(r, cat, module, names, pkg)
     elif lang in ("javascript", "typescript"):
         for r in extract_js(text):
-            if not r.module or r.module.startswith((".", "/")):
-                continue
-            names = tuple(dict.fromkeys((_js_package(r.module), r.module)))
-            out.append((r.line, max(r.end_line, r.line), names, "npm"))
+            cat, _t, pkg = resolver.js(path, r.module)
+            add(r, cat, r.module, (), pkg)
     elif lang == "java":
         _, raws = extract_java(text)
         for r in raws:
-            out.append((r.line, max(r.end_line, r.line), (r.module,), "java"))
+            for cat, _t, pkg in resolver.java(r):
+                add(r, cat, r.module, (), pkg)
     elif lang == "go":
         for r in extract_go(text):
-            out.append((r.line, max(r.end_line, r.line), (r.module,), "go"))
+            cat, _t, pkg = resolver.go(r.module)
+            add(r, cat, r.module, (), pkg)
     return out
 
 
@@ -292,26 +395,34 @@ def file_hits(
     *,
     keys: Callable[[str, Iterable[str], str | None], list[Key]] = occurrence_keys,
     refs: list | None = None,
+    tf_sources: dict[str, str] | None = None,
+    resolver: _Resolver | None = None,
 ) -> list[_Hit]:
     """Lines of ``path`` (with content ``text``) where the technology ``key`` occurs.
 
     ``kind`` is the evidence kind: ``dependency`` / ``infra`` re-parse the file as a
     manifest (or use the already parsed ``refs``), ``import`` re-extracts its import
-    statements. Each hit says whether that occurrence ships (``production``)."""
+    statements. Each hit says whether that occurrence ships (``production``).
+    ``tf_sources`` is the module's provider local-name map (default: this file's)."""
     hits: list[_Hit] = []
     if kind in ("dependency", "infra"):
+        if tf_sources is None and path.endswith(TF_SUFFIXES):
+            tf_sources = provider_sources(text)
         for ref in refs if refs is not None else parse_manifest(path, text).refs:
             ns = catalog.ECOSYSTEM_NAMESPACE.get(ref.ecosystem or "")
             if ns is None or ref.line is None:
                 continue
-            if key in keys(ns, (ref.package,), ref.ecosystem):
+            names = ref_names(ref, tf_sources)
+            if key in keys(ns, names, ref.ecosystem):
+                # names = the *resolved* names (a provider block's source, never its
+                # local alias): they feed ADR coverage, as in _collect. Identity checks
+                # use ``package`` (the name as declared, which G3 re-parses).
                 hits.append(
-                    _Hit(ref.line, ref.line, _dep_production(ref), ref.package, ref.line,
-                         (ref.package,))
-                )  # fmt: skip
+                    _Hit(ref.line, ref.line, _dep_production(ref), ref.package, ref.line, names)
+                )
     elif kind == "import":
         prod = not (is_test_path(path) or is_vendored(path))
-        for start, end, names, ns in _import_names(path, text):
+        for start, end, names, ns in _import_names(path, text, resolver):
             if key in keys(ns, names, None):
                 hits.append(_Hit(start, end, prod, names=names))
     return hits
@@ -320,15 +431,39 @@ def file_hits(
 class _History:
     """File contents at commits, cached by blob, for presence checks."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, exclude: Iterable[str] = ()) -> None:
         self.root = root
+        self._excludes = _Excludes(list(exclude))
+        self._res: dict[str, _Resolver] = {}
         self._blob: dict[tuple[str, str], str | None] = {}
         self._text: dict[str, str] = {}
         self._hits: dict[tuple[str, str, Key, str], list[_Hit]] = {}
         self._refs: dict[tuple[str, str], list] = {}
         self._parents: dict[str, list[str]] = {}
         self._order: dict[str, dict[str, int]] = {}
+        self._tf: dict[tuple[str, str], dict[str, str]] = {}
+        self._shallow: frozenset[str] | None = None
         self.keys = _Keys()
+
+    @property
+    def shallow(self) -> frozenset[str]:
+        """Shallow-clone boundary commits (their parents are not available)."""
+        if self._shallow is None:
+            self._shallow = git.shallow_boundary(self.root)
+        return self._shallow
+
+    def tf_sources(self, commit: str, path: str) -> dict[str, str]:
+        """Provider local name -> source for the Terraform module (directory) holding
+        ``path``, at ``commit``."""
+        d = path.rsplit("/", 1)[0] if "/" in path else ""
+        k = (commit, d)
+        if k not in self._tf:
+            out: dict[str, str] = {}
+            for f in sorted(git.list_dir(self.root, commit, d)):
+                if f.endswith(TF_SUFFIXES):
+                    out.update(provider_sources(self.text(commit, f) or ""))
+            self._tf[k] = out
+        return self._tf[k]
 
     def text(self, commit: str, path: str) -> str | None:
         k = (commit, path)
@@ -341,20 +476,77 @@ class _History:
             self._text[blob] = decode_text(git.read_blobs(self.root, [blob])[blob])
         return self._text[blob]
 
+    def resolver(self, commit: str) -> _Resolver:
+        """The import resolver for the repository as it is at ``commit`` -- the same
+        file set and inputs (go.mod files, Java packages) ``load_snapshot`` gives
+        ``build_import_graph``."""
+        if commit not in self._res:
+            try:
+                entries = [
+                    e
+                    for e in git.tree_entries(self.root, commit)
+                    if _safe(e.path) and not self._excludes(e.path)
+                ]
+            except git.NotAGitRepoError:
+                raise
+            except git.GitError as exc:
+                raise Uncheckable(f"tree at {commit[:12]} not readable ({exc})") from exc
+            files = [
+                FileEntry(
+                    e.path, e.size, detect_language(e.path), is_symlink=e.mode == "120000",
+                    tracked=True,
+                )
+                for e in entries
+            ]  # fmt: skip
+            want = [
+                e
+                for e in entries
+                if e.mode != "120000"
+                and e.size <= MAX_PARSE_BYTES
+                and (e.path == "go.mod" or e.path.endswith(("/go.mod", ".java")))
+            ]
+            data = git.read_blobs(self.root, [e.sha for e in want])
+            texts = {e.path: decode_text(data[e.sha]) for e in want}
+            self._res[commit] = _resolver_for(files, texts)
+        return self._res[commit]
+
     def hits(self, commit: str, path: str, key: Key, kind: str) -> list[_Hit]:
+        """Occurrences of ``key`` in ``path`` at ``commit`` ([] when the file does not
+        exist there). Raises Uncheckable when the file exists but cannot be read the
+        way the snapshot reads it, so absence is never inferred from a parse failure."""
         text = self.text(commit, path)
         if text is None:
             return []
         blob = self._blob[(commit, path)]
-        hk = (blob or "", path, key, kind)
+        tf = None
+        if kind in ("dependency", "infra") and path.endswith(TF_SUFFIXES):
+            tf = self.tf_sources(commit, path)
+        # Imports resolve against the whole tree at that commit: cache per commit.
+        scope = commit if kind == "import" else ""
+        hk = (blob or "", path, key, kind, tuple(sorted(tf.items())) if tf else (), scope)
         if hk not in self._hits:
             refs = None
+            resolver = None
             if kind in ("dependency", "infra"):
                 rk = (blob or "", path)
                 if rk not in self._refs:
-                    self._refs[rk] = parse_manifest(path, text).refs
+                    res = parse_manifest(path, text)
+                    if res.errors and not res.refs:
+                        raise Uncheckable(
+                            f"{path}@{commit[:12]}: manifest could not be parsed "
+                            f"({'; '.join(res.errors)[:200]})"
+                        )
+                    self._refs[rk] = res.refs
                 refs = self._refs[rk]
-            self._hits[hk] = file_hits(path, text, key, kind, keys=self.keys, refs=refs)
+            else:
+                if len(text.encode("utf-8", "replace")) > MAX_PARSE_BYTES:
+                    raise Uncheckable(
+                        f"{path}@{commit[:12]}: over the {MAX_PARSE_BYTES} byte parse limit"
+                    )
+                resolver = self.resolver(commit)
+            self._hits[hk] = file_hits(
+                path, text, key, kind, keys=self.keys, refs=refs, tf_sources=tf, resolver=resolver
+            )
         return self._hits[hk]
 
     def production_hits(self, commit: str, path: str, key: Key, kind: str) -> list[_Hit]:
@@ -379,15 +571,46 @@ def _introduction(
 ) -> tuple[Introduction | None, str]:
     """The commit that brought ``key`` into ``ev``'s file *as a production occurrence*
     (a dev-only dependency later promoted to production is introduced by the
-    promotion), or (None, why)."""
+    promotion), or (None, why).
+
+    A Terraform file's meaning also depends on the other ``*.tf`` files of its module
+    (``required_providers`` maps a provider block's local name), so for those the walk
+    follows every commit that touched the module directory, not just the file."""
     path = ev.ref.path
-    cur = git.last_commit_touching(hist.root, scan_commit, path)
+    track = path
+    if path.endswith(TF_SUFFIXES):
+        track = path.rsplit("/", 1)[0] + "/" if "/" in path else "."
+    try:
+        return _walk(hist, scan_commit, ev, key, path, track)
+    except Uncheckable as exc:
+        return None, f"{exc}; presence/absence there cannot be checked"
+
+
+def _walk(
+    hist: _History, scan_commit: str, ev: Evidence, key: Key, path: str, track: str
+) -> tuple[Introduction | None, str]:
+    # An import's meaning also depends on the rest of the tree (``import redis`` is
+    # local while ``redis.py`` exists). If a commit that changed the file no longer
+    # shows the occurrence, the change lies elsewhere: restart from the last commit
+    # known to show it and step through every commit ("." = any change).
+    anchor = scan_commit
+    cur = git.last_commit_touching(hist.root, scan_commit, track)
     seen: set[str] = set()
     while cur is not None and cur not in seen and len(seen) < MAX_HISTORY_STEPS:
         seen.add(cur)
         here = hist.production_hits(cur, path, key, ev.kind)
+        if not here and ev.kind == "import" and track != ".":
+            track = "."
+            seen.discard(anchor)
+            cur = anchor
+            continue
         if not here:
             return None, f"{path}: technology not found at {cur[:12]} while walking history"
+        if cur in hist.shallow:
+            return None, (
+                f"{path}: history is truncated at shallow-clone boundary {cur[:12]} (its "
+                "parents are not available); the introducing commit cannot be established"
+            )
         present = [p for p in hist.parents(cur) if hist.production_hits(p, path, key, ev.kind)]
         if not present:
             lines = split_lines(hist.text(cur, path) or "")
@@ -399,7 +622,8 @@ def _introduction(
             return Introduction(
                 evidence_id=ev.id, commit=cur, parents=list(hist.parents(cur)), ref=ref
             ), ""
-        cur = git.last_commit_touching(hist.root, present[0], path)
+        anchor = present[0]  # known to show the occurrence
+        cur = git.last_commit_touching(hist.root, present[0], track)
     return None, f"{path}: no introducing commit found"
 
 
@@ -494,7 +718,7 @@ def _semantic(
         return problems  # reported by the commit checks
     try:
         hits = hist.hits(rec.commit, ev.ref.path, _key_of(rec), ev.kind)
-    except git.GitError as exc:
+    except (git.GitError, Uncheckable) as exc:
         return [*problems, f"{loc}: could not read file ({exc})"]
     inside = [h for h in hits if ev.ref.line_start <= h.line_start <= ev.ref.line_end]
     if ev.dependency is not None:
@@ -534,6 +758,7 @@ def verify_undocumented(
     *,
     decisions: Iterable[Decision] | None = None,
     claims: Iterable[Claim] = (),
+    config: Config | None = None,
     _hist: _History | None = None,
 ) -> UndocumentedDecision:
     """Re-verify every fact ``rec`` states (see the module docstring). Returns the
@@ -541,7 +766,7 @@ def verify_undocumented(
     and UNDOCUMENTED, or UNKNOWN / MISMATCH with every reason. Never raises for bad
     provenance; raises only if ``repo`` is not a git repository."""
     root = git.repo_root(repo)
-    hist = _hist or _History(root)
+    hist = _hist or _History(root, (config or Config()).exclude)
     checks: list[GroundingResult] = []
     reasons: list[str] = []
     subj = rec.id
@@ -642,6 +867,13 @@ def _verify_intro(
         return
     if commit_problem(root, intro.commit) is not None:
         return  # reported by verify_commits_exist
+    if intro.commit in hist.shallow:
+        fail(
+            f"{tag}: commit is a shallow-clone boundary (parents unavailable); "
+            "absence before it cannot be checked",
+            intro.ref,
+        )
+        return
     g2 = verify_source_quote(root, intro.ref, check_id="G2", subject=f"{rec.id}/{tag}")
     checks.append(g2)
     if g2.status != "VERIFIED":
@@ -666,11 +898,24 @@ def _verify_intro(
                 f"at parent {p[:12]}"
             )
             return
+    # Continuity: the introduction must be the one that leads, without a removal in
+    # between, to the occurrence at the scanned commit -- i.e. the commit the detector
+    # itself computes now. An obsolete introduction (added, removed, re-added) fails.
+    if commit_problem(root, rec.commit) is None:
+        mine, why = _introduction(hist, rec.commit, ev, key)
+        if mine is None or mine.commit != intro.commit:
+            got = f"{mine.commit[:12]}" if mine is not None else f"none ({why})"
+            fail(
+                f"{tag}: not the introduction of the occurrence at {rec.commit[:12]} "
+                f"(the history walk gives {got}); it was removed or replaced in between",
+                intro.ref,
+            )
+            return
     checks.append(
         _check(
             True,
             f"{tag}: present in {intro.ref.path} at the commit, absent at "
-            f"{len(actual) or 'no'} parent(s)",
+            f"{len(actual) or 'no'} parent(s), continuous up to the scanned commit",
             intro.ref,
             rec.id,
         )
@@ -725,11 +970,20 @@ def _collect(snap: Snapshot, keys_of: _Keys) -> tuple[dict[Key, _Group], list[st
     groups: dict[Key, _Group] = {}
     notes: list[str] = []
     seen: set[tuple] = set()
+    tf_by_dir: dict[str, dict[str, str]] = {}
+    for p in sorted(snap.texts):
+        if p.endswith(TF_SUFFIXES):
+            d = p.rsplit("/", 1)[0] if "/" in p else ""
+            tf_by_dir.setdefault(d, {}).update(provider_sources(snap.texts[p]))
     for o in _occurrences(snap):
         if is_vendored(o.path):
             continue  # third-party code checked in: not this repository's choice
         eco = o.dep.ecosystem if o.dep is not None else None
-        keys = keys_of(o.namespace, o.names, eco)
+        names = o.names
+        if o.dep is not None and o.path.endswith(TF_SUFFIXES):
+            d = o.path.rsplit("/", 1)[0] if "/" in o.path else ""
+            names = ref_names(o.dep, tf_by_dir.get(d))
+        keys = keys_of(o.namespace, names, eco)
         if not keys:
             continue
         if o.edge is not None:
@@ -757,12 +1011,9 @@ def _collect(snap: Snapshot, keys_of: _Keys) -> tuple[dict[Key, _Group], list[st
             seen.add(sk)
             g = groups.setdefault(key, _Group(key))
             g.production = g.production or production
-            if pkg and pkg not in g.packages:
-                g.packages.append(pkg)
-            if o.edge is not None:
-                for n in o.names:
-                    if n not in g.packages:
-                        g.packages.append(n)
+            for n in names:  # resolved names (a provider block's source, not its alias)
+                if n and n not in g.packages:
+                    g.packages.append(n)
             if not production:
                 continue
             if snippet is None:
@@ -825,7 +1076,7 @@ def detect_undocumented(
         # so a later ADR cannot document (or a later edit undocument) an older commit.
         decisions = scan_adrs_at(root, snap.commit, config).decisions
     claims = list(claims or [])
-    hist = _History(root)
+    hist = _History(root, (config or Config()).exclude)
     groups, notes = _collect(snap, hist.keys)
     result = UndocumentedScan(commit=snap.commit, notes=notes)
     for key in sorted(groups):
