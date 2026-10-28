@@ -538,8 +538,8 @@ def test_ledger_pass_rate(tmp_path):
     d = tmp_path / "logs" / "grounding"
     d.mkdir(parents=True)
     rows = [{"check_id": "G1", "status": "VERIFIED"}] * 3 + [
-        {"check_id": "G2", "status": "VERIFIED"},
-        {"check_id": "G2", "status": "MISMATCH"},
+        {"check_id": "G2", "status": "VERIFIED", "subject": "ADR-0001.c1/e1"},
+        {"check_id": "G2", "status": "MISMATCH", "subject": "ADR-0001.c1/e2"},
     ]
     (d / "run.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n\nnot json\n")
     (d / "run.summary.json").write_text("{}")
@@ -548,8 +548,56 @@ def test_ledger_pass_rate(tmp_path):
     assert lg["pass_rate"] == 0.8 and lg["by_check"]["G2"]["pass_rate"] == 0.5
     res = S.score(synthetic(), PERFECT, ledger_dir=tmp_path)
     s4 = res["thresholds"]["S4"]
-    assert s4["citation_accuracy"] == 0.8 and s4["pass"] is False  # < 0.90 and < 200 rows
+    # the 3 G1 rows are not citations: S4 sees only the two G2 rows
+    assert s4["citation_accuracy"] == 0.5 and s4["ledger_rows"] == 2 and s4["pass"] is False
     assert S.score(synthetic(), PERFECT)["thresholds"]["S4"]["pass"] is None
+
+
+def _write_rows(tmp_path, rows):
+    d = tmp_path / "logs" / "grounding"
+    d.mkdir(parents=True)
+    (d / "run.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+
+def test_s4_counts_only_citation_rows(tmp_path):
+    def row(check, status, subject):
+        return {"check_id": check, "status": status, "subject": subject}
+
+    rows = (
+        [row("G6", "VERIFIED", None)] * 10  # consistency agreement votes
+        + [row("G1", "VERIFIED", "ADR-0001")] * 5  # decision source quotes
+        + [row("G1", "VERIFIED", None)] * 3  # claim quotes
+        + [row("G5", "VERIFIED", "UD-x-r")] * 2
+        + [row("G2", "VERIFIED", "UD-x-r/e1")]  # deterministic undocumented evidence
+        + [row("G2", "VERIFIED", "ADR-0007.c1/e1"), row("G3", "VERIFIED", "ADR-0007.c1/e1")]
+        + [row("G2", "MISMATCH", "ADR-0007.c2/citation-1")]
+        + [row("G2", "VERIFIED", "draft:UD-x-r/e2"), row("G3", "MISMATCH", "draft:UD-x-r/e2")]
+    )
+    _write_rows(tmp_path, rows)
+    lg = S.read_ledger(tmp_path)
+    assert lg["rows"] == len(rows)
+    assert lg["pass_rate"] == pytest.approx(24 / 26)  # overall grounding, reported separately
+    assert lg["citation"] == {"rows": 5, "verified": 3, "mismatch": 2, "pass_rate": 0.6}
+    s4 = S.score(synthetic(), PERFECT, ledger_dir=tmp_path)["thresholds"]["S4"]
+    assert s4["citation_accuracy"] == 0.6 and s4["ledger_rows"] == 5
+    assert s4["grounding_rows"] == 26 and s4["pass"] is False
+
+
+def test_merge_decision_keeps_per_claim_grounding():
+    ev = [{"path": "a.py", "line": 1}]
+    status, got, down = S.merge_decision(
+        [
+            {"status": "VIOLATED", "grounding": "VERIFIED", "evidence": ev},
+            {"status": "HOLDING", "grounding": "MISMATCH", "evidence": []},
+        ]
+    )
+    assert (status, got, down) == ("VIOLATED", ev, 1)
+    assert (
+        S.merge_decision([{"status": "VIOLATED", "grounding": "MISMATCH"}, {"status": "HOLDING"}])[
+            0
+        ]
+        == "UNKNOWN"
+    )
 
 
 def test_oracle_and_inverse_predictions_on_real_truth(corpus):

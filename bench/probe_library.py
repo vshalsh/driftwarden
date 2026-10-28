@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-AGG_ORDER = ["VIOLATED", "DRIFTING", "UNKNOWN", "HOLDING"]
+from bench.score import merge_decision
 
 
 def predict_library(repo_path: str | Path) -> list[dict[str, Any]]:
@@ -36,24 +36,27 @@ def predict_library(repo_path: str | Path) -> list[dict[str, Any]]:
         by_dec.setdefault(c.decision_id, []).append(v)
     preds: list[dict[str, Any]] = []
     for did, vs in by_dec.items():
-        statuses = [v.status for v in vs]
-        status = next((s for s in AGG_ORDER if s in statuses), "UNKNOWN")
-        if status == "HOLDING" and any(s != "HOLDING" for s in statuses):
-            status = "UNKNOWN"
-        ev = [
-            {"path": e.ref.path, "line": e.ref.line_start, "line_end": e.ref.line_end}
+        per_claim = [
+            {
+                "status": v.status,
+                "grounding": v.grounding,
+                "evidence": [
+                    {"path": e.ref.path, "line": e.ref.line_start, "line_end": e.ref.line_end}
+                    for e in v.evidence
+                ],
+            }
             for v in vs
-            if v.status == status
-            for e in v.evidence
         ]
-        grounding = "VERIFIED" if all(v.grounding == "VERIFIED" for v in vs) else "MISMATCH"
+        status, ev, downgraded = merge_decision(per_claim)
         preds.append(
             {
                 "repo": name,
                 "decision_id": did,
                 "status": status,
                 "evidence": ev,
-                "grounding": grounding,
+                # per-claim grounding was applied by merge_decision; MISMATCH only when it
+                # cost the decision its status (nothing verified survived).
+                "grounding": "MISMATCH" if downgraded and status == "UNKNOWN" else "VERIFIED",
             }
         )
     for d in scan.decisions:

@@ -26,6 +26,7 @@ Conventions (also in bench/README.md):
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,31 @@ def aggregate_status(statuses: list[str]) -> str:
         if s in sts:
             return s
     return "HOLDING" if all(s == "HOLDING" for s in sts) else "UNKNOWN"
+
+
+def merge_decision(preds: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], int]:
+    """One decision from its per-claim predictions: (status, evidence, claims downgraded).
+
+    The single rule shared by :func:`score` and ``bench.probe_library``: a claim whose
+    grounding is not VERIFIED counts as UNKNOWN on its own (it never poisons a verified
+    sibling), then :func:`aggregate_status` merges the claims. Evidence comes from the
+    claims that carry the merged status."""
+    eff, downgraded = [], 0
+    for p in preds:
+        q = dict(p, status=normalise_status(p.get("status")))
+        if str(p.get("grounding", "VERIFIED")).upper() != "VERIFIED" and q["status"] not in (
+            "UNKNOWN",
+            "SKIPPED",
+        ):
+            q["status"] = "UNKNOWN"
+            downgraded += 1
+        eff.append(q)
+    status = aggregate_status([q["status"] for q in eff])
+    return (
+        status,
+        [e for q in eff if q["status"] == status for e in q.get("evidence", [])],
+        downgraded,
+    )
 
 
 def normalise_status(s: Any) -> str:
@@ -127,8 +153,27 @@ def _fmt(x: Any) -> str:
 # --------------------------------------------------------------------------- ledger
 
 
+# A ledger row verifies a model-produced citation when it is a G2/G3 row whose subject is
+#   <claim id>/citation-<n>   judge.llm_verdict, a citation rejected before the verifiers
+#   <claim id>/e<n>           judge.gate on cited evidence (claim ids contain a dot: ADR-1.c1)
+#   draft:UD-.../<id>         undocumented.draft citations
+# G1 (decision source, claim quotes), G5 and G6 (agreement votes) rows are not citations.
+# Known limit: the ledger has no origin field, so the judge's rule-verdict gate rows
+# (same subject shape, deterministic evidence) cannot be told apart from LLM ones.
+_CITATION_SUBJECT = re.compile(
+    r"^(?:draft:UD-[^/]+/[^/]+|(?!UD-)[^/:\s]+\.[^/\s]+/(?:e|citation-)\d+)$"
+)
+
+
+def is_citation_row(row: dict[str, Any]) -> bool:
+    return row.get("check_id") in ("G2", "G3") and bool(
+        _CITATION_SUBJECT.match(str(row.get("subject") or ""))
+    )
+
+
 def read_ledger(ledger_dir: str | Path | None) -> dict[str, Any] | None:
-    """Pass rate over every ``*.jsonl`` grounding row under ``ledger_dir`` (recursive)."""
+    """Grounding pass rate over every ``*.jsonl`` row under ``ledger_dir`` (recursive)
+    (``rows``/``pass_rate``), and separately over citation rows only (``citation``, S4)."""
     if ledger_dir is None:
         return None
     rows = []
@@ -147,7 +192,15 @@ def read_ledger(ledger_dir: str | Path | None) -> dict[str, Any] | None:
     for row in rows:
         by_check[str(row.get("check_id", "?"))][row["status"]] += 1
     ok = sum(1 for r in rows if r["status"] == "VERIFIED")
+    cit_rows = [r for r in rows if is_citation_row(r)]
+    cit_ok = sum(1 for r in cit_rows if r["status"] == "VERIFIED")
     return {
+        "citation": {
+            "rows": len(cit_rows),
+            "verified": cit_ok,
+            "mismatch": len(cit_rows) - cit_ok,
+            "pass_rate": _ratio(cit_ok, len(cit_rows)),
+        },
         "rows": len(rows),
         "verified": ok,
         "mismatch": len(rows) - ok,
@@ -198,19 +251,13 @@ def score(
                 continue
             ud_preds.setdefault((repo, str(p.get("technology", ""))), p)
         else:
-            q = dict(p)
-            q["status"] = normalise_status(p.get("status"))
-            if g != "VERIFIED" and q["status"] not in ("UNKNOWN", "SKIPPED"):
-                q["status"] = "UNKNOWN"
-                ungrounded += 1
-            claim_preds[(repo, str(p.get("decision_id", "")))].append(q)
+            claim_preds[(repo, str(p.get("decision_id", "")))].append(p)
 
     pred_status: dict[tuple[str, str], str] = {}
     pred_evidence: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for key, ps in claim_preds.items():
-        pred_status[key] = aggregate_status([x["status"] for x in ps])
-        keep = pred_status[key]
-        pred_evidence[key] = [e for x in ps if x["status"] == keep for e in x.get("evidence", [])]
+        pred_status[key], pred_evidence[key], n_down = merge_decision(ps)
+        ungrounded += n_down
 
     # ---- VIOLATED precision / recall, overall and per repo
     counts: dict[str, Counter] = defaultdict(Counter)
@@ -422,7 +469,8 @@ def score(
     }
 
     # ---- thresholds
-    cit = ledger["pass_rate"] if ledger else None
+    lc = ledger["citation"] if ledger else None
+    cit = lc["pass_rate"] if lc else None
     ov = violated["overall"]
     s2_p = ov["precision"] is not None and ov["precision"] >= THRESHOLDS["precision"]
     s2_r = ov["recall"] is not None and ov["recall"] >= THRESHOLDS["recall"]
@@ -437,7 +485,9 @@ def score(
         "S4": {
             "citation_accuracy": cit,
             "min": THRESHOLDS["citation_accuracy"],
-            "ledger_rows": ledger["rows"] if ledger else 0,
+            "ledger_rows": lc["rows"] if lc else 0,
+            "grounding_pass_rate": ledger["pass_rate"] if ledger else None,
+            "grounding_rows": ledger["rows"] if ledger else 0,
             "min_rows": THRESHOLDS["min_ledger_rows"],
             "pass": (
                 None
@@ -445,11 +495,13 @@ def score(
                 else bool(
                     cit is not None
                     and cit >= THRESHOLDS["citation_accuracy"]
-                    and ledger["rows"] >= THRESHOLDS["min_ledger_rows"]
+                    and lc["rows"] >= THRESHOLDS["min_ledger_rows"]
                 )
             ),
-            "note": "S4 is meaningful only for a ledger written by an LLM-mode run, before "
-            "the verifier filters; an offline ledger measures the rule library.",
+            "note": "S4 counts G2/G3 rows that verify a citation (judge, draft); G1/G5/G6 rows "
+            "are in the overall grounding rate only. Meaningful only for a ledger written by "
+            "an LLM-mode run, before the verifier filters; an offline ledger measures the "
+            "rule library.",
         },
         "G7_corpus": {
             "repos": len(truths),
@@ -604,7 +656,13 @@ def render_markdown(res: dict[str, Any]) -> str:
     if g["ledger"]:
         lg = g["ledger"]
         L.append(
-            f"- Ledger: {lg['verified']} of {lg['rows']} rows VERIFIED ({_fmt(lg['pass_rate'])})."
+            f"- Ledger, overall grounding: {lg['verified']} of {lg['rows']} rows VERIFIED "
+            f"({_fmt(lg['pass_rate'])})."
+        )
+        lc = lg["citation"]
+        L.append(
+            f"- Ledger, citations only (S4): {lc['verified']} of {lc['rows']} rows VERIFIED "
+            f"({_fmt(lc['pass_rate'])})."
         )
         for chk, m in lg["by_check"].items():
             L.append(
