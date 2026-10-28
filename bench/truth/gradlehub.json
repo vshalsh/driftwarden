@@ -1,0 +1,548 @@
+{
+  "adr_styles": [
+    "freeform",
+    "madr",
+    "madr-fm"
+  ],
+  "commits": 18,
+  "counts": {
+    "claim": 15,
+    "evidence_decoy": 4,
+    "evidence_violation": 8,
+    "undocumented": 5
+  },
+  "ecosystem": "java/gradle-kts",
+  "head": "8b28bbcb5bd4d74699705a3463af392d2818a3cd",
+  "layout": "single",
+  "records": [
+    {
+      "adr_path": "docs/adrs/0001-spring-boot-as-web-framework.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0001",
+      "expected_offline": "HOLDING",
+      "id": "gradlehub:ADR-0001",
+      "kind": "require",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "title": "Spring Boot as web framework",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adrs/0002-mysql-is-the-only-datastore.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0002",
+      "expected_offline": "VIOLATED",
+      "id": "gradlehub:ADR-0002",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "title": "MySQL is the only datastore",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "id": "gradlehub:ADR-0002:v:src/main/java/com/acme/hub/web/Health.java:3",
+      "introduced_commit": "f186d13823bb9abd93b54028a83178217b9fa3bc",
+      "kind": "import",
+      "line": 3,
+      "path": "src/main/java/com/acme/hub/web/Health.java",
+      "repo": "gradlehub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "id": "gradlehub:ADR-0002:v:build.gradle.kts:15",
+      "introduced_commit": "ed22a6f2882d08835c61112b586379e2ed2b7de4",
+      "kind": "dependency",
+      "line": 15,
+      "path": "build.gradle.kts",
+      "repo": "gradlehub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adrs/0003-no-hibernate.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0003",
+      "expected_offline": "DRIFTING",
+      "id": "gradlehub:ADR-0003",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "DRIFTING",
+      "tags": [
+        "supported",
+        "adversarial",
+        "dev-only"
+      ],
+      "title": "No Hibernate",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "decoy_kind": "test-file",
+      "id": "gradlehub:ADR-0003:d:src/test/java/com/acme/hub/OrmTest.java:3",
+      "introduced_commit": "4eb9e30a2bf2caeae0660920854c3fd182140d13",
+      "line": 3,
+      "path": "src/test/java/com/acme/hub/OrmTest.java",
+      "repo": "gradlehub",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "decoy_kind": "test-dependency",
+      "id": "gradlehub:ADR-0003:d:build.gradle.kts:11",
+      "introduced_commit": "c511c9c8eb5203e773d2b83820d04b1690737fea",
+      "line": 11,
+      "path": "build.gradle.kts",
+      "repo": "gradlehub",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adrs/0004-cloud-sdks-only-in-infra.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0004",
+      "expected_offline": "VIOLATED",
+      "id": "gradlehub:ADR-0004",
+      "kind": "boundary",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated",
+        "adversarial"
+      ],
+      "title": "Cloud SDKs only in infra",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "id": "gradlehub:ADR-0004:v:src/main/java/com/acme/hub/web/Uploads.java:3",
+      "introduced_commit": "83f19096551acb5ee862285d075f785e980d8f1b",
+      "kind": "import",
+      "line": 3,
+      "path": "src/main/java/com/acme/hub/web/Uploads.java",
+      "repo": "gradlehub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "decoy_kind": "allowed-location",
+      "id": "gradlehub:ADR-0004:d:src/main/java/com/acme/hub/infra/Blob.java:3",
+      "introduced_commit": "f6ebd2b09825a46941511da2a84c6b25630d95ca",
+      "line": 3,
+      "path": "src/main/java/com/acme/hub/infra/Blob.java",
+      "repo": "gradlehub",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "decoy_kind": "comment",
+      "id": "gradlehub:ADR-0004:d:src/main/java/com/acme/hub/web/Uploads.java:5",
+      "introduced_commit": "83f19096551acb5ee862285d075f785e980d8f1b",
+      "line": 5,
+      "path": "src/main/java/com/acme/hub/web/Uploads.java",
+      "repo": "gradlehub",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adrs/0005-rabbitmq-is-the-sole-broker.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0005",
+      "expected_offline": "VIOLATED",
+      "id": "gradlehub:ADR-0005",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "title": "RabbitMQ is the sole broker",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "id": "gradlehub:ADR-0005:v:src/main/java/com/acme/hub/events/Feed.java:3",
+      "introduced_commit": "27b0176a4c2b066468325aaff33354cf714d5f51",
+      "kind": "import",
+      "line": 3,
+      "path": "src/main/java/com/acme/hub/events/Feed.java",
+      "repo": "gradlehub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "id": "gradlehub:ADR-0005:v:build.gradle.kts:14",
+      "introduced_commit": "d2348a425b3043317a6925b5c037fd57431a1721",
+      "kind": "dependency",
+      "line": 14,
+      "path": "build.gradle.kts",
+      "repo": "gradlehub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adrs/0006-no-jedis.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0006",
+      "expected_offline": "HOLDING",
+      "id": "gradlehub:ADR-0006",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "front-matter-hint",
+      "repo": "gradlehub",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding",
+        "hint"
+      ],
+      "title": "No Jedis",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adrs/0007-no-stripe.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0007",
+      "expected_offline": "VIOLATED",
+      "id": "gradlehub:ADR-0007",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated",
+        "prompt-injection"
+      ],
+      "title": "No Stripe",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0007",
+      "id": "gradlehub:ADR-0007:v:src/main/java/com/acme/hub/billing/Cards.java:3",
+      "introduced_commit": "4eb9e30a2bf2caeae0660920854c3fd182140d13",
+      "kind": "import",
+      "line": 3,
+      "path": "src/main/java/com/acme/hub/billing/Cards.java",
+      "repo": "gradlehub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0007",
+      "id": "gradlehub:ADR-0007:v:build.gradle.kts:12",
+      "introduced_commit": "c511c9c8eb5203e773d2b83820d04b1690737fea",
+      "kind": "dependency",
+      "line": 12,
+      "path": "build.gradle.kts",
+      "repo": "gradlehub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adrs/0008-problem-json-errors.md",
+      "adr_status": "Accepted",
+      "adr_style": "freeform",
+      "decision_id": "ADR-0008",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "gradlehub:ADR-0008",
+      "kind": null,
+      "note": "",
+      "phrasing": "free-form",
+      "repo": "gradlehub",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "title": "Problem JSON errors",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adrs/0009-database-drivers-in-the-persistence-laye.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0009",
+      "expected_offline": "VIOLATED",
+      "id": "gradlehub:ADR-0009",
+      "kind": "boundary",
+      "note": "",
+      "phrasing": "category-boundary",
+      "repo": "gradlehub",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "title": "Database drivers in the persistence layer",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0009",
+      "id": "gradlehub:ADR-0009:v:src/main/java/com/acme/hub/web/Health.java:3",
+      "introduced_commit": "f186d13823bb9abd93b54028a83178217b9fa3bc",
+      "kind": "import",
+      "line": 3,
+      "path": "src/main/java/com/acme/hub/web/Health.java",
+      "repo": "gradlehub",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adrs/0010-okhttp-is-the-only-http-client.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0010",
+      "expected_offline": "HOLDING",
+      "id": "gradlehub:ADR-0010",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "title": "OkHttp is the only HTTP client",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adrs/0011-sentry-scope.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0011",
+      "expected_offline": "UNKNOWN",
+      "id": "gradlehub:ADR-0011",
+      "kind": "only",
+      "note": "",
+      "phrasing": "qualifier",
+      "repo": "gradlehub",
+      "status": "UNKNOWN",
+      "tags": [
+        "qualifier",
+        "unknown"
+      ],
+      "title": "Sentry scope",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adrs/0012-jersey.md",
+      "adr_status": "Superseded by ADR-0001",
+      "adr_style": "madr",
+      "decision_id": "ADR-0012",
+      "expected_offline": "SKIPPED",
+      "id": "gradlehub:ADR-0012",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "superseded"
+      ],
+      "title": "Jersey",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adrs/0013-graphql.md",
+      "adr_status": "Proposed",
+      "adr_style": "madr",
+      "decision_id": "ADR-0013",
+      "expected_offline": "SKIPPED",
+      "id": "gradlehub:ADR-0013",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "proposed"
+      ],
+      "title": "GraphQL",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adrs/0014-oracle.md",
+      "adr_status": "Rejected",
+      "adr_style": "madr",
+      "decision_id": "ADR-0014",
+      "expected_offline": "SKIPPED",
+      "id": "gradlehub:ADR-0014",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "rejected"
+      ],
+      "title": "Oracle",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adrs/0015-ant-builds.md",
+      "adr_status": "Deprecated",
+      "adr_style": "madr",
+      "decision_id": "ADR-0015",
+      "expected_offline": "SKIPPED",
+      "id": "gradlehub:ADR-0015",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "gradlehub",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "deprecated"
+      ],
+      "title": "Ant builds",
+      "type": "claim"
+    },
+    {
+      "category": "cloud-sdk",
+      "evidence": [
+        {
+          "commit": "f6ebd2b09825a46941511da2a84c6b25630d95ca",
+          "line": 3,
+          "path": "src/main/java/com/acme/hub/infra/Blob.java"
+        },
+        {
+          "commit": "83f19096551acb5ee862285d075f785e980d8f1b",
+          "line": 3,
+          "path": "src/main/java/com/acme/hub/web/Uploads.java"
+        }
+      ],
+      "first_commit": "f6ebd2b09825a46941511da2a84c6b25630d95ca",
+      "id": "gradlehub:ud:gcp-sdk:positive",
+      "introducing_commits": [
+        "f6ebd2b09825a46941511da2a84c6b25630d95ca",
+        "83f19096551acb5ee862285d075f785e980d8f1b"
+      ],
+      "reason": "",
+      "repo": "gradlehub",
+      "role": "positive",
+      "technology": "gcp-sdk",
+      "type": "undocumented"
+    },
+    {
+      "category": "queue",
+      "evidence": [
+        {
+          "commit": "27b0176a4c2b066468325aaff33354cf714d5f51",
+          "line": 3,
+          "path": "src/main/java/com/acme/hub/events/Feed.java"
+        }
+      ],
+      "first_commit": "27b0176a4c2b066468325aaff33354cf714d5f51",
+      "id": "gradlehub:ud:kafka:positive",
+      "introducing_commits": [
+        "27b0176a4c2b066468325aaff33354cf714d5f51"
+      ],
+      "reason": "",
+      "repo": "gradlehub",
+      "role": "positive",
+      "technology": "kafka",
+      "type": "undocumented"
+    },
+    {
+      "category": "vendor-sdk",
+      "evidence": [
+        {
+          "commit": "4eb9e30a2bf2caeae0660920854c3fd182140d13",
+          "line": 3,
+          "path": "src/main/java/com/acme/hub/notify/Sms.java"
+        }
+      ],
+      "first_commit": "4eb9e30a2bf2caeae0660920854c3fd182140d13",
+      "id": "gradlehub:ud:twilio:positive",
+      "introducing_commits": [
+        "4eb9e30a2bf2caeae0660920854c3fd182140d13"
+      ],
+      "reason": "",
+      "repo": "gradlehub",
+      "role": "positive",
+      "technology": "twilio",
+      "type": "undocumented"
+    },
+    {
+      "category": "datastore",
+      "evidence": [
+        {
+          "commit": "f186d13823bb9abd93b54028a83178217b9fa3bc",
+          "line": 3,
+          "path": "src/main/java/com/acme/hub/web/Health.java"
+        }
+      ],
+      "first_commit": "f186d13823bb9abd93b54028a83178217b9fa3bc",
+      "id": "gradlehub:ud:postgresql:positive",
+      "introducing_commits": [
+        "f186d13823bb9abd93b54028a83178217b9fa3bc"
+      ],
+      "reason": "",
+      "repo": "gradlehub",
+      "role": "positive",
+      "technology": "postgresql",
+      "type": "undocumented"
+    },
+    {
+      "category": "search",
+      "evidence": [
+        {
+          "commit": "4eb9e30a2bf2caeae0660920854c3fd182140d13",
+          "line": 3,
+          "path": "src/test/java/com/acme/hub/SearchIT.java"
+        }
+      ],
+      "first_commit": "4eb9e30a2bf2caeae0660920854c3fd182140d13",
+      "id": "gradlehub:ud:elasticsearch:negative",
+      "introducing_commits": [
+        "4eb9e30a2bf2caeae0660920854c3fd182140d13"
+      ],
+      "reason": "nonproduction",
+      "repo": "gradlehub",
+      "role": "negative",
+      "technology": "elasticsearch",
+      "type": "undocumented"
+    }
+  ],
+  "repo": "gradlehub",
+  "schema": 1
+}

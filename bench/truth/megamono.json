@@ -1,0 +1,543 @@
+{
+  "adr_styles": [
+    "freeform",
+    "madr",
+    "nygard"
+  ],
+  "commits": 20,
+  "counts": {
+    "claim": 14,
+    "evidence_decoy": 2,
+    "evidence_violation": 6,
+    "undocumented": 8
+  },
+  "ecosystem": "monorepo (python + typescript + go)",
+  "head": "0bb32bde12727ed4f2a18c9bc81ed5a0bea16590",
+  "layout": "monorepo",
+  "records": [
+    {
+      "adr_path": "architecture/decisions/0001-react-is-the-only-frontend-framework.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0001",
+      "expected_offline": "VIOLATED",
+      "id": "megamono:ADR-0001",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "megamono",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "title": "React is the only frontend framework",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0001",
+      "id": "megamono:ADR-0001:v:services/admin/ui/package.json:4",
+      "introduced_commit": "46188e840b865801dfb86bd027c2ddfa02de8141",
+      "kind": "dependency",
+      "line": 4,
+      "path": "services/admin/ui/package.json",
+      "repo": "megamono",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0001",
+      "id": "megamono:ADR-0001:v:services/admin/ui/src/main.ts:1",
+      "introduced_commit": "46188e840b865801dfb86bd027c2ddfa02de8141",
+      "kind": "import",
+      "line": 1,
+      "path": "services/admin/ui/src/main.ts",
+      "repo": "megamono",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "architecture/decisions/0002-postgresql-is-the-only-datastore.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0002",
+      "expected_offline": "VIOLATED",
+      "id": "megamono:ADR-0002",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "megamono",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated",
+        "prompt-injection"
+      ],
+      "title": "PostgreSQL is the only datastore",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "id": "megamono:ADR-0002:v:services/admin/app/store.py:1",
+      "introduced_commit": "da5026fa301045a47ad2ab6dc4d637d81e33881c",
+      "kind": "import",
+      "line": 1,
+      "path": "services/admin/app/store.py",
+      "repo": "megamono",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "id": "megamono:ADR-0002:v:services/admin/requirements.txt:2",
+      "introduced_commit": "da5026fa301045a47ad2ab6dc4d637d81e33881c",
+      "kind": "dependency",
+      "line": 2,
+      "path": "services/admin/requirements.txt",
+      "repo": "megamono",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "architecture/decisions/0003-no-requests-library.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0003",
+      "expected_offline": "HOLDING",
+      "id": "megamono:ADR-0003",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "megamono",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding",
+        "adversarial"
+      ],
+      "title": "No requests library",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "decoy_kind": "comment",
+      "id": "megamono:ADR-0003:d:services/orders/app/legacy.py:1",
+      "introduced_commit": "268f5b6d7565bc6589deb2220030a6af9c68a202",
+      "line": 1,
+      "path": "services/orders/app/legacy.py",
+      "repo": "megamono",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "architecture/decisions/0004-cloud-sdks-live-in-libs-cloud.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0004",
+      "expected_offline": "VIOLATED",
+      "id": "megamono:ADR-0004",
+      "kind": "boundary",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "megamono",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "title": "Cloud SDKs live in libs/cloud",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "id": "megamono:ADR-0004:v:services/orders/app/export.py:1",
+      "introduced_commit": "94a3b0e1b6f792c753cf3ebc25cc1b983a6a0ece",
+      "kind": "import",
+      "line": 1,
+      "path": "services/orders/app/export.py",
+      "repo": "megamono",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "decoy_kind": "allowed-location",
+      "id": "megamono:ADR-0004:d:libs/cloud/s3.py:1",
+      "introduced_commit": "74b6296fc56593d8b8f67f921318112ca27ab773",
+      "line": 1,
+      "path": "libs/cloud/s3.py",
+      "repo": "megamono",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "architecture/decisions/0005-services-talk-over-kafka.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0005",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "megamono:ADR-0005",
+      "kind": "only",
+      "note": "service-to-service scope is not decidable by the offline judge",
+      "phrasing": "communicate-only-via",
+      "repo": "megamono",
+      "status": "VIOLATED",
+      "tags": [
+        "unsupported-phrasing",
+        "violated"
+      ],
+      "title": "Services talk over Kafka",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "id": "megamono:ADR-0005:v:services/orders/app/billing_client.py:1",
+      "introduced_commit": "8cbc796134e372e7930a8827f28e42736e43c436",
+      "kind": "import",
+      "line": 1,
+      "path": "services/orders/app/billing_client.py",
+      "repo": "megamono",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "architecture/decisions/0006-no-celery.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0006",
+      "expected_offline": "HOLDING",
+      "id": "megamono:ADR-0006",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "megamono",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "title": "No Celery",
+      "type": "claim"
+    },
+    {
+      "adr_path": "architecture/decisions/0007-bazel.md",
+      "adr_status": "Proposed",
+      "adr_style": "madr",
+      "decision_id": "ADR-0007",
+      "expected_offline": "SKIPPED",
+      "id": "megamono:ADR-0007",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "megamono",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "proposed"
+      ],
+      "title": "Bazel",
+      "type": "claim"
+    },
+    {
+      "adr_path": "architecture/decisions/0008-structured-logging.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0008",
+      "expected_offline": "HOLDING",
+      "id": "megamono:ADR-0008",
+      "kind": "require",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "megamono",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "title": "Structured logging",
+      "type": "claim"
+    },
+    {
+      "adr_path": "architecture/decisions/0009-python-web-framework.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0009",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "megamono:ADR-0009",
+      "kind": "only",
+      "note": "",
+      "phrasing": "scoped-category",
+      "repo": "megamono",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "title": "Python web framework",
+      "type": "claim"
+    },
+    {
+      "adr_path": "architecture/decisions/0010-redis-is-the-only-cache.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0010",
+      "expected_offline": "HOLDING",
+      "id": "megamono:ADR-0010",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "megamono",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "title": "Redis is the only cache",
+      "type": "claim"
+    },
+    {
+      "adr_path": "architecture/decisions/0011-vue.md",
+      "adr_status": "Superseded by [1. later decision](0001-x.md)",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0011",
+      "expected_offline": "SKIPPED",
+      "id": "megamono:ADR-0011",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "megamono",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "superseded"
+      ],
+      "title": "Vue",
+      "type": "claim"
+    },
+    {
+      "adr_path": "architecture/decisions/0012-kafka-scope.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0012",
+      "expected_offline": "UNKNOWN",
+      "id": "megamono:ADR-0012",
+      "kind": "only",
+      "note": "",
+      "phrasing": "qualifier",
+      "repo": "megamono",
+      "status": "UNKNOWN",
+      "tags": [
+        "qualifier",
+        "unknown"
+      ],
+      "title": "Kafka scope",
+      "type": "claim"
+    },
+    {
+      "adr_path": "architecture/decisions/0013-database-per-service.md",
+      "adr_status": "Accepted",
+      "adr_style": "freeform",
+      "decision_id": "ADR-0013",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "megamono:ADR-0013",
+      "kind": null,
+      "note": "",
+      "phrasing": "free-form",
+      "repo": "megamono",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "title": "Database per service",
+      "type": "claim"
+    },
+    {
+      "adr_path": "architecture/decisions/0014-terraform-modules.md",
+      "adr_status": "Deprecated",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0014",
+      "expected_offline": "SKIPPED",
+      "id": "megamono:ADR-0014",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "megamono",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "deprecated"
+      ],
+      "title": "Terraform modules",
+      "type": "claim"
+    },
+    {
+      "category": "datastore",
+      "evidence": [
+        {
+          "commit": "da5026fa301045a47ad2ab6dc4d637d81e33881c",
+          "line": 1,
+          "path": "services/admin/app/store.py"
+        }
+      ],
+      "first_commit": "da5026fa301045a47ad2ab6dc4d637d81e33881c",
+      "id": "megamono:ud:mongodb:positive",
+      "introducing_commits": [
+        "da5026fa301045a47ad2ab6dc4d637d81e33881c"
+      ],
+      "reason": "",
+      "repo": "megamono",
+      "role": "positive",
+      "technology": "mongodb",
+      "type": "undocumented"
+    },
+    {
+      "category": "web-framework",
+      "evidence": [
+        {
+          "commit": "da5026fa301045a47ad2ab6dc4d637d81e33881c",
+          "line": 1,
+          "path": "services/admin/app/web.py"
+        }
+      ],
+      "first_commit": "da5026fa301045a47ad2ab6dc4d637d81e33881c",
+      "id": "megamono:ud:flask:positive",
+      "introducing_commits": [
+        "da5026fa301045a47ad2ab6dc4d637d81e33881c"
+      ],
+      "reason": "",
+      "repo": "megamono",
+      "role": "positive",
+      "technology": "flask",
+      "type": "undocumented"
+    },
+    {
+      "category": "http-client",
+      "evidence": [
+        {
+          "commit": "8cbc796134e372e7930a8827f28e42736e43c436",
+          "line": 1,
+          "path": "services/orders/app/billing_client.py"
+        }
+      ],
+      "first_commit": "8cbc796134e372e7930a8827f28e42736e43c436",
+      "id": "megamono:ud:httpx:positive",
+      "introducing_commits": [
+        "8cbc796134e372e7930a8827f28e42736e43c436"
+      ],
+      "reason": "",
+      "repo": "megamono",
+      "role": "positive",
+      "technology": "httpx",
+      "type": "undocumented"
+    },
+    {
+      "category": "http-client",
+      "evidence": [
+        {
+          "commit": "8cbc796134e372e7930a8827f28e42736e43c436",
+          "line": 1,
+          "path": "services/web/src/api.ts"
+        }
+      ],
+      "first_commit": "8cbc796134e372e7930a8827f28e42736e43c436",
+      "id": "megamono:ud:axios:positive",
+      "introducing_commits": [
+        "8cbc796134e372e7930a8827f28e42736e43c436"
+      ],
+      "reason": "",
+      "repo": "megamono",
+      "role": "positive",
+      "technology": "axios",
+      "type": "undocumented"
+    },
+    {
+      "category": "web-framework",
+      "evidence": [
+        {
+          "commit": "74b6296fc56593d8b8f67f921318112ca27ab773",
+          "line": 4,
+          "path": "services/billing/cmd/main.go"
+        }
+      ],
+      "first_commit": "74b6296fc56593d8b8f67f921318112ca27ab773",
+      "id": "megamono:ud:gin:positive",
+      "introducing_commits": [
+        "74b6296fc56593d8b8f67f921318112ca27ab773"
+      ],
+      "reason": "",
+      "repo": "megamono",
+      "role": "positive",
+      "technology": "gin",
+      "type": "undocumented"
+    },
+    {
+      "category": "cloud-sdk",
+      "evidence": [
+        {
+          "commit": "74b6296fc56593d8b8f67f921318112ca27ab773",
+          "line": 1,
+          "path": "libs/cloud/s3.py"
+        },
+        {
+          "commit": "94a3b0e1b6f792c753cf3ebc25cc1b983a6a0ece",
+          "line": 1,
+          "path": "services/orders/app/export.py"
+        }
+      ],
+      "first_commit": "74b6296fc56593d8b8f67f921318112ca27ab773",
+      "id": "megamono:ud:aws-sdk:positive",
+      "introducing_commits": [
+        "74b6296fc56593d8b8f67f921318112ca27ab773",
+        "94a3b0e1b6f792c753cf3ebc25cc1b983a6a0ece"
+      ],
+      "reason": "",
+      "repo": "megamono",
+      "role": "positive",
+      "technology": "aws-sdk",
+      "type": "undocumented"
+    },
+    {
+      "category": "vendor-sdk",
+      "evidence": [
+        {
+          "commit": "b24358974b15ac663ccd3d4e99161ae5b04c625d",
+          "line": 2,
+          "path": "services/orders/requirements-dev.txt"
+        }
+      ],
+      "first_commit": "b24358974b15ac663ccd3d4e99161ae5b04c625d",
+      "id": "megamono:ud:twilio:negative",
+      "introducing_commits": [
+        "b24358974b15ac663ccd3d4e99161ae5b04c625d"
+      ],
+      "reason": "nonproduction",
+      "repo": "megamono",
+      "role": "negative",
+      "technology": "twilio",
+      "type": "undocumented"
+    },
+    {
+      "category": "cache",
+      "evidence": [
+        {
+          "commit": "b24358974b15ac663ccd3d4e99161ae5b04c625d",
+          "line": 1,
+          "path": "services/orders/app/notes.py"
+        }
+      ],
+      "first_commit": "b24358974b15ac663ccd3d4e99161ae5b04c625d",
+      "id": "megamono:ud:memcached:negative",
+      "introducing_commits": [
+        "b24358974b15ac663ccd3d4e99161ae5b04c625d"
+      ],
+      "reason": "comment-only",
+      "repo": "megamono",
+      "role": "negative",
+      "technology": "memcached",
+      "type": "undocumented"
+    }
+  ],
+  "repo": "megamono",
+  "schema": 1
+}

@@ -1,0 +1,532 @@
+{
+  "adr_styles": [
+    "madr",
+    "madr-fm",
+    "nygard"
+  ],
+  "commits": 16,
+  "counts": {
+    "claim": 14,
+    "evidence_decoy": 2,
+    "evidence_violation": 9,
+    "undocumented": 6
+  },
+  "ecosystem": "iac (terraform, compose, kubernetes)",
+  "head": "29090896395dba2814253b81e64371068fa0ea5f",
+  "layout": "single",
+  "records": [
+    {
+      "adr_path": "docs/adr/0001-postgresql-is-the-only-datastore.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0001",
+      "expected_offline": "VIOLATED",
+      "id": "cloudbase:ADR-0001",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "cloudbase",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "title": "PostgreSQL is the only datastore",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0001",
+      "id": "cloudbase:ADR-0001:v:docker-compose.yml:9",
+      "introduced_commit": "91de6c67ae39ef4d60fd26bbf0f2d31ebc5bfea2",
+      "kind": "infra",
+      "line": 9,
+      "path": "docker-compose.yml",
+      "repo": "cloudbase",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0002-infrastructure-as-code.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0002",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "cloudbase:ADR-0002",
+      "kind": "require",
+      "note": "",
+      "phrasing": "tool-not-in-catalog",
+      "repo": "cloudbase",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "title": "Infrastructure as code",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0003-no-google-cloud.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0003",
+      "expected_offline": "VIOLATED",
+      "id": "cloudbase:ADR-0003",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "cloudbase",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "title": "No Google Cloud",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "id": "cloudbase:ADR-0003:v:infra/analytics/main.tf:4",
+      "introduced_commit": "0ea93ae4e30fd7f958bee6853dd5c06595299cd1",
+      "kind": "infra",
+      "line": 4,
+      "path": "infra/analytics/main.tf",
+      "repo": "cloudbase",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "id": "cloudbase:ADR-0003:v:infra/analytics/main.tf:3",
+      "introduced_commit": "0ea93ae4e30fd7f958bee6853dd5c06595299cd1",
+      "kind": "infra",
+      "line": 3,
+      "path": "infra/analytics/main.tf",
+      "repo": "cloudbase",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "id": "cloudbase:ADR-0003:v:infra/analytics/main.tf:10",
+      "introduced_commit": "0ea93ae4e30fd7f958bee6853dd5c06595299cd1",
+      "kind": "infra",
+      "line": 10,
+      "path": "infra/analytics/main.tf",
+      "repo": "cloudbase",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0004-redis-is-the-only-cache.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0004",
+      "expected_offline": "DRIFTING",
+      "id": "cloudbase:ADR-0004",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "cloudbase",
+      "status": "DRIFTING",
+      "tags": [
+        "supported",
+        "adversarial",
+        "dev-only"
+      ],
+      "title": "Redis is the only cache",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "decoy_kind": "test-compose",
+      "id": "cloudbase:ADR-0004:d:docker-compose.test.yml:3",
+      "introduced_commit": "3a653132b492b9016e962431397ce35fb010f8de",
+      "line": 3,
+      "path": "docker-compose.test.yml",
+      "repo": "cloudbase",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0005-kafka-is-the-sole-broker.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0005",
+      "expected_offline": "VIOLATED",
+      "id": "cloudbase:ADR-0005",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "cloudbase",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "title": "Kafka is the sole broker",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "id": "cloudbase:ADR-0005:v:k8s/rabbit.yaml:17",
+      "introduced_commit": "3a653132b492b9016e962431397ce35fb010f8de",
+      "kind": "infra",
+      "line": 17,
+      "path": "k8s/rabbit.yaml",
+      "repo": "cloudbase",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0006-kubernetes-orchestration.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0006",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "cloudbase:ADR-0006",
+      "kind": "require",
+      "note": "",
+      "phrasing": "platform-not-in-catalog",
+      "repo": "cloudbase",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "title": "Kubernetes orchestration",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0007-swarm-orchestration.md",
+      "adr_status": "Superseded by [6. later decision](0006-x.md)",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0007",
+      "expected_offline": "SKIPPED",
+      "id": "cloudbase:ADR-0007",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "cloudbase",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "superseded"
+      ],
+      "title": "Swarm orchestration",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0008-pulumi.md",
+      "adr_status": "Proposed",
+      "adr_style": "madr",
+      "decision_id": "ADR-0008",
+      "expected_offline": "SKIPPED",
+      "id": "cloudbase:ADR-0008",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "cloudbase",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "proposed"
+      ],
+      "title": "Pulumi",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0009-elasticsearch-is-the-only-search-engine.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0009",
+      "expected_offline": "HOLDING",
+      "id": "cloudbase:ADR-0009",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "cloudbase",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "title": "Elasticsearch is the only search engine",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0010-no-datadog.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0010",
+      "expected_offline": "VIOLATED",
+      "id": "cloudbase:ADR-0010",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "cloudbase",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated",
+        "prompt-injection"
+      ],
+      "title": "No Datadog",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0010",
+      "id": "cloudbase:ADR-0010:v:infra/monitoring/main.tf:4",
+      "introduced_commit": "e18d5c573789efc1fd8d199f44c50491a414f084",
+      "kind": "infra",
+      "line": 4,
+      "path": "infra/monitoring/main.tf",
+      "repo": "cloudbase",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0010",
+      "id": "cloudbase:ADR-0010:v:infra/monitoring/main.tf:3",
+      "introduced_commit": "e18d5c573789efc1fd8d199f44c50491a414f084",
+      "kind": "infra",
+      "line": 3,
+      "path": "infra/monitoring/main.tf",
+      "repo": "cloudbase",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0010",
+      "id": "cloudbase:ADR-0010:v:infra/monitoring/main.tf:10",
+      "introduced_commit": "e18d5c573789efc1fd8d199f44c50491a414f084",
+      "kind": "infra",
+      "line": 10,
+      "path": "infra/monitoring/main.tf",
+      "repo": "cloudbase",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0011-small-datastore-footprint.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0011",
+      "expected_offline": "HOLDING",
+      "id": "cloudbase:ADR-0011",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "front-matter-hint",
+      "repo": "cloudbase",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding",
+        "hint",
+        "adversarial"
+      ],
+      "title": "Small datastore footprint",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0011",
+      "decoy_kind": "comment",
+      "id": "cloudbase:ADR-0011:d:docker-compose.yml:10",
+      "introduced_commit": "821b975be0ff9d58cc7ff2110068b48e8d30f9ea",
+      "line": 10,
+      "path": "docker-compose.yml",
+      "repo": "cloudbase",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0012-no-latest-image-tags.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0012",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "cloudbase:ADR-0012",
+      "kind": null,
+      "note": "",
+      "phrasing": "tag-qualifier",
+      "repo": "cloudbase",
+      "status": "VIOLATED",
+      "tags": [
+        "unsupported-phrasing",
+        "violated"
+      ],
+      "title": "No latest image tags",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0012",
+      "id": "cloudbase:ADR-0012:v:docker-compose.yml:12",
+      "introduced_commit": "df6411b5f265d9d20c8121be71435494cc81baba",
+      "kind": "infra",
+      "line": 12,
+      "path": "docker-compose.yml",
+      "repo": "cloudbase",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0013-remote-state.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0013",
+      "expected_offline": "UNKNOWN",
+      "id": "cloudbase:ADR-0013",
+      "kind": null,
+      "note": "",
+      "phrasing": "qualifier",
+      "repo": "cloudbase",
+      "status": "UNKNOWN",
+      "tags": [
+        "qualifier",
+        "unknown"
+      ],
+      "title": "Remote state",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0014-nomad.md",
+      "adr_status": "Rejected",
+      "adr_style": "madr",
+      "decision_id": "ADR-0014",
+      "expected_offline": "SKIPPED",
+      "id": "cloudbase:ADR-0014",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "cloudbase",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "rejected"
+      ],
+      "title": "Nomad",
+      "type": "claim"
+    },
+    {
+      "category": "datastore",
+      "evidence": [
+        {
+          "commit": "91de6c67ae39ef4d60fd26bbf0f2d31ebc5bfea2",
+          "line": 9,
+          "path": "docker-compose.yml"
+        }
+      ],
+      "first_commit": "91de6c67ae39ef4d60fd26bbf0f2d31ebc5bfea2",
+      "id": "cloudbase:ud:mongodb:positive",
+      "introducing_commits": [
+        "91de6c67ae39ef4d60fd26bbf0f2d31ebc5bfea2"
+      ],
+      "reason": "",
+      "repo": "cloudbase",
+      "role": "positive",
+      "technology": "mongodb",
+      "type": "undocumented"
+    },
+    {
+      "category": "queue",
+      "evidence": [
+        {
+          "commit": "3a653132b492b9016e962431397ce35fb010f8de",
+          "line": 17,
+          "path": "k8s/rabbit.yaml"
+        }
+      ],
+      "first_commit": "3a653132b492b9016e962431397ce35fb010f8de",
+      "id": "cloudbase:ud:rabbitmq:positive",
+      "introducing_commits": [
+        "3a653132b492b9016e962431397ce35fb010f8de"
+      ],
+      "reason": "",
+      "repo": "cloudbase",
+      "role": "positive",
+      "technology": "rabbitmq",
+      "type": "undocumented"
+    },
+    {
+      "category": "cloud-sdk",
+      "evidence": [
+        {
+          "commit": "5b7e0b8978948454aad0a68c4fb598331931232f",
+          "line": 4,
+          "path": "infra/core/main.tf"
+        }
+      ],
+      "first_commit": "5b7e0b8978948454aad0a68c4fb598331931232f",
+      "id": "cloudbase:ud:aws-sdk:positive",
+      "introducing_commits": [
+        "5b7e0b8978948454aad0a68c4fb598331931232f"
+      ],
+      "reason": "",
+      "repo": "cloudbase",
+      "role": "positive",
+      "technology": "aws-sdk",
+      "type": "undocumented"
+    },
+    {
+      "category": "iac-provider",
+      "evidence": [
+        {
+          "commit": "e18d5c573789efc1fd8d199f44c50491a414f084",
+          "line": 4,
+          "path": "infra/edge/main.tf"
+        }
+      ],
+      "first_commit": "e18d5c573789efc1fd8d199f44c50491a414f084",
+      "id": "cloudbase:ud:cloudflare:positive",
+      "introducing_commits": [
+        "e18d5c573789efc1fd8d199f44c50491a414f084"
+      ],
+      "reason": "",
+      "repo": "cloudbase",
+      "role": "positive",
+      "technology": "cloudflare",
+      "type": "undocumented"
+    },
+    {
+      "category": "cache",
+      "evidence": [
+        {
+          "commit": "3a653132b492b9016e962431397ce35fb010f8de",
+          "line": 3,
+          "path": "docker-compose.test.yml"
+        }
+      ],
+      "first_commit": "3a653132b492b9016e962431397ce35fb010f8de",
+      "id": "cloudbase:ud:memcached:negative",
+      "introducing_commits": [
+        "3a653132b492b9016e962431397ce35fb010f8de"
+      ],
+      "reason": "nonproduction",
+      "repo": "cloudbase",
+      "role": "negative",
+      "technology": "memcached",
+      "type": "undocumented"
+    },
+    {
+      "category": "iac-provider",
+      "evidence": [
+        {
+          "commit": "e18d5c573789efc1fd8d199f44c50491a414f084",
+          "line": 4,
+          "path": "infra/random/main.tf"
+        }
+      ],
+      "first_commit": "e18d5c573789efc1fd8d199f44c50491a414f084",
+      "id": "cloudbase:ud:random:negative",
+      "introducing_commits": [
+        "e18d5c573789efc1fd8d199f44c50491a414f084"
+      ],
+      "reason": "utility-provider",
+      "repo": "cloudbase",
+      "role": "negative",
+      "technology": "random",
+      "type": "undocumented"
+    }
+  ],
+  "repo": "cloudbase",
+  "schema": 1
+}

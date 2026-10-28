@@ -1,0 +1,510 @@
+{
+  "adr_styles": [
+    "adr-tools"
+  ],
+  "commits": 18,
+  "counts": {
+    "claim": 15,
+    "evidence_decoy": 4,
+    "evidence_violation": 3,
+    "undocumented": 6
+  },
+  "ecosystem": "java/maven",
+  "head": "2b51bf8c1c643a961a972fe0e0b8935a5d8be3d9",
+  "layout": "single",
+  "records": [
+    {
+      "adr_path": "doc/arch/0001-record-architecture-decisions.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0001",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "ledgerboot:ADR-0001",
+      "kind": null,
+      "note": "",
+      "phrasing": "meta",
+      "repo": "ledgerboot",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "title": "Record architecture decisions",
+      "type": "claim"
+    },
+    {
+      "adr_path": "doc/arch/0002-spring-boot-as-application-framework.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0002",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "ledgerboot:ADR-0002",
+      "kind": "require",
+      "note": "",
+      "phrasing": "category-not-in-catalog",
+      "repo": "ledgerboot",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "title": "Spring Boot as application framework",
+      "type": "claim"
+    },
+    {
+      "adr_path": "doc/arch/0003-postgresql-is-the-only-datastore.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0003",
+      "expected_offline": "VIOLATED",
+      "id": "ledgerboot:ADR-0003",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "ledgerboot",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated",
+        "prompt-injection"
+      ],
+      "title": "PostgreSQL is the only datastore",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "id": "ledgerboot:ADR-0003:v:src/main/java/com/acme/ledger/audit/AuditStore.java:3",
+      "introduced_commit": "56122d5c337234c5f9d2230609e3f7a28b5a5fcd",
+      "kind": "import",
+      "line": 3,
+      "path": "src/main/java/com/acme/ledger/audit/AuditStore.java",
+      "repo": "ledgerboot",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "id": "ledgerboot:ADR-0003:v:pom.xml:38",
+      "introduced_commit": "75681bff59b76f3b8b9db876282acc2251f2f732",
+      "kind": "dependency",
+      "line": 38,
+      "path": "pom.xml",
+      "repo": "ledgerboot",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "doc/arch/0004-no-okhttp.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0004",
+      "expected_offline": "DRIFTING",
+      "id": "ledgerboot:ADR-0004",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "ledgerboot",
+      "status": "DRIFTING",
+      "tags": [
+        "supported",
+        "adversarial",
+        "dev-only"
+      ],
+      "title": "No OkHttp",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "decoy_kind": "test-file",
+      "id": "ledgerboot:ADR-0004:d:src/test/java/com/acme/ledger/HttpStubTest.java:3",
+      "introduced_commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+      "line": 3,
+      "path": "src/test/java/com/acme/ledger/HttpStubTest.java",
+      "repo": "ledgerboot",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "decoy_kind": "test-scoped-dependency",
+      "id": "ledgerboot:ADR-0004:d:pom.xml:17",
+      "introduced_commit": "7f366c9c84a912bbdce93be8debf008e498b52d0",
+      "line": 17,
+      "path": "pom.xml",
+      "repo": "ledgerboot",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "doc/arch/0005-kafka-as-sole-broker.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0005",
+      "expected_offline": "HOLDING",
+      "id": "ledgerboot:ADR-0005",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "ledgerboot",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding",
+        "adversarial"
+      ],
+      "title": "Kafka as sole broker",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "decoy_kind": "comment",
+      "id": "ledgerboot:ADR-0005:d:src/main/java/com/acme/ledger/events/Publisher.java:5",
+      "introduced_commit": "d680f37cd8059d24e0583ad5f36afc614d7c2dcd",
+      "line": 5,
+      "path": "src/main/java/com/acme/ledger/events/Publisher.java",
+      "repo": "ledgerboot",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "doc/arch/0006-cloud-sdks-only-in-the-gateway-package.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0006",
+      "expected_offline": "VIOLATED",
+      "id": "ledgerboot:ADR-0006",
+      "kind": "boundary",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "ledgerboot",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "title": "Cloud SDKs only in the gateway package",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0006",
+      "id": "ledgerboot:ADR-0006:v:src/main/java/com/acme/ledger/export/Exporter.java:3",
+      "introduced_commit": "253f534747c449481d451a5f4c095f1eadbee61e",
+      "kind": "import",
+      "line": 3,
+      "path": "src/main/java/com/acme/ledger/export/Exporter.java",
+      "repo": "ledgerboot",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0006",
+      "decoy_kind": "allowed-location",
+      "id": "ledgerboot:ADR-0006:d:src/main/java/com/acme/ledger/gateway/S3Gateway.java:3",
+      "introduced_commit": "d680f37cd8059d24e0583ad5f36afc614d7c2dcd",
+      "line": 3,
+      "path": "src/main/java/com/acme/ledger/gateway/S3Gateway.java",
+      "repo": "ledgerboot",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "doc/arch/0007-log4j-logging.md",
+      "adr_status": "Superseded by [8. later decision](0008-x.md)",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0007",
+      "expected_offline": "SKIPPED",
+      "id": "ledgerboot:ADR-0007",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "ledgerboot",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "superseded"
+      ],
+      "title": "Log4j logging",
+      "type": "claim"
+    },
+    {
+      "adr_path": "doc/arch/0008-logback-logging.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0008",
+      "expected_offline": "HOLDING",
+      "id": "ledgerboot:ADR-0008",
+      "kind": "require",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "ledgerboot",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "title": "Logback logging",
+      "type": "claim"
+    },
+    {
+      "adr_path": "doc/arch/0009-money-as-integer-minor-units.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0009",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "ledgerboot:ADR-0009",
+      "kind": null,
+      "note": "",
+      "phrasing": "free-form",
+      "repo": "ledgerboot",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "title": "Money as integer minor units",
+      "type": "claim"
+    },
+    {
+      "adr_path": "doc/arch/0010-redis-for-rate-limiting.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0010",
+      "expected_offline": "UNKNOWN",
+      "id": "ledgerboot:ADR-0010",
+      "kind": "only",
+      "note": "usage-purpose qualifier: not decidable from static code",
+      "phrasing": "qualifier",
+      "repo": "ledgerboot",
+      "status": "UNKNOWN",
+      "tags": [
+        "qualifier",
+        "unknown"
+      ],
+      "title": "Redis for rate limiting",
+      "type": "claim"
+    },
+    {
+      "adr_path": "doc/arch/0011-cassandra.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0011",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "ledgerboot:ADR-0011",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "decided-not-to",
+      "repo": "ledgerboot",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "title": "Cassandra",
+      "type": "claim"
+    },
+    {
+      "adr_path": "doc/arch/0012-grpc-between-services.md",
+      "adr_status": "Proposed",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0012",
+      "expected_offline": "SKIPPED",
+      "id": "ledgerboot:ADR-0012",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "ledgerboot",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "proposed"
+      ],
+      "title": "gRPC between services",
+      "type": "claim"
+    },
+    {
+      "adr_path": "doc/arch/0013-oracle.md",
+      "adr_status": "Rejected",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0013",
+      "expected_offline": "SKIPPED",
+      "id": "ledgerboot:ADR-0013",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "ledgerboot",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "rejected"
+      ],
+      "title": "Oracle",
+      "type": "claim"
+    },
+    {
+      "adr_path": "doc/arch/0014-stripe-in-billing-only.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0014",
+      "expected_offline": "HOLDING",
+      "id": "ledgerboot:ADR-0014",
+      "kind": "boundary",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "ledgerboot",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "title": "Stripe in billing only",
+      "type": "claim"
+    },
+    {
+      "adr_path": "doc/arch/0015-hibernate-is-the-only-orm.md",
+      "adr_status": "Accepted",
+      "adr_style": "adrtools",
+      "decision_id": "ADR-0015",
+      "expected_offline": "HOLDING",
+      "id": "ledgerboot:ADR-0015",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "ledgerboot",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "title": "Hibernate is the only ORM",
+      "type": "claim"
+    },
+    {
+      "category": "datastore",
+      "evidence": [
+        {
+          "commit": "56122d5c337234c5f9d2230609e3f7a28b5a5fcd",
+          "line": 3,
+          "path": "src/main/java/com/acme/ledger/audit/AuditStore.java"
+        }
+      ],
+      "first_commit": "56122d5c337234c5f9d2230609e3f7a28b5a5fcd",
+      "id": "ledgerboot:ud:mongodb:positive",
+      "introducing_commits": [
+        "56122d5c337234c5f9d2230609e3f7a28b5a5fcd"
+      ],
+      "reason": "",
+      "repo": "ledgerboot",
+      "role": "positive",
+      "technology": "mongodb",
+      "type": "undocumented"
+    },
+    {
+      "category": "cloud-sdk",
+      "evidence": [
+        {
+          "commit": "d680f37cd8059d24e0583ad5f36afc614d7c2dcd",
+          "line": 3,
+          "path": "src/main/java/com/acme/ledger/gateway/S3Gateway.java"
+        },
+        {
+          "commit": "253f534747c449481d451a5f4c095f1eadbee61e",
+          "line": 3,
+          "path": "src/main/java/com/acme/ledger/export/Exporter.java"
+        }
+      ],
+      "first_commit": "d680f37cd8059d24e0583ad5f36afc614d7c2dcd",
+      "id": "ledgerboot:ud:aws-sdk:positive",
+      "introducing_commits": [
+        "d680f37cd8059d24e0583ad5f36afc614d7c2dcd",
+        "253f534747c449481d451a5f4c095f1eadbee61e"
+      ],
+      "reason": "",
+      "repo": "ledgerboot",
+      "role": "positive",
+      "technology": "aws-sdk",
+      "type": "undocumented"
+    },
+    {
+      "category": "vendor-sdk",
+      "evidence": [
+        {
+          "commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+          "line": 3,
+          "path": "src/main/java/com/acme/ledger/notify/Sms.java"
+        }
+      ],
+      "first_commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+      "id": "ledgerboot:ud:twilio:positive",
+      "introducing_commits": [
+        "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3"
+      ],
+      "reason": "",
+      "repo": "ledgerboot",
+      "role": "positive",
+      "technology": "twilio",
+      "type": "undocumented"
+    },
+    {
+      "category": "vendor-sdk",
+      "evidence": [
+        {
+          "commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+          "line": 3,
+          "path": "src/main/java/com/acme/ledger/billing/Charges.java"
+        }
+      ],
+      "first_commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+      "id": "ledgerboot:ud:stripe:negative",
+      "introducing_commits": [
+        "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3"
+      ],
+      "reason": "documented",
+      "repo": "ledgerboot",
+      "role": "negative",
+      "technology": "stripe",
+      "type": "undocumented"
+    },
+    {
+      "category": "search",
+      "evidence": [
+        {
+          "commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+          "line": 3,
+          "path": "src/test/java/com/acme/ledger/SearchIT.java"
+        }
+      ],
+      "first_commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+      "id": "ledgerboot:ud:elasticsearch:negative",
+      "introducing_commits": [
+        "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3"
+      ],
+      "reason": "nonproduction",
+      "repo": "ledgerboot",
+      "role": "negative",
+      "technology": "elasticsearch",
+      "type": "undocumented"
+    },
+    {
+      "category": "cache",
+      "evidence": [
+        {
+          "commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+          "line": 5,
+          "path": "src/main/java/com/acme/ledger/notify/Sms.java"
+        }
+      ],
+      "first_commit": "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3",
+      "id": "ledgerboot:ud:memcached:negative",
+      "introducing_commits": [
+        "61a20be9611ce4c4b2ad9dda0eb5ddd755756ce3"
+      ],
+      "reason": "comment-only",
+      "repo": "ledgerboot",
+      "role": "negative",
+      "technology": "memcached",
+      "type": "undocumented"
+    }
+  ],
+  "repo": "ledgerboot",
+  "schema": 1
+}
