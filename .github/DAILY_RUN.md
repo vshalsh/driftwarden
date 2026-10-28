@@ -7,7 +7,7 @@ The scheduled task's prompt points here, so the process can be improved in git.
 1. Get the current date in Asia/Kuala_Lumpur. Day N = (date − 2026-10-23) in days.
 2. Attach the repo `vshalsh/driftwarden` with **push** access (add_repo), clone it, and `cd` into it. Configure git:
    - user.name "Vishal Sharma"
-   - user.email "vishal.im@gmail.com"
+   - user.email "vishalramsharma13@gmail.com" (the vshalsh account; never vishal.im@gmail.com, which belongs to an old account)
 3. Load the **delivery-crew** skill and follow it. You act as **Fable** (PM and sole gate). Seats run as subagents:
    - Opus builds (`model: opus`, one Agent per ticket, `isolation: "worktree"`)
    - Sonnet tests (`model: sonnet`, one ticket per run, clean checkout of that ticket's branch)
