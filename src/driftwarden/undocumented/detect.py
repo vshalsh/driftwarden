@@ -64,7 +64,16 @@ introducing commit, so a dev-only dependency promoted to production is
 introduced by the promotion. The record lists the distinct introducing commits
 oldest first in topological order (an ancestor always before its descendants;
 never by timestamp). A version bump does not move the introduction (the
-technology was already there), unlike ``git blame``.
+technology was already there), unlike ``git blame``. In a shallow clone, a walk
+that reaches a boundary commit (``.git/shallow``: parents unavailable) cannot
+show absence before it, so that evidence has no introduction and the record is
+*Could not verify*; the verifier rejects a boundary commit as an introduction.
+
+Terraform ``provider "<local>"`` blocks are resolved through the module's
+``required_providers`` (all ``*.tf`` / ``*.tofu`` files in the same directory,
+at the same commit): ``provider "cf"`` with ``cf = { source =
+"cloudflare/cloudflare" }`` is Cloudflare, never a technology called ``cf``. An
+unmapped local name stays as written (implied ``hashicorp/<local>``).
 
 **Grounding (fail closed).** :func:`verify_undocumented` re-checks a record from
 scratch: G2 on every evidence line and G3 (``verify_dependency``) on every
@@ -107,7 +116,7 @@ from driftwarden.grounding.verify import (
     verify_commits_exist,
     verify_source_quote,
 )
-from driftwarden.index.files import detect_language
+from driftwarden.index.files import SNIFF_BYTES, detect_language
 from driftwarden.index.imports import (
     _js_package,
     extract_go,
@@ -116,6 +125,7 @@ from driftwarden.index.imports import (
     extract_python,
 )
 from driftwarden.index.manifests import canonical_package, parse_manifest
+from driftwarden.index.manifests.terraform import provider_sources
 from driftwarden.judge import catalog
 from driftwarden.judge.evidence import (
     Snapshot,
@@ -256,9 +266,31 @@ class _Hit:
     names: tuple[str, ...] = ()  # the package / module names on the line
 
 
+TF_SUFFIXES = (".tf", ".tofu")
+
+
+def ref_names(ref, tf_sources: dict[str, str] | None = None) -> tuple[str, ...]:
+    """The names a dependency ref is matched by. A Terraform ``provider "cf"`` block is
+    resolved through its module's ``required_providers`` (``cf`` ->
+    ``cloudflare/cloudflare``), so an explicitly mapped local name never becomes a
+    technology of its own; an unmapped local name stays as written."""
+    if (
+        ref.ecosystem == "terraform-provider"
+        and ref.scope == "provider-block"
+        and tf_sources
+        and ref.package in tf_sources
+    ):
+        return (tf_sources[ref.package],)
+    return (ref.package,)
+
+
 def _import_names(path: str, text: str) -> list[tuple[int, int, tuple[str, ...], str]]:
-    """``(line, end_line, names, namespace)`` for each non-relative import in one file."""
-    lang = detect_language(path)
+    """``(line, end_line, names, namespace)`` for each non-relative import in one file.
+
+    The language is detected from the name *and* the content prefix, as
+    ``load_snapshot`` does, so extensionless shebang scripts (``bin/worker`` with
+    ``#!/usr/bin/env python3``) are read the same way in history and verification."""
+    lang = detect_language(path, text.encode("utf-8", "replace")[:SNIFF_BYTES])
     out: list[tuple[int, int, tuple[str, ...], str]] = []
     if lang == "python":
         raws, _ = extract_python(text)
@@ -292,22 +324,27 @@ def file_hits(
     *,
     keys: Callable[[str, Iterable[str], str | None], list[Key]] = occurrence_keys,
     refs: list | None = None,
+    tf_sources: dict[str, str] | None = None,
 ) -> list[_Hit]:
     """Lines of ``path`` (with content ``text``) where the technology ``key`` occurs.
 
     ``kind`` is the evidence kind: ``dependency`` / ``infra`` re-parse the file as a
     manifest (or use the already parsed ``refs``), ``import`` re-extracts its import
-    statements. Each hit says whether that occurrence ships (``production``)."""
+    statements. Each hit says whether that occurrence ships (``production``).
+    ``tf_sources`` is the module's provider local-name map (default: this file's)."""
     hits: list[_Hit] = []
     if kind in ("dependency", "infra"):
+        if tf_sources is None and path.endswith(TF_SUFFIXES):
+            tf_sources = provider_sources(text)
         for ref in refs if refs is not None else parse_manifest(path, text).refs:
             ns = catalog.ECOSYSTEM_NAMESPACE.get(ref.ecosystem or "")
             if ns is None or ref.line is None:
                 continue
-            if key in keys(ns, (ref.package,), ref.ecosystem):
+            names = ref_names(ref, tf_sources)
+            if key in keys(ns, names, ref.ecosystem):
                 hits.append(
                     _Hit(ref.line, ref.line, _dep_production(ref), ref.package, ref.line,
-                         (ref.package,))
+                         tuple(dict.fromkeys((ref.package, *names))))
                 )  # fmt: skip
     elif kind == "import":
         prod = not (is_test_path(path) or is_vendored(path))
@@ -328,7 +365,29 @@ class _History:
         self._refs: dict[tuple[str, str], list] = {}
         self._parents: dict[str, list[str]] = {}
         self._order: dict[str, dict[str, int]] = {}
+        self._tf: dict[tuple[str, str], dict[str, str]] = {}
+        self._shallow: frozenset[str] | None = None
         self.keys = _Keys()
+
+    @property
+    def shallow(self) -> frozenset[str]:
+        """Shallow-clone boundary commits (their parents are not available)."""
+        if self._shallow is None:
+            self._shallow = git.shallow_boundary(self.root)
+        return self._shallow
+
+    def tf_sources(self, commit: str, path: str) -> dict[str, str]:
+        """Provider local name -> source for the Terraform module (directory) holding
+        ``path``, at ``commit``."""
+        d = path.rsplit("/", 1)[0] if "/" in path else ""
+        k = (commit, d)
+        if k not in self._tf:
+            out: dict[str, str] = {}
+            for f in sorted(git.list_dir(self.root, commit, d)):
+                if f.endswith(TF_SUFFIXES):
+                    out.update(provider_sources(self.text(commit, f) or ""))
+            self._tf[k] = out
+        return self._tf[k]
 
     def text(self, commit: str, path: str) -> str | None:
         k = (commit, path)
@@ -346,7 +405,10 @@ class _History:
         if text is None:
             return []
         blob = self._blob[(commit, path)]
-        hk = (blob or "", path, key, kind)
+        tf = None
+        if kind in ("dependency", "infra") and path.endswith(TF_SUFFIXES):
+            tf = self.tf_sources(commit, path)
+        hk = (blob or "", path, key, kind, tuple(sorted(tf.items())) if tf else ())
         if hk not in self._hits:
             refs = None
             if kind in ("dependency", "infra"):
@@ -354,7 +416,9 @@ class _History:
                 if rk not in self._refs:
                     self._refs[rk] = parse_manifest(path, text).refs
                 refs = self._refs[rk]
-            self._hits[hk] = file_hits(path, text, key, kind, keys=self.keys, refs=refs)
+            self._hits[hk] = file_hits(
+                path, text, key, kind, keys=self.keys, refs=refs, tf_sources=tf
+            )
         return self._hits[hk]
 
     def production_hits(self, commit: str, path: str, key: Key, kind: str) -> list[_Hit]:
@@ -388,6 +452,11 @@ def _introduction(
         here = hist.production_hits(cur, path, key, ev.kind)
         if not here:
             return None, f"{path}: technology not found at {cur[:12]} while walking history"
+        if cur in hist.shallow:
+            return None, (
+                f"{path}: history is truncated at shallow-clone boundary {cur[:12]} (its "
+                "parents are not available); the introducing commit cannot be established"
+            )
         present = [p for p in hist.parents(cur) if hist.production_hits(p, path, key, ev.kind)]
         if not present:
             lines = split_lines(hist.text(cur, path) or "")
@@ -642,6 +711,13 @@ def _verify_intro(
         return
     if commit_problem(root, intro.commit) is not None:
         return  # reported by verify_commits_exist
+    if intro.commit in hist.shallow:
+        fail(
+            f"{tag}: commit is a shallow-clone boundary (parents unavailable); "
+            "absence before it cannot be checked",
+            intro.ref,
+        )
+        return
     g2 = verify_source_quote(root, intro.ref, check_id="G2", subject=f"{rec.id}/{tag}")
     checks.append(g2)
     if g2.status != "VERIFIED":
@@ -725,11 +801,20 @@ def _collect(snap: Snapshot, keys_of: _Keys) -> tuple[dict[Key, _Group], list[st
     groups: dict[Key, _Group] = {}
     notes: list[str] = []
     seen: set[tuple] = set()
+    tf_by_dir: dict[str, dict[str, str]] = {}
+    for p in sorted(snap.texts):
+        if p.endswith(TF_SUFFIXES):
+            d = p.rsplit("/", 1)[0] if "/" in p else ""
+            tf_by_dir.setdefault(d, {}).update(provider_sources(snap.texts[p]))
     for o in _occurrences(snap):
         if is_vendored(o.path):
             continue  # third-party code checked in: not this repository's choice
         eco = o.dep.ecosystem if o.dep is not None else None
-        keys = keys_of(o.namespace, o.names, eco)
+        names = o.names
+        if o.dep is not None and o.path.endswith(TF_SUFFIXES):
+            d = o.path.rsplit("/", 1)[0] if "/" in o.path else ""
+            names = ref_names(o.dep, tf_by_dir.get(d))
+        keys = keys_of(o.namespace, names, eco)
         if not keys:
             continue
         if o.edge is not None:
@@ -757,12 +842,9 @@ def _collect(snap: Snapshot, keys_of: _Keys) -> tuple[dict[Key, _Group], list[st
             seen.add(sk)
             g = groups.setdefault(key, _Group(key))
             g.production = g.production or production
-            if pkg and pkg not in g.packages:
-                g.packages.append(pkg)
-            if o.edge is not None:
-                for n in o.names:
-                    if n not in g.packages:
-                        g.packages.append(n)
+            for n in names:  # resolved names (a provider block's source, not its alias)
+                if n and n not in g.packages:
+                    g.packages.append(n)
             if not production:
                 continue
             if snippet is None:

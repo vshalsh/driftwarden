@@ -469,10 +469,24 @@ def _matches_entry(path: str, entry: str) -> bool:
     if not e:
         return False
     if any(c in e for c in "*?["):
+        # Same semantics as discover_adr_files' Path.glob: the pattern is matched one
+        # path component at a time ("**" = zero or more directories, other wildcards
+        # never cross "/"); a matching directory contributes every file below it.
+        pats = [p for p in e.split("/") if p not in ("", ".")]
         parts = path.split("/")
-        prefixes = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
-        return any(fnmatch.fnmatchcase(p, e) for p in prefixes)
+        return any(_glob_parts(tuple(parts[:k]), tuple(pats)) for k in range(1, len(parts) + 1))
     return path == e or path.startswith(e + "/")
+
+
+def _glob_parts(parts: tuple[str, ...], pats: tuple[str, ...]) -> bool:
+    """``parts`` (path components) match the component pattern ``pats``."""
+    if not pats:
+        return not parts
+    if pats[0] == "**":
+        return _glob_parts(parts, pats[1:]) or (bool(parts) and _glob_parts(parts[1:], pats))
+    return (
+        bool(parts) and fnmatch.fnmatchcase(parts[0], pats[0]) and _glob_parts(parts[1:], pats[1:])
+    )
 
 
 def discover_adr_files_at(root: str | Path, commit: str, config: Config | None = None) -> list[str]:

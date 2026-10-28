@@ -642,3 +642,168 @@ def test_verify_commits_exist(tmp_path):
     assert r.status == "MISMATCH" and "not an ancestor" in r.reason
     (r,) = verify_commits_exist(repo, [])
     assert r.status == "MISMATCH"
+
+
+# ------------------------------------------------------------------ PR #21 review (Codex P2s)
+
+GLOB_TREE = [
+    "architecture/x.md",
+    "architecture/sub/y.md",
+    "architecture/sub/deep/z.md",
+    "Architecture/up.md",
+    "docs/design/adr-1.md",
+    "docs/design/notes.txt",
+    "docs/other/adr-2.markdown",
+    "rfcs/0001.md",
+    "rfcs/README.md",
+    "rfcs/0000-template.md",
+    ".hidden/h.md",
+    "top.md",
+]
+GLOB_PATTERNS = [
+    "architecture/**/*.md",
+    "architecture/*.md",
+    "architecture/**",
+    "architecture/*/deep",
+    "**/adr-*.md",
+    "**/*.markdown",
+    "docs/*",
+    "docs/*/",
+    "rfcs/*.md",
+    "*/sub",
+    "arch*",
+    "[aA]rchitecture/*.md",
+    "?rchitecture/sub/*",
+    "**/deep/*.md",
+    "*.md",
+    "**",
+    ".hidden/*",
+    "architecture",
+    "docs/design",
+]
+
+
+@pytest.mark.parametrize("pattern", GLOB_PATTERNS)
+def test_adr_glob_discovery_at_commit_matches_worktree_discovery(tmp_path, pattern):
+    """discover_adr_files_at (git tree) == discover_adr_files (Path.glob) for adr_paths."""
+    from driftwarden.config import Config
+    from driftwarden.discover.adr import discover_adr_files, discover_adr_files_at
+
+    repo = tmp_path / "g"
+    _init(repo)
+    head = _commit(repo, {p: "# t\n\n## Decision\n\nx\n" for p in GLOB_TREE}, "tree")
+    cfg = Config(adr_paths=[pattern])
+    assert discover_adr_files_at(repo, head, cfg) == discover_adr_files(repo, cfg), pattern
+
+
+def test_double_star_matches_zero_directories(tmp_path):
+    from driftwarden.config import Config
+    from driftwarden.discover.adr import discover_adr_files_at
+
+    repo = tmp_path / "g"
+    _init(repo)
+    head = _commit(repo, {"architecture/x.md": "x\n", "architecture/a/y.md": "y\n"}, "t")
+    got = discover_adr_files_at(repo, head, Config(adr_paths=["architecture/**/*.md"]))
+    assert got == ["architecture/a/y.md", "architecture/x.md"]
+
+
+def test_extensionless_shebang_script_is_verified(tmp_path):
+    repo = tmp_path / "sb"
+    _init(repo)
+    _commit(repo, {"README.md": "x\n"}, "a")
+    c2 = _commit(repo, {"bin/worker": "#!/usr/bin/env python3\nimport redis\n"}, "worker")
+    _commit(repo, {"README.md": "y\n"}, "c")
+    scan = detect_undocumented(repo)
+    assert scan.could_not_verify == [], [r.reasons for r in scan.could_not_verify]
+    (rec,) = scan.findings
+    assert (rec.technology, rec.introducing_commits) == ("redis", [c2])
+    assert [e.ref.path for e in rec.evidence] == ["bin/worker"]
+
+
+_TF_VERSIONS = (
+    'terraform {\n  required_providers {\n    cf = {\n      source = "cloudflare/cloudflare"\n'
+    '      version = "~> 4.0"\n    }\n  }\n}\n'
+)
+
+
+def test_terraform_provider_alias_resolves_through_required_providers(tmp_path):
+    repo = tmp_path / "tf"
+    _init(repo)
+    _commit(
+        repo,
+        {
+            "infra/versions.tf": _TF_VERSIONS,
+            "infra/main.tf": 'provider "cf" {\n  api_token = var.token\n}\n',
+            "infra/extra.tf": 'provider "fastly" {\n  api_key = var.k\n}\n',
+        },
+        "tf",
+    )
+    scan = detect_undocumented(repo)
+    by = {_label(r): r for r in scan.records}
+    assert set(by) == {"iac-provider/cloudflare", "iac-provider/fastly"}  # never "cf"
+    cf = by["iac-provider/cloudflare"]
+    assert cf.grounding == "VERIFIED", cf.reasons
+    assert {e.ref.path for e in cf.evidence} == {"infra/main.tf", "infra/versions.tf"}
+    # documented as Cloudflare: neither the source nor the "cf" block is flagged
+    _commit(repo, {"docs/adr/0001-dns.md": _adr("DNS is served by Cloudflare.")}, "adr")
+    scan = detect_undocumented(repo)
+    assert {_label(r) for r in scan.records} == {"iac-provider/fastly"}
+    assert "iac-provider/cloudflare" in scan.documented
+
+
+def test_terraform_alias_record_cannot_be_retargeted(tmp_path):
+    repo = tmp_path / "tf2"
+    _init(repo)
+    _commit(
+        repo,
+        {"versions.tf": _TF_VERSIONS, "main.tf": 'provider "cf" {\n  x = 1\n}\n'},
+        "tf",
+    )
+    (rec,) = detect_undocumented(repo).findings
+    evs = [e.model_copy(update={"technology": "cf"}) for e in rec.evidence]
+    forged = rec.model_copy(
+        update={"technology": "cf", "id": "UD-iac-provider-cf", "evidence": evs}
+    )
+    assert verify_undocumented(repo, forged).could_not_verify
+
+
+def test_shallow_clone_introduction_is_could_not_verify(tmp_path):
+    import os
+    import subprocess
+
+    from conftest import GIT_ENV
+    from driftwarden.models import Introduction
+
+    src = tmp_path / "full"
+    _init(src)
+    _commit(src, {"requirements.txt": "redis==5.0.0\n"}, "add redis")
+    head = _commit(src, {"README.md": "unrelated\n"}, "readme")
+    dst = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{src}", str(dst)],
+        check=True,
+        capture_output=True,
+        env={**os.environ, **GIT_ENV},
+    )
+    assert git(dst, "rev-parse", "--is-shallow-repository").strip() == "true"
+    scan = detect_undocumented(dst)
+    assert scan.findings == []
+    (rec,) = scan.could_not_verify
+    assert rec.technology == "redis" and rec.status == "UNKNOWN"
+    assert rec.grounding == "MISMATCH" and rec.introducing_commits == []
+    assert any("shallow" in n for n in rec.notes)
+    # A record that claims the boundary commit introduced it must not verify either.
+    ev = rec.evidence[0]
+    intro = Introduction(evidence_id=ev.id, commit=head, parents=[], ref=ev.ref)
+    forged = rec.model_copy(
+        update={
+            "introductions": [intro],
+            "introducing_commits": [head],
+            "status": "UNDOCUMENTED",
+            "grounding": "VERIFIED",
+            "reasons": [],
+        }
+    )
+    out = verify_undocumented(dst, forged)
+    assert out.could_not_verify
+    assert any("shallow" in r for r in out.reasons)
