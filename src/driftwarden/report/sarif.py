@@ -191,6 +191,16 @@ def _finding_result(f: Finding, commit: str) -> dict[str, Any]:
     related += [(ev.ref, _ev_msg(ev)) for ev in f.evidence if ev is not primary]
     loc = _location(primary.ref if primary is not None else None) or _location(c.source)
     primary_path = primary.ref.path if primary is not None else c.source.path
+    props: dict[str, Any] = {
+        "status": v.status,
+        "grounding": v.grounding,
+        "commit": commit,
+        "adrId": c.decision_id,
+        "claimId": c.id,
+        "evidence": [e.id for e in f.evidence],
+    }
+    if f.in_change is not None:
+        props["inChange"] = f.in_change
     return {
         "ruleId": c.kind,
         "ruleIndex": _RULE_INDEX[c.kind],
@@ -199,14 +209,7 @@ def _finding_result(f: Finding, commit: str) -> dict[str, Any]:
         "locations": [loc] if loc else [],
         "relatedLocations": _related(related),
         "partialFingerprints": {FINGERPRINT_KEY: fingerprint(c.kind, c.id, primary_path)},
-        "properties": {
-            "status": v.status,
-            "grounding": v.grounding,
-            "commit": commit,
-            "adrId": c.decision_id,
-            "claimId": c.id,
-            "evidence": [e.id for e in f.evidence],
-        },
+        "properties": props,
     }
 
 
@@ -262,6 +265,8 @@ def _cnv_result(u: Unverified, commit: str) -> dict[str, Any] | None:
         props["claimId"] = u.claim_id
     if u.check_id:
         props["checkId"] = u.check_id
+    if u.in_change is not None:
+        props["inChange"] = u.in_change
     claim_or_id = u.claim_id or u.decision_id or u.id
     return {
         "ruleId": "could-not-verify",

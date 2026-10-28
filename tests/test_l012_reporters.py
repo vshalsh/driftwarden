@@ -663,6 +663,55 @@ def test_sarif_paths_are_percent_encoded_posix():
     assert isinstance(r2.could_not_verify[0].provenance, Provenance)
 
 
+# --------------------------------------------------------------------------- PR mode / notes
+
+
+@pytest.fixture
+def pr_report(pyshop_tmp):
+    r = scan(pyshop_tmp, pyshop_tmp.parent / "lg", changed_paths=["src/shop/legacy/catalog.py"])
+    flags = {c.id: c.in_change for c in r.claims if c.status == "VIOLATED"}
+    assert flags["ADR-0001.c1"] is True and False in flags.values()  # both kinds present
+    return r
+
+
+def test_pr_comment_leads_with_in_change_violations(pr_report):
+    pr = render_pr_comment(pr_report)
+    mine = pr.index("### Violated in this change (1)")
+    before = pr.index("### Already present before this change (")
+    assert mine < before < pr.index("### Could not verify")
+    assert "ADR-0001.c1" in pr[mine:before]
+    old = [c.id for c in pr_report.claims if c.status == "VIOLATED" and not c.in_change]
+    for cid in old:
+        assert cid in pr[before:] and cid not in pr[mine:before]
+    assert "### Violated (" not in pr
+    md = render_markdown(pr_report)
+    assert "**in this change**" in md and "present before this change" in md
+    assert "PR mode: 1 violated" in md
+    # outside PR mode nothing about the change is shown
+    plain = render_pr_comment(load_fixture())
+    assert "in this change" not in plain and "### Violated (" in plain
+
+
+def test_sarif_carries_in_change(pr_report):
+    doc = validate_sarif(render_sarif(pr_report))
+    by = {r["properties"].get("claimId"): r["properties"] for r in doc["runs"][0]["results"]}
+    for c in pr_report.claims:
+        if c.status in ("VIOLATED", "DRIFTING") and c.id in by:
+            assert by[c.id]["inChange"] is c.in_change
+    plain = validate_sarif(render_sarif(load_fixture()))
+    assert all("inChange" not in r["properties"] for r in plain["runs"][0]["results"])
+
+
+def test_notes_section_is_escaped(pyshop_tmp):
+    r = load_fixture()
+    r = r.model_copy(update={"notes": ["skipped ADR <b>x</b> @octocat [a](javascript:1)"]})
+    for out in (render_markdown(r), render_pr_comment(r)):
+        assert "Notes (1)" in out
+        html = html_of(out)
+        assert "<b>x</b>" not in html and 'href="javascript' not in html
+        assert "@octocat" not in html
+
+
 def test_fingerprints_stable_across_two_scans(tmp_path):
     repo = pyshop_repo(tmp_path)
     a = validate_sarif(render_sarif(scan(repo, tmp_path / "la", draft_adrs=True)))

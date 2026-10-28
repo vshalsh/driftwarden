@@ -161,7 +161,7 @@ import boto3  # TODO: move behind the storage adapter
 - `src/shop/legacy/catalog.py:3` @ `c80cc5a` imports pymongo: `from pymongo import MongoClient`
 
 <details>
-<summary>Draft ADR for UD-datastore-mongodb: suggested path docs/adr/0008-use-mongodb-for-datastore.md (shown only, not written)</summary>
+<summary>Draft ADR for UD-datastore-mongodb: suggested path docs/adr/0009-use-mongodb-for-datastore.md (shown only, not written)</summary>
 
 ````markdown
 ---
@@ -235,7 +235,7 @@ from pymongo import MongoClient
 - `src/shop/events.py:1` @ `c80cc5a` imports kafka: `from kafka import KafkaProducer`
 
 <details>
-<summary>Draft ADR for UD-queue-kafka: suggested path docs/adr/0008-use-kafka-for-queue.md (shown only, not written)</summary>
+<summary>Draft ADR for UD-queue-kafka: suggested path docs/adr/0010-use-kafka-for-queue.md (shown only, not written)</summary>
 
 ````markdown
 ---

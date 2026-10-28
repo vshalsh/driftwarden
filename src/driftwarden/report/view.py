@@ -23,7 +23,7 @@ never reaches a report as a fact.
 from __future__ import annotations
 
 import posixpath
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from driftwarden.models import (
     WORKTREE,
@@ -109,6 +109,11 @@ class Finding:
     def status(self) -> str:
         return self.verdict.status
 
+    @property
+    def in_change(self) -> bool | None:
+        """PR mode: does the change touch this claim? None outside PR mode."""
+        return self.result.in_change
+
     def primary(self) -> Evidence | None:
         """The evidence item a finding is located at: the first one against the claim."""
         for ev in self.evidence:
@@ -139,6 +144,7 @@ class Unverified:
     anchor: Provenance | None = None
     proposed_status: str | None = None
     report_check: bool = False  # True: failed the report-time cross-check, not the scan
+    in_change: bool | None = None  # PR mode: the claim's ClaimResult.in_change
 
 
 @dataclass
@@ -152,6 +158,12 @@ class ReportView:
     undocumented: list[Undocumented] = field(default_factory=list)
     not_judged: list[ClaimResult] = field(default_factory=list)
     decisions: dict[str, DecisionResult] = field(default_factory=dict)
+
+    @property
+    def pr_mode(self) -> bool:
+        return self.report.metadata.changed_paths is not None or any(
+            c.in_change is not None for c in self.report.claims
+        )
 
     @property
     def demoted(self) -> int:
@@ -299,6 +311,11 @@ def build_view(report: Report) -> ReportView:
             Undocumented(record=rec, evidence=tuple(rec.evidence), draft=drafts.get(rec.id))
         )
 
+    in_change = {c.claim.id: c.in_change for c in report.claims}
+    cnv = [
+        replace(u, in_change=in_change.get(u.claim_id)) if u.claim_id in in_change else u
+        for u in cnv
+    ]
     view.could_not_verify = _sort(cnv)
     return view
 

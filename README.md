@@ -28,7 +28,8 @@ driftwarden report .driftwarden/driftwarden.json --format md,sarif --out out/   
 `scan` runs the whole pipeline: ADR discovery, claim structuring, evidence and judgement at
 HEAD, undocumented-decision detection and (with `--draft-adrs`) ADR drafting. It prints the
 decisions table, the verdicts grouped by status, everything it *could not verify* with the
-reason, the undocumented decisions and a grounding summary; every verifier result goes to the
+reason, the undocumented decisions, each verified ADR draft in full (numbered consecutively,
+never written into the repository) and a grounding summary; every verifier result goes to the
 grounding ledger (`<repo>/.driftwarden/logs/grounding/`, or `--out DIR`). In auto mode, a
 provider that fails to start falls back to offline mode with a warning; `--mode llm` exits 2
 instead. The drift timeline (L-011) is not built yet.
@@ -97,12 +98,19 @@ jobs:
 `|| true` keeps the job going when the scan exits 1 (violations) or 3 (G1 mismatch) so
 the SARIF is still uploaded; drop it to fail the job as well.
 
+PR mode (`run_scan(..., changed_paths=[...])`, used by the Action in L-014) judges every
+accepted claim exactly as a full scan does, so a change can never hide a violation and the
+exit code counts every verified violation. The changed paths only tag each verdict
+`in_change: true/false` (the claim's ADR file changed, a changed path is one of its evidence
+files or a path its rule names, or, for require/only claims, a file was deleted or renamed or
+a manifest changed), so reports can lead with what the change touches.
+
 GitHub Action (arrives in L-014, not available yet):
 
 ```yaml
 - uses: vshalsh/driftwarden@v0
   with:
-    mode: pr            # only claims touched by this PR's diff
+    mode: pr            # judges every claim; leads with the ones this PR's diff touches
     sarif: true         # findings appear in the Security → Code scanning tab
     comment: true
 ```

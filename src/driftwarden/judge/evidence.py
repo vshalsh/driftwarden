@@ -49,6 +49,23 @@ non-shipping (``requirements-dev.txt``, ``requirements/test.txt``,
 ``is_nonproduction_manifest``); the rules then call the claim DRIFTING rather
 than VIOLATED.
 
+Vendored third-party code (``vendor/``, ``third_party/``, ``third-party/``,
+``node_modules/``, ``external/`` ...; ``driftwarden.index.vendored.is_vendored``,
+the predicate the undocumented detector uses too) is **not evidence at all**
+(L-030). Semantics decision: a forbidden or alternative technology found *only*
+in vendored code leaves the claim HOLDING, with a note, not DRIFTING. DRIFTING
+means "the team's own code bends the decision outside production" (its tests,
+its dev tooling); vendored code is somebody else's code that the team did not
+write and does not maintain, the detector already treats it as "not this
+repository's choice", and the benchmark labels such decisions HOLDING. So no
+``forbidden`` / ``alternative`` / ``required`` / ``allowed`` / boundary / keyword
+candidate is taken from a vendored file, an import edge whose source *or*
+target is vendored is never a boundary crossing, and a VIOLATED verdict can
+never cite a vendored file. What was set aside is not silent: every ignored
+vendored occurrence of a claim technology is listed in ``EvidenceSet.notes``
+and counted in ``searched`` (which a HOLDING rationale quotes). ``Config.exclude``
+globs are honoured earlier still: excluded files never enter the snapshot.
+
 A claim with an ``actor`` ("Handlers must not import boto3 outside adapters/")
 counts only occurrences in the actor's code: directories or modules named like
 it (``handlers/``, ``handler.py``; see ``resolve_actor``). Whole-codebase actors
@@ -118,6 +135,7 @@ from driftwarden.index.manifests import (
     scan_manifests,
 )
 from driftwarden.index.manifests import terraform as terraform_manifest
+from driftwarden.index.vendored import is_vendored
 from driftwarden.judge import catalog
 from driftwarden.judge.catalog import Resolution, Technology
 from driftwarden.models import (
@@ -516,7 +534,7 @@ def module_files(name: str, snap: Snapshot) -> list[str]:
     low = name.lower()
     out: set[str] = set()
     for e in snap.imports:
-        if e.category != "local" or not e.target:
+        if e.category != "local" or not e.target or is_vendored(e.target):
             continue
         if posixpath.splitext(posixpath.basename(e.target))[0].lower() == low:
             out.add(e.target)
@@ -651,7 +669,12 @@ class _Collector:
         self.claim = claim
         self.snap = snap
         self.max = max_per_relation
-        self.occ = _occurrences(snap)
+        occ = _occurrences(snap)
+        # Vendored third-party code is not evidence (L-030); kept aside for the notes.
+        self.occ = [o for o in occ if not is_vendored(o.path)]
+        self.vendored_occ = [o for o in occ if is_vendored(o.path)]
+        self.vendored: dict[tuple[str, int], str] = {}
+        """``(path, line) -> name`` of vendored occurrences that matched a claim term."""
         self.items: list[tuple[tuple, dict]] = []
         self.seen: set[tuple] = set()
         self.counts: dict[str, int] = {}
@@ -717,7 +740,15 @@ class _Collector:
         imports_only: bool = False,
     ) -> int:
         n = 0
+        techs = list(techs)
         for tech in techs:
+            for o in self.vendored_occ:
+                if imports_only and o.kind != "import":
+                    continue
+                if where is not None and not where(o):
+                    continue
+                if catalog.name_matches(tech, o.namespace, o.names):
+                    self.note_vendored(o, tech.id)
             for o in self.occ:
                 if imports_only and o.kind != "import":
                     continue
@@ -733,6 +764,23 @@ class _Collector:
                     n += 1
         return n
 
+    def note_vendored(self, o: _Occurrence, name: str) -> None:
+        line = o.edge.line if o.edge is not None else (o.dep.line if o.dep else None)
+        self.vendored.setdefault((o.path, line or 0), name)
+
+    def vendored_note(self) -> str | None:
+        if not self.vendored:
+            return None
+        items = sorted(self.vendored.items())
+        shown = ", ".join(
+            f"{p}:{ln} ({name})" if ln else f"{p} ({name})" for (p, ln), name in items[:5]
+        )
+        more = f" (+{len(items) - 5} more)" if len(items) > 5 else ""
+        return (
+            f"not counted: {len(items)} occurrence(s) in vendored third-party code: "
+            f"{shown}{more}; vendored code is not this repository's code"
+        )
+
     def keywords(self, terms: list[str], limit: int) -> None:
         words = _keywords(terms)
         if not words or limit <= 0:
@@ -741,6 +789,8 @@ class _Collector:
         covered = {(d["ref"].path, d["ref"].line_start) for _, d in self.items}
         found = 0
         for path in sorted(self.snap.texts):
+            if is_vendored(path):
+                continue  # vendored third-party code is not evidence (L-030)
             lines = self.snap.lines(path) or []
             for i, line in enumerate(lines, 1):
                 if (path, i) in covered or not line.strip() or not rx.search(line):
@@ -1180,7 +1230,8 @@ def target_noun_head(term: str) -> str | None:
 
 def local_targets(name: str, snap: Snapshot) -> list[str]:
     """Every distinct directory path (ignoring case, matched on trailing path
-    segments) and every locally imported module file named ``name``."""
+    segments) and every locally imported module file named ``name``. Directories
+    and files inside vendored trees are not the repository's own code (L-030)."""
     t = name.strip().strip("`'\"")
     while t.startswith("./"):
         t = t[2:]
@@ -1191,7 +1242,9 @@ def local_targets(name: str, snap: Snapshot) -> list[str]:
     out = {
         k
         for k in snap.directories()
-        if len(k.split("/")) >= n and [p.lower() for p in k.split("/")[-n:]] == want
+        if len(k.split("/")) >= n
+        and [p.lower() for p in k.split("/")[-n:]] == want
+        and not is_vendored(k)  # a vendored copy is not the repository's own code (L-030)
     }
     if n == 1:
         out.update(module_files(want[0], snap))
@@ -1338,6 +1391,14 @@ def _boundary(c: _Collector, es: EvidenceSet) -> None:
                 continue
             if in_dir(e.source, d):
                 continue  # a module importing its own package
+            if is_vendored(e.source) or is_vendored(e.target):
+                # Vendored code importing into (or project code reaching into a vendored
+                # copy of) the target is not a crossing by project code (L-030).
+                if c.actor is None or c.actor(e.source):
+                    c.note_vendored(
+                        _Occurrence("import", "local", (e.target,), e.source, edge=e), f"{d}/"
+                    )
+                continue
             if c.actor is not None and not c.actor(e.source):
                 continue
             o = _Occurrence("import", "local", (e.target,), e.source, edge=e)
@@ -1381,6 +1442,10 @@ def collect_evidence(
         f"{n_manifests} manifest(s), {len(snap.imports)} import edge(s) in "
         f"{len(snap.files)} file(s) at {snap.commit[:12]}"
     )
+    vendored = c.vendored_note()
+    if vendored:
+        es.searched += f"; {len(c.vendored)} vendored occurrence(s) not counted, see notes"
+        c.notes.append(vendored)
     limit = max_keywords
     if limit is None:
         limit = DEFAULT_MAX_KEYWORDS if es.undecidable else 0

@@ -231,10 +231,23 @@ def _title(f: Finding) -> str:
     return f.decision.title if f.decision is not None else f.claim.decision_id
 
 
+def _change_tag(in_change: bool | None) -> str:
+    """PR mode only: whether the change touches the claim (``ClaimResult.in_change``)."""
+    if in_change is None:
+        return ""
+    return " · **in this change**" if in_change else " · present before this change"
+
+
+def _in_change_first(items: list) -> list:
+    """Stable: items the change touches first (PR mode); unchanged order otherwise."""
+    return sorted(items, key=lambda x: 0 if x.in_change else 1)
+
+
 def _finding(f: Finding, ctx: _Ctx) -> list[str]:
     c, v, t = f.claim, f.verdict, ctx.lim.text
     out = [
-        f"- **{esc(c.id)}** ({esc(c.decision_id)}: {esc(_title(f), limit=t)})",
+        f"- **{esc(c.id)}** ({esc(c.decision_id)}: {esc(_title(f), limit=t)})"
+        + _change_tag(f.in_change),
         f"  - Rule: {code(rule_text(c), limit=t)}",
         f"  - ADR: {adr_link(c.source, ctx.link_base)}: {esc(c.source.quote, limit=t)}",
     ]
@@ -269,7 +282,7 @@ def _unverified(u: Unverified, ctx: _Ctx) -> list[str]:
         head += f" \\[{esc(u.check_id)}\\]"
     if u.proposed_status:
         head += f" (proposed {esc(u.proposed_status)}, not shown as a finding)"
-    out = [head]
+    out = [head + _change_tag(u.in_change)]
     if u.anchor is not None:
         out.append(f"  - ADR: {adr_link(u.anchor, ctx.link_base)}")
     cited = _cited(u.provenance)
@@ -362,6 +375,14 @@ def _summary(ctx: _Ctx) -> list[str]:
         "that are not holding.",
         "",
     ]
+    if v.pr_mode:
+        touched = [f for f in v.violated + v.drifting if f.in_change]
+        out += [
+            f"PR mode: {sum(1 for f in touched if f.status == 'VIOLATED')} violated and "
+            f"{sum(1 for f in touched if f.status == 'DRIFTING')} drifting claim(s) are in this "
+            "change; the rest were already present before it.",
+            "",
+        ]
     if v.demoted:
         out += [
             f"{v.demoted} finding(s) failed the report-time evidence re-check and are listed "
@@ -402,7 +423,7 @@ def _cnv_section(ctx: _Ctx) -> list[str]:
         "shown as violations.",
         "",
     ]
-    shown, more = _take(items, ctx.lim.findings)
+    shown, more = _take(_in_change_first(items), ctx.lim.findings)
     for u in shown:
         out += _unverified(u, ctx)
     return out + _more(more) + [""]
@@ -486,8 +507,8 @@ def _full(view: ReportView, lim: _Limits, link_base: str | None) -> str:
     ctx = _Ctx(view=view, lim=lim, link_base=link_base, h="##")
     out = _header(ctx, f"DriftWarden report: {esc(view.report.metadata.repo, limit=200)}")
     out += _summary(ctx)
-    out += _findings_section("Violated", view.violated, ctx, lim.findings)
-    out += _findings_section("Drifting", view.drifting, ctx, lim.findings)
+    out += _findings_section("Violated", _in_change_first(view.violated), ctx, lim.findings)
+    out += _findings_section("Drifting", _in_change_first(view.drifting), ctx, lim.findings)
     out += _cnv_section(ctx)
     out += _undocumented_section(ctx)
     out += _collapsed_section("Holding", view.holding, ctx, lim.holding)
@@ -516,14 +537,21 @@ def _comment(view: ReportView, lim: _Limits, link_base: str | None) -> str:
         f"exit code {view.report.summary.exit_code}",
         "",
     ]
-    out += _findings_section("Violated", view.violated, ctx, lim.findings)
+    if view.pr_mode:
+        mine = [f for f in view.violated if f.in_change]
+        before = [f for f in view.violated if not f.in_change]
+        out += _findings_section("Violated in this change", mine, ctx, lim.findings)
+        out += _findings_section("Already present before this change", before, ctx, lim.findings)
+    else:
+        out += _findings_section("Violated", view.violated, ctx, lim.findings)
     out += _cnv_section(ctx)
-    out += _findings_section("Drifting", view.drifting, ctx, lim.findings)
+    out += _findings_section("Drifting", _in_change_first(view.drifting), ctx, lim.findings)
     out += _undocumented_section(ctx)
     out += _collapsed_section("Holding", view.holding, ctx, lim.holding)
     out += _findings_section("Unknown", view.unknown, ctx, lim.unknown)
     out += _grounding_section(ctx)
     out += _timeline_section(ctx)
+    out += _notes_section(ctx)
     out += _footer(view.report)
     return "\n".join(out).rstrip("\n") + "\n"
 
