@@ -73,7 +73,15 @@ Terraform ``provider "<local>"`` blocks are resolved through the module's
 ``required_providers`` (all ``*.tf`` / ``*.tofu`` files in the same directory,
 at the same commit): ``provider "cf"`` with ``cf = { source =
 "cloudflare/cloudflare" }`` is Cloudflare, never a technology called ``cf``. An
-unmapped local name stays as written (implied ``hashicorp/<local>``).
+unmapped local name stays as written (implied ``hashicorp/<local>``). Because a
+provider block's meaning depends on its module's other files, the history walk
+for a Terraform file follows every commit that touched its directory: a source
+change in ``versions.tf`` (``hashicorp/aws`` -> ``hashicorp/google``) introduces the
+new provider for an unchanged ``provider`` block in ``main.tf`` too.
+
+The verifier also re-runs the walk: a claimed introduction must be the commit the
+walk gives for the occurrence at the scanned commit, so an obsolete introduction
+(added at A, removed at B, re-added at C) never verifies for a scan at C.
 
 **Grounding (fail closed).** :func:`verify_undocumented` re-checks a record from
 scratch: G2 on every evidence line and G3 (``verify_dependency``) on every
@@ -443,9 +451,16 @@ def _introduction(
 ) -> tuple[Introduction | None, str]:
     """The commit that brought ``key`` into ``ev``'s file *as a production occurrence*
     (a dev-only dependency later promoted to production is introduced by the
-    promotion), or (None, why)."""
+    promotion), or (None, why).
+
+    A Terraform file's meaning also depends on the other ``*.tf`` files of its module
+    (``required_providers`` maps a provider block's local name), so for those the walk
+    follows every commit that touched the module directory, not just the file."""
     path = ev.ref.path
-    cur = git.last_commit_touching(hist.root, scan_commit, path)
+    track = path
+    if path.endswith(TF_SUFFIXES):
+        track = path.rsplit("/", 1)[0] + "/" if "/" in path else "."
+    cur = git.last_commit_touching(hist.root, scan_commit, track)
     seen: set[str] = set()
     while cur is not None and cur not in seen and len(seen) < MAX_HISTORY_STEPS:
         seen.add(cur)
@@ -468,7 +483,7 @@ def _introduction(
             return Introduction(
                 evidence_id=ev.id, commit=cur, parents=list(hist.parents(cur)), ref=ref
             ), ""
-        cur = git.last_commit_touching(hist.root, present[0], path)
+        cur = git.last_commit_touching(hist.root, present[0], track)
     return None, f"{path}: no introducing commit found"
 
 
@@ -742,11 +757,24 @@ def _verify_intro(
                 f"at parent {p[:12]}"
             )
             return
+    # Continuity: the introduction must be the one that leads, without a removal in
+    # between, to the occurrence at the scanned commit -- i.e. the commit the detector
+    # itself computes now. An obsolete introduction (added, removed, re-added) fails.
+    if commit_problem(root, rec.commit) is None:
+        mine, why = _introduction(hist, rec.commit, ev, key)
+        if mine is None or mine.commit != intro.commit:
+            got = f"{mine.commit[:12]}" if mine is not None else f"none ({why})"
+            fail(
+                f"{tag}: not the introduction of the occurrence at {rec.commit[:12]} "
+                f"(the history walk gives {got}); it was removed or replaced in between",
+                intro.ref,
+            )
+            return
     checks.append(
         _check(
             True,
             f"{tag}: present in {intro.ref.path} at the commit, absent at "
-            f"{len(actual) or 'no'} parent(s)",
+            f"{len(actual) or 'no'} parent(s), continuous up to the scanned commit",
             intro.ref,
             rec.id,
         )

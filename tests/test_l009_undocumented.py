@@ -807,3 +807,58 @@ def test_shallow_clone_introduction_is_could_not_verify(tmp_path):
     out = verify_undocumented(dst, forged)
     assert out.could_not_verify
     assert any("shallow" in r for r in out.reasons)
+
+
+# ------------------------------------------------------------------ PR #21 review, round 2
+
+
+def test_obsolete_introduction_of_a_readded_dependency_does_not_verify(tmp_path):
+    """A adds redis, B removes it, C re-adds it: a record for C citing A is forged."""
+    from driftwarden.models import Introduction
+
+    repo = tmp_path / "readd2"
+    _init(repo)
+    a = _commit(repo, {"requirements.txt": "redis==5.0.0\n"}, "A add")
+    _commit(repo, {"requirements.txt": "flask==3.0.0\n"}, "B remove")
+    c = _commit(repo, {"requirements.txt": "flask==3.0.0\nredis==5.0.0\n"}, "C re-add")
+    scan = detect_undocumented(repo)
+    rec = next(r for r in scan.findings if r.technology == "redis")
+    assert rec.introducing_commits == [c]
+    old = git(repo, "show", f"{a}:requirements.txt").splitlines()
+    ref = Provenance(path="requirements.txt", line_start=1, line_end=1, commit=a, quote=old[0])
+    forged = rec.model_copy(
+        update={
+            "introductions": [Introduction(evidence_id="e1", commit=a, parents=[], ref=ref)],
+            "introducing_commits": [a],
+        }
+    )
+    out = verify_undocumented(repo, forged)
+    assert out.could_not_verify and out.status == "UNKNOWN"
+    assert any("removed or replaced" in r for r in out.reasons), out.reasons
+    assert verify_undocumented(repo, rec).grounding == "VERIFIED"
+
+
+def test_terraform_source_change_in_another_file_moves_the_introduction(tmp_path):
+    """versions.tf switches the "aws" local name to hashicorp/google; main.tf's
+    unchanged provider block is then GCP, introduced by the versions.tf change."""
+    repo = tmp_path / "tfswap"
+    _init(repo)
+    versions = (
+        'terraform {\n  required_providers {\n    aws = {\n      source = "hashicorp/{p}"\n'
+        "    }\n  }\n}\n"
+    )
+    _commit(
+        repo,
+        {
+            "infra/versions.tf": versions.replace("{p}", "aws"),
+            "infra/main.tf": 'provider "aws" {\n  region = "x"\n}\n',
+        },
+        "aws",
+    )
+    swap = _commit(repo, {"infra/versions.tf": versions.replace("{p}", "google")}, "swap")
+    scan = detect_undocumented(repo)
+    assert scan.could_not_verify == [], [r.reasons for r in scan.could_not_verify]
+    (rec,) = scan.findings
+    assert (rec.technology, rec.category) == ("gcp-sdk", "iac-provider")
+    assert {e.ref.path for e in rec.evidence} == {"infra/main.tf", "infra/versions.tf"}
+    assert rec.introducing_commits == [swap]
