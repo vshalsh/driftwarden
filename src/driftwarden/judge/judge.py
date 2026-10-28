@@ -46,7 +46,14 @@ Two paths:
   UNKNOWN "qualifier X not evaluated" unless it is a forbid / only / boundary
   HOLDING by absence, which no narrowing can change. A claim's ``subject`` is
   descriptive, except that a rule-library forbid/require whose sentence names
-  it as the acting subject ("Handlers must not ...") is scoped to that actor.
+  it as the acting subject ("Handlers must not ...", "Handlers never / don't /
+  cannot ...") is scoped to that actor.
+
+  Generic subject "services" (L-026, D-L025-5; documented choice): it names the
+  whole codebase, unless a ``services/`` (``service/``...) directory exists and
+  the sentence uses it as the acting subject. Then both readings are judged and
+  a decided verdict stands only when they agree; otherwise UNKNOWN, with both
+  outcomes in the rationale. Never a guess between the two.
 
 * **LLM** (``provider.complete_json`` with :data:`JUDGE_SCHEMA`). The model sees
   the claim and the candidate snippets only (never the whole repository), each
@@ -58,7 +65,12 @@ Two paths:
 
   Precedence: when the rules reach a decided verdict (not UNKNOWN), the rule
   verdict stands and the model's proposal is recorded in ``notes`` and the
-  ledger. Only claims the rules cannot decide get the model's verdict. If the
+  ledger. Only claims the rules cannot decide get the model's verdict, and not
+  even those when the rules *refused to guess* (``fail_closed_reason``: between,
+  an unresolvable actor, a purpose outside the catalog, an ambiguous generic
+  subject, an unevaluated or call-site qualifier): a cited line proves the quote
+  exists, not that it establishes the qualifier, so the verdict stays UNKNOWN
+  with the model's status in ``proposed_status`` (L-026). If the
   rule verdict fails the gate, it is reported as *Could not verify* with its
   failed evidence; the model's verdict never replaces a failed rule gate. So text
   in code comments, ADRs or snippets that talks the model into "HOLDING"
@@ -85,7 +97,13 @@ from driftwarden.claims.structure import Mode, resolve_mode
 from driftwarden.config import Config
 from driftwarden.grounding.ledger import Ledger
 from driftwarden.grounding.verify import normalise, verify_dependency, verify_source_quote
-from driftwarden.judge.evidence import EvidenceSet, Snapshot, collect_evidence, load_snapshot
+from driftwarden.judge.evidence import (
+    EvidenceSet,
+    Snapshot,
+    ambiguous_generic_actor,
+    collect_evidence,
+    load_snapshot,
+)
 from driftwarden.llm.base import LLMError, Provider
 from driftwarden.models import (
     WORKTREE,
@@ -291,6 +309,48 @@ _ABSENCE_SAFE = frozenset({"forbid", "only", "boundary"})
 BOUNDARY_IMPORT_ACTIONS = frozenset({"import", "use", "depend on", "reference", "include"})
 
 
+def undecidable_qualifier(claim: Claim) -> str | None:
+    """The action/manner qualifier ("call", "directly") of a forbid/boundary claim
+    that an import or a declaration cannot establish (needs call-site analysis),
+    or None."""
+    rule = claim.rule
+    action = rule.get("action") if isinstance(rule.get("action"), str) else None
+    manner = _manner(claim)
+    if claim.kind == "forbid":
+        hit = action != "import" and (manner or (action and action not in PRESENCE_ACTIONS))
+    elif claim.kind == "boundary":
+        hit = (action and action not in BOUNDARY_IMPORT_ACTIONS) or (manner and action != "import")
+    else:
+        hit = False
+    return " ".join(x for x in (action, manner) if x) if hit else None
+
+
+def fail_closed_reason(claim: Claim, es: EvidenceSet) -> str | None:
+    """Why the rules *refused to guess* this claim, or None.
+
+    These UNKNOWNs come from the fail-closed net: communication scope
+    (``between``), an actor that names nothing, a purpose that is not a catalog
+    category, an ambiguous generic subject, a qualifier the rules do not evaluate
+    (``unhonoured_fields``) or one an import cannot establish
+    (``undecidable_qualifier``). A model citing a verifiable line cannot establish
+    such a qualifier either (G2 checks that the quote exists, not what it means),
+    so in llm/auto mode the model's HOLDING/DRIFTING/VIOLATED is recorded as a
+    proposal and the verdict stays UNKNOWN (L-026, D-L025-4). Claims the rules
+    merely cannot map (free-form text, terms outside the catalog, "go through"
+    boundaries) are still the model's to decide."""
+    if es.fail_closed:
+        return es.fail_closed
+    if claim.kind == "free":
+        return None  # the rules evaluate nothing of a free claim: the model's to decide
+    extra = unhonoured_fields(claim)
+    if extra:
+        return f"qualifier {', '.join(map(repr, extra))} not evaluated by the rules"
+    what = undecidable_qualifier(claim)
+    if what:
+        return f"qualifier '{what}' needs call-site analysis"
+    return None
+
+
 def unhonoured_fields(claim: Claim) -> list[str]:
     """Non-empty rule fields the rules do not evaluate for this claim kind."""
     honoured = HONOURED_FIELDS.get(claim.kind, frozenset())
@@ -341,13 +401,12 @@ def _rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
         hits = es.with_relation("forbidden")
         prod = [e for e in hits if e.production]
         action = rule.get("action") if isinstance(rule.get("action"), str) else None
-        manner = _manner(claim)
-        if action != "import" and (manner or (action and action not in PRESENCE_ACTIONS)):
+        what = undecidable_qualifier(claim)
+        if what:
             # "must not call X", "must not use X directly": presence of X does not
             # establish the qualified act; without call-site analysis it is undecidable.
             if not hits:
                 return v("HOLDING", [], f"no forbidden technology found ({es.searched})")
-            what = " ".join(x for x in (action, manner) if x)
             return v(
                 "UNKNOWN",
                 hits[:10],
@@ -426,16 +485,14 @@ def _rule_verdict(claim: Claim, es: EvidenceSet) -> Verdict:
         out = es.with_relation("outside_boundary")
         prod = [e for e in out if e.production]
         inside = es.with_relation("inside_boundary")
-        action = rule.get("action") if isinstance(rule.get("action"), str) else None
-        manner = _manner(claim)
-        if (action and action not in BOUNDARY_IMPORT_ACTIONS) or (manner and action != "import"):
+        what = undecidable_qualifier(claim)
+        if what:
             # "Only adapters/ may call requests": an import outside adapters/ does not
             # establish a call there; without call-site analysis it is undecidable.
             if not out:
                 return v(
                     "HOLDING", _spread(inside, 10), "target not used outside the allowed paths"
                 )
-            what = " ".join(x for x in (action, manner) if x)
             return v(
                 "UNKNOWN",
                 out[:10],
@@ -645,6 +702,9 @@ class Judge:
         es = es or self.evidence(claim)
         ruled = gate(rule_verdict(claim, es), self.root)
         self._record(ruled.checks)
+        net = fail_closed_reason(claim, es) if ruled.status == "UNKNOWN" else None
+        if ruled.status != "UNKNOWN" and ruled.grounding == "VERIFIED":
+            ruled, net = self._two_readings(claim, ruled)
         if self.mode == "offline":
             return ruled
         provider = provider or self.provider
@@ -689,7 +749,47 @@ class Judge:
             data["proposed_status"] = pre.status
             return Verdict.model_validate(data)
 
+        if net and proposed.grounding == "VERIFIED" and proposed.status != "UNKNOWN":
+            # The rules refused to guess a qualifier; a verifiable line does not
+            # establish it. Keep the model's cited evidence and proposal, not its status.
+            data = proposed.model_dump()
+            data.update(
+                status="UNKNOWN",
+                proposed_status=pre.status,
+                rationale=f"rules failed closed: {net}; model proposed {pre.status}, not "
+                f"accepted (a cited line cannot establish the qualifier). Model: "
+                f"{proposed.rationale}"[:2000],
+                notes=[
+                    *proposed.notes,
+                    f"model proposed {pre.status}; kept UNKNOWN because the rules failed "
+                    f"closed ({net}); rule verdict: {ruled.rationale}"[:600],
+                ],
+            )
+            return Verdict.model_validate(data)
         return proposed
+
+    def _two_readings(self, claim: Claim, ruled: Verdict) -> tuple[Verdict, str | None]:
+        """D-L025-5: "Services must not import X" where a services/ directory exists
+        reads as "the whole codebase" or "the code in services/". The decided rule
+        verdict stands only when both readings agree; otherwise UNKNOWN (fail closed),
+        with both outcomes in the rationale."""
+        generic = ambiguous_generic_actor(claim, self.snapshot)
+        if generic is None:
+            return ruled, None
+        scoped = claim.model_copy(update={"rule": {**claim.rule, "actor": [generic]}})
+        es2 = collect_evidence(scoped, self.snapshot, max_keywords=0)
+        other = gate(rule_verdict(scoped, es2), self.root)
+        self._record(other.checks)
+        if other.status == ruled.status:
+            note = f"subject {generic!r} also judged as the {generic}/ directory: same verdict"
+            return ruled.model_copy(update={"notes": [*ruled.notes, note]}), None
+        why = (
+            f"subject {generic!r} is ambiguous: whole codebase -> {ruled.status} "
+            f"({ruled.rationale}); code in {generic}/ only -> {other.status} ({other.rationale})"
+        )
+        data = ruled.model_dump()
+        data.update(status="UNKNOWN", rationale=why, proposed_status=ruled.status)
+        return Verdict.model_validate(data), why
 
     def judge_all(self, claims: list[Claim]) -> list[Verdict]:
         return [self.judge(c) for c in claims]

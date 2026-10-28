@@ -18,6 +18,7 @@ How to read a red test (answered in each red test's docstring or xfail reason):
 
 Red tests are strict xfails keyed by defect id D-L025-n (see DEFECTS); when a defect is fixed its test
 XPASSes and strict mode tells you to delete the marker. Nothing here touches the source.
+L-026 (Opus) fixed every defect in DEFECTS and removed the markers; regression tests: tests/test_l026_judge_defects.py.
 No network, no API key: sockets are blocked for every test.
 """
 
@@ -76,19 +77,20 @@ def record_stat(key: str, value) -> None:
 # ------------------------------------------------------------------ known defects (strict xfail)
 
 DEFECTS = {
-    "D1": "D-L025-1 (High, evidence.py _boundary/resolve_dir): a bare directory target is matched case-sensitively, so a sentence-initial 'Payments may be imported only from billing/.' never finds payments/ -> false HOLDING 'target not imported anywhere' (criterion 3)",
-    "D3": "D-L025-3 (Medium, catalog.py literal_technology / manifests/terraform.py): literal 'hashicorp/random' matches a required_providers source but not a bare provider \"random\" {} block (implicit hashicorp source) -> false HOLDING",
-    "D4": "D-L025-4 (High, judge.py Judge.judge llm path): in llm/auto mode a rule UNKNOWN produced by the fail-closed net ('between', 'call', 'qualifier X not evaluated', unresolvable actor) is replaced by the model's VIOLATED when it cites any verifiable line; G2 checks that the quote exists, not that it establishes the qualifier -> L-025 is not fail-closed with a model",
-    "D5": "D-L025-5 (Medium, evidence.py subject_actor, spec ambiguity): generic subject 'services'/'service' is whole-repo even when a services/ directory exists -> false VIOLATED ('Services must not import X' because libs/ imports X) and false HOLDING ('All services must use Y' because libs/ uses Y)",
-    "D6": "D-L025-6 (High, evidence.py subject_actor): the 'acting subject' regex only knows must/shall/should/may/can/will/are/is/do/does/need/have, so 'Handlers never import X', \"Handlers don't / won't / shouldn't / mustn't import X\", 'Handlers cannot import X' keep subject as a label -> whole repo -> false VIOLATED when only other code imports X",
-    "D7": "D-L025-7 (High, evidence.py _only/_require): a 'category'/'for' phrase that is not a catalog category ('session storage', 'transactional data', 'audit logging', 'service-to-service communication') is silently replaced by the technology's own category -> 'We use only Redis for session storage' is VIOLATED because memcached caches pages; communication scope phrased as a category evades the 'between' fail-closed rule",
-    "D9": "D-L025-9 (Medium-Low, outside L-025: index/manifests/terraform.py, L-004): Terraform JSON (*.tf.json) is not parsed, so a forbidden provider declared there is missed -> false HOLDING",
-    "D10": "D-L025-10 (Low-Medium, evidence.py _boundary): a bare target naming a module FILE (payments.py), not a directory, resolves to nothing and the local import edge is skipped -> false HOLDING 'target not imported anywhere'",
-    "D11": "D-L025-11 (Low, catalog.py literal_technology): a literal Terraform term spelled with the registry host ('registry.terraform.io/hashicorp/random') never matches although the manifest side canonicalises that prefix away -> false HOLDING",
+    "D1": "[fixed in L-026] D-L025-1 (High, evidence.py _boundary/resolve_dir): a bare directory target is matched case-sensitively, so a sentence-initial 'Payments may be imported only from billing/.' never finds payments/ -> false HOLDING 'target not imported anywhere' (criterion 3)",
+    "D3": "[fixed in L-026] D-L025-3 (Medium, catalog.py literal_technology / manifests/terraform.py): literal 'hashicorp/random' matches a required_providers source but not a bare provider \"random\" {} block (implicit hashicorp source) -> false HOLDING",
+    "D4": "[fixed in L-026] D-L025-4 (High, judge.py Judge.judge llm path): in llm/auto mode a rule UNKNOWN produced by the fail-closed net ('between', 'call', 'qualifier X not evaluated', unresolvable actor) is replaced by the model's VIOLATED when it cites any verifiable line; G2 checks that the quote exists, not that it establishes the qualifier -> L-025 is not fail-closed with a model",
+    "D5": "[fixed in L-026] D-L025-5 (Medium, evidence.py subject_actor, spec ambiguity): generic subject 'services'/'service' is whole-repo even when a services/ directory exists -> false VIOLATED ('Services must not import X' because libs/ imports X) and false HOLDING ('All services must use Y' because libs/ uses Y)",
+    "D6": "[fixed in L-026] D-L025-6 (High, evidence.py subject_actor): the 'acting subject' regex only knows must/shall/should/may/can/will/are/is/do/does/need/have, so 'Handlers never import X', \"Handlers don't / won't / shouldn't / mustn't import X\", 'Handlers cannot import X' keep subject as a label -> whole repo -> false VIOLATED when only other code imports X",
+    "D7": "[fixed in L-026] D-L025-7 (High, evidence.py _only/_require): a 'category'/'for' phrase that is not a catalog category ('session storage', 'transactional data', 'audit logging', 'service-to-service communication') is silently replaced by the technology's own category -> 'We use only Redis for session storage' is VIOLATED because memcached caches pages; communication scope phrased as a category evades the 'between' fail-closed rule",
+    "D9": "[fixed in L-026] D-L025-9 (Medium-Low, outside L-025: index/manifests/terraform.py, L-004): Terraform JSON (*.tf.json) is not parsed, so a forbidden provider declared there is missed -> false HOLDING",
+    "D10": "[fixed in L-026] D-L025-10 (Low-Medium, evidence.py _boundary): a bare target naming a module FILE (payments.py), not a directory, resolves to nothing and the local import edge is skipped -> false HOLDING 'target not imported anywhere'",
+    "D11": "[fixed in L-026] D-L025-11 (Low, catalog.py literal_technology): a literal Terraform term spelled with the registry host ('registry.terraform.io/hashicorp/random') never matches although the manifest side canonicalises that prefix away -> false HOLDING",
 }
 
 
 def known(key: str):
+    """Strict xfail for an open defect (none open since L-026; kept for new findings)."""
     return pytest.mark.xfail(strict=True, reason=DEFECTS[key])
 
 
@@ -660,9 +662,7 @@ def test_no_false_violated_or_holding_on_clean_cases(results):
     assert not bad, (len(bad), bad[:8])
 
 
-@pytest.mark.parametrize(
-    "key", [pytest.param(k, marks=known(k), id=k) for k in ("D1", "D5", "D6", "D7")]
-)
+@pytest.mark.parametrize("key", ["D1", "D5", "D6", "D7"])
 def test_known_defect_groups(key, results):
     """Each defect id keeps its own strict xfail so a fix is noticed. 1. WHAT: the truth rule above on the cases tagged with the defect.
     2. WHO: code (see DEFECTS). 3. SO WHAT: see DEFECTS (false VIOLATED / false HOLDING under an unevaluated qualifier)."""
@@ -1199,7 +1199,6 @@ def test_unresolvable_actor_is_unknown_never_whole_repo(world):
         "Handlers mustn't import requests.",
     ],
 )
-@known("D6")
 def test_adverb_and_contraction_subjects_are_actors(world, sentence):
     """1. WHAT: docstring of judge.py: 'a rule-library forbid/require whose sentence names [the subject] as the acting subject is scoped
     to that actor'; 'Handlers never import requests' names handlers as the actor exactly like 'Handlers must not'.
@@ -1263,7 +1262,6 @@ def test_hint_and_model_subjects_are_labels_never_actors(world):
         ), subject
 
 
-@known("D5")
 def test_generic_subject_services_respects_an_existing_services_directory(world):
     """1. WHAT: ticket: 'subject ... is the acting subject of the decision sentence (then it scopes to that actor or UNKNOWN)'.
     'Services must not import requests' is such a sentence and a services/ directory exists. 2. WHO: spec ambiguity + code
@@ -1433,7 +1431,6 @@ def test_terraform_literal_matches_module_and_provider_in_boundary_and_only_clai
         assert_grounded(repo, v)
 
 
-@known("D3")
 def test_provider_block_without_required_providers_is_the_hashicorp_source(world):
     """1. WHAT: catalog.py: 'Terraform providers are matched by source'; a provider "random" {} block with no source is hashicorp/random
     (Terraform's implicit default), and the manifest layer records provider blocks. 2. WHO: code (the block yields package 'random',
@@ -1446,7 +1443,6 @@ def test_provider_block_without_required_providers_is_the_hashicorp_source(world
     )
 
 
-@known("D9")
 def test_tf_json_declares_dependencies_too(world):
     """1. WHAT: Terraform/OpenTofu accept *.tf.json with the same required_providers. 2. WHO: code in index/manifests/terraform.py (L-004
     area, not L-025). 3. SO WHAT: a forbidden provider declared in JSON is invisible: false HOLDING."""
@@ -1461,7 +1457,6 @@ def test_tf_json_declares_dependencies_too(world):
     )
 
 
-@known("D11")
 def test_registry_host_in_the_claim_term_is_normalised_like_the_manifest(world):
     """1. WHAT: manifests canonicalise registry.terraform.io/ away; the claim term should be canonicalised the same way.
     2. WHO: code (literal_technology). 3. SO WHAT: low; false HOLDING when an ADR writes the full registry address."""
@@ -1700,7 +1695,6 @@ def test_dir_and_package_both_evaluated_is_stated_in_the_notes(world):
 
 
 @pytest.mark.parametrize("target", ["Payments", "PAYMENTS"])
-@known("D1")
 def test_bare_directory_target_is_case_insensitive_like_prose(world, target):
     """1. WHAT: ticket (3): 'bare directory boundary targets resolve to existing repo dirs'; ADR prose capitalises the first word, and the rule
     library keeps the capital in rule['target'] ('Payments may be imported only from billing/.'). 2. WHO: code (resolve_dir / dir_exists are
@@ -1711,7 +1705,6 @@ def test_bare_directory_target_is_case_insensitive_like_prose(world, target):
     assert v.status == "VIOLATED", v.rationale
 
 
-@known("D10")
 def test_bare_target_naming_a_module_file(world):
     """1. WHAT: 'No payments imports outside billing/' where payments is payments.py (no directory). 2. WHO: code (only directories are
     resolved; the local import edge of a module file is skipped). 3. SO WHAT: false HOLDING for a flat-layout repo."""
@@ -1727,7 +1720,6 @@ def test_bare_target_naming_a_module_file(world):
 # ------------------------------------------------------------------ category / for are evaluated or fail closed
 
 
-@known("D7")
 def test_unresolvable_category_phrase_must_not_widen_the_claim(world):
     """1. WHAT: ticket safety net: a qualifier the rules do not evaluate -> UNKNOWN. 'only Redis for session storage' carries the qualifier
     'for session storage', which is not a catalog category, and the code silently compares against ALL caches. 2. WHO: code (_only falls back
@@ -1740,7 +1732,6 @@ def test_unresolvable_category_phrase_must_not_widen_the_claim(world):
     assert v.status in ("UNKNOWN", "HOLDING"), v.rationale
 
 
-@known("D7")
 def test_communication_phrased_as_category_is_as_undecidable_as_between(world):
     repo = world.build(
         {"svc_a/a.py": "import kafka\n", "svc_b/b.py": "import pika  # private job queue\n"}
@@ -1819,7 +1810,6 @@ UNKNOWN_BY_NET = {
 
 
 @pytest.mark.parametrize("name", sorted(UNKNOWN_BY_NET))
-@known("D4")
 def test_model_cannot_turn_a_fail_closed_unknown_into_violated_by_citing_a_line(world, name):
     """1. WHAT: the brief/ticket: 'LLM proposes, deterministic code disposes'; the hunt brief: a fake model that cites a verifiable line must not
     turn an L-025 UNKNOWN into VIOLATED. judge.py docstring: only claims the rules cannot decide get the model's verdict, and the gate checks
