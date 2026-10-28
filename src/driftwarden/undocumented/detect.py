@@ -32,8 +32,9 @@ files, dev/test/build/optional scopes, ``requirements-dev.txt``,
 ``docker-compose.test.yml`` and the rest of ``judge.evidence``'s rules -- never
 make a record on their own: a technology seen only there is listed in
 ``UndocumentedScan.nonproduction``. Vendored third-party trees
-(``node_modules/``, ``vendor/``, ``third_party/``, ``.venv/`` ...; see
-:data:`VENDORED_DIRS`) are ignored altogether.
+(``node_modules/``, ``vendor/``, ``third_party/``, ``external/``, ``.venv/`` ...;
+see :data:`driftwarden.index.vendored.VENDORED_DIRS`) are ignored altogether, by
+the same predicate the judge's evidence collection uses (L-030).
 
 **Documented.** A technology is documented when the text of an ADR *as it is at
 the scanned commit* mentions it (ADRs added later never document an older
@@ -157,6 +158,7 @@ from driftwarden.index.imports import (
 )
 from driftwarden.index.manifests import canonical_package, parse_manifest
 from driftwarden.index.manifests.terraform import provider_sources
+from driftwarden.index.vendored import VENDORED_DIRS, is_vendored
 from driftwarden.judge import catalog
 from driftwarden.judge.evidence import (
     Snapshot,
@@ -251,15 +253,8 @@ def occurrence_keys(namespace: str, names: Iterable[str], ecosystem: str | None)
 
 
 # Third-party code checked into the repository: never this repository's choice.
-VENDORED_DIRS = frozenset(
-    {"node_modules", "vendor", "vendors", "third_party", "third-party", "thirdparty",
-     "bower_components", "jspm_packages", "site-packages", ".venv", "venv", "Pods"}
-)  # fmt: skip
-
-
-def is_vendored(path: str) -> bool:
-    """True when ``path`` lies in a vendored / third-party directory (any depth)."""
-    return any(seg in VENDORED_DIRS for seg in path.split("/")[:-1])
+# VENDORED_DIRS / is_vendored live in driftwarden.index.vendored, shared with the
+# judge's evidence collection (L-030), and are re-exported here.
 
 
 def _dep_production(dep) -> bool:
@@ -1177,10 +1172,12 @@ __all__ = [
     "CATEGORY_LABELS",
     "DETECTED_CATEGORIES",
     "IAC_CATEGORY",
+    "VENDORED_DIRS",
     "UndocumentedScan",
     "adr_mentions",
     "detect_undocumented",
     "file_hits",
+    "is_vendored",
     "occurrence_keys",
     "technology_terms",
     "verify_undocumented",
