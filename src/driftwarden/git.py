@@ -246,6 +246,12 @@ def is_ancestor(repo: str | Path, ancestor: str, descendant: str) -> bool:
         return False
 
 
+def rev_list_topo(repo: str | Path, tip: str) -> list[str]:
+    """Every commit reachable from ``tip``, in topological order, ancestors first."""
+    out = _run(["rev-list", "--topo-order", "--reverse", f"{tip}^{{commit}}"], repo)
+    return out.split()
+
+
 def commit_time(repo: str | Path, commit: str) -> int:
     """Committer timestamp (Unix seconds) of ``commit``."""
     return int(_run(["show", "-s", "--format=%ct", f"{commit}^{{commit}}"], repo).strip())

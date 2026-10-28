@@ -458,3 +458,71 @@ def scan_adrs(path: str | Path, config: Config | None = None) -> AdrScan:
             dec = dec.model_copy(update={"id": f"{dec.id}~{n}"})
         decisions.append(dec)
     return AdrScan(root=root, head=head, decisions=decisions, errors=errors, skipped=skipped)
+
+
+def _matches_entry(path: str, entry: str) -> bool:
+    """``path`` is the ADR location ``entry`` names: the file itself, a file under that
+    directory, or (for a glob) a file or directory matching it."""
+    e = entry.strip().strip("/")
+    while e.startswith("./"):
+        e = e[2:]
+    if not e:
+        return False
+    if any(c in e for c in "*?["):
+        parts = path.split("/")
+        prefixes = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+        return any(fnmatch.fnmatchcase(p, e) for p in prefixes)
+    return path == e or path.startswith(e + "/")
+
+
+def discover_adr_files_at(root: str | Path, commit: str, config: Config | None = None) -> list[str]:
+    """Like ``discover_adr_files``, but over the files tracked at ``commit`` (the
+    ``.adr-dir`` marker is read at that commit too). Sorted repo-relative paths."""
+    root = git.repo_root(root)
+    cfg = config or Config()
+    candidates: list[str] = [*ADR_DIRS, *cfg.adr_paths]
+    try:
+        marker = git.show_file(root, commit, ".adr-dir").strip()
+    except git.NotAGitRepoError:
+        raise
+    except git.GitError:
+        marker = ""
+    if marker:
+        candidates.append(marker)
+    found: list[str] = []
+    for rel in git.ls_tree(root, commit):
+        name = rel.rsplit("/", 1)[-1]
+        if not name.lower().endswith(ADR_SUFFIXES) or is_skipped_name(name):
+            continue
+        if _excluded(rel, cfg.exclude):
+            continue
+        if any(_matches_entry(rel, c) for c in candidates):
+            found.append(rel)
+    return sorted(found)
+
+
+def scan_adrs_at(path: str | Path, commit: str, config: Config | None = None) -> AdrScan:
+    """Discover and parse every ADR as it is at ``commit`` (resolved to a full SHA):
+    every Decision's provenance names that commit. The working tree is never read."""
+    root = git.repo_root(path)
+    sha = git.resolve_commit(root, commit)
+    decisions: list[Decision] = []
+    errors: list[tuple[str, str]] = []
+    skipped: list[tuple[str, str]] = []
+    seen: dict[str, int] = {}
+    for rel in discover_adr_files_at(root, sha, config):
+        try:
+            text = git.show_file(root, sha, rel)
+            if not text.replace("﻿", "").strip():
+                skipped.append((rel, EMPTY_NOTE))
+                continue
+            dec = parse_adr(text, rel, sha)
+        except (OSError, git.GitError, ValueError) as exc:
+            errors.append((rel, str(exc)))
+            continue
+        n = seen.get(dec.id, 0) + 1
+        seen[dec.id] = n
+        if n > 1:
+            dec = dec.model_copy(update={"id": f"{dec.id}~{n}"})
+        decisions.append(dec)
+    return AdrScan(root=root, head=sha, decisions=decisions, errors=errors, skipped=skipped)

@@ -291,6 +291,7 @@ def _mutations(repo: Path, rec: UndocumentedDecision) -> dict[str, dict]:
 
         mut("ev.commit.parent", to_parent)
     mut("ev.technology", lambda d: ev0(d).update(technology="left-pad"))
+    mut("ev.production", lambda d: ev0(d).update(production=False))
     mut("ev.kind", lambda d: ev0(d).update(kind="code"))
     mut(
         "ev.kind.swap",

@@ -418,12 +418,10 @@ def test_word_boundary_trap_substrings_in_words(tmp_path):
     assert {"web-framework/flask", "web-framework/koa"} <= got
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D-1: 'Considered Options' section is not searched, so an ADR that names Redis there is not coverage",
-)
-def test_adr_in_rejected_alternatives_section_documents(tmp_path):
-    """Design says any ADR text mention documents (incl. rejected ones)."""
+def test_adr_in_rejected_alternatives_section_is_flagged(tmp_path):
+    """Product decision D-1 (Fable): a technology named only as a considered / rejected
+    alternative in an ADR's options section is NOT documentation of using it. Code that
+    uses it is an undocumented decision, so it is flagged."""
     repo = init(tmp_path / "r")
     extra = "\n## Considered Options\n\n* Redis - rejected, too heavy\n* Memcached\n"
     commit(
@@ -434,9 +432,8 @@ def test_adr_in_rejected_alternatives_section_documents(tmp_path):
         },
     )
     scan = detect_undocumented(repo)
-    # Redis is discussed in the ADR (rejected); records of it as "undocumented" would
-    # contradict the documented rule.
-    assert "cache/redis" not in labels(scan)
+    # Redis appears only as a rejected option: using it is undocumented (D-1).
+    assert "cache/redis" in labels(scan)
 
 
 def test_adr_with_status_rejected_documents(tmp_path):
@@ -510,9 +507,10 @@ def test_madr_format_adr(tmp_path):
     assert detect_undocumented(repo).records == []
 
 
-@pytest.mark.xfail(strict=True, reason="D-1: MADR considered-options list not searched")
-def test_madr_rejected_option_documents_other_tech(tmp_path):
-    """RabbitMQ only appears as a considered/rejected option in the MADR options list."""
+def test_madr_rejected_option_is_flagged(tmp_path):
+    """Product decision D-1 (Fable): RabbitMQ appears only as a considered (not chosen)
+    option in the MADR options list. That is not documentation of using it, so code that
+    uses it is flagged as an undocumented decision."""
     repo = init(tmp_path / "r")
     body = (
         "---\nstatus: accepted\ndate: 2026-01-01\n---\n# Use Kafka for events\n\n## Context and Problem Statement\n\nEvents.\n\n"
@@ -522,7 +520,7 @@ def test_madr_rejected_option_documents_other_tech(tmp_path):
         repo,
         {**manifest_files("pypi", "pika"), "docs/decisions/0001-events.md": body},
     )
-    assert "queue/rabbitmq" not in labels(detect_undocumented(repo))
+    assert "queue/rabbitmq" in labels(detect_undocumented(repo))
 
 
 # --------------------------------------------------------------------- history
@@ -574,10 +572,6 @@ def test_version_bump_keeps_original_intro(tmp_path):
     assert r.introducing_commits == [c1]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D-3: introduction = first appearance as dev-only dep, not the promotion to production",
-)
 def test_dev_to_prod_promotion(tmp_path):
     repo = init(tmp_path / "r")
     commit(repo, {"package.json": json.dumps({"devDependencies": {"axios": "1"}})})
@@ -603,10 +597,6 @@ def test_scan_old_commit_ignores_later_changes(tmp_path):
     assert labels(detect_undocumented(repo)) == {"web-framework/flask"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D-2: default ADR discovery reads HEAD/worktree, not ADRs at the scanned commit",
-)
 def test_adr_added_later_documents_at_head_not_at_old_commit(tmp_path):
     repo = init(tmp_path / "r")
     c1 = commit(repo, {"requirements.txt": "redis==5\n"})
@@ -865,10 +855,6 @@ def test_monorepo_multi_ecosystem(tmp_path):
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="D-4: introducing_commits 'oldest first' ordered by (timestamp, sha): same-second commits come out in sha order",
-)
 def test_same_tech_many_services_single_record_multi_intro(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")  # same-second commits
     monkeypatch.setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
@@ -916,7 +902,6 @@ def test_tf_provider_documented_by_provider_name(tmp_path):
     assert detect_undocumented(repo).records == []
 
 
-@pytest.mark.xfail(strict=True, reason="D-5: vendor/ trees are not excluded by default")
 def test_lockfiles_and_vendored_dirs(tmp_path):
     repo = init(tmp_path / "r")
     commit(
@@ -1131,9 +1116,6 @@ def _info_mutations(rec):
     yield "ev0.id", d
 
 
-@pytest.mark.xfail(
-    strict=True, reason="D-6: Evidence.production flag is never re-checked by verify_undocumented"
-)
 def test_tamper_production_flag_caught(tmp_path):
     repo, _ = _tamper_repo(tmp_path)
     from driftwarden.models import UndocumentedDecision

@@ -31,11 +31,21 @@ code-level choices, not architecture). Occurrences that do not ship -- test
 files, dev/test/build/optional scopes, ``requirements-dev.txt``,
 ``docker-compose.test.yml`` and the rest of ``judge.evidence``'s rules -- never
 make a record on their own: a technology seen only there is listed in
-``UndocumentedScan.nonproduction``.
+``UndocumentedScan.nonproduction``. Vendored third-party trees
+(``node_modules/``, ``vendor/``, ``third_party/``, ``.venv/`` ...; see
+:data:`VENDORED_DIRS`) are ignored altogether.
 
-**Documented.** A technology is documented when any ADR text mentions it,
-whatever the ADR's status (a rejected or superseded ADR still documents the
-choice; whether the code obeys it is the judge's business). "Mentions" is a
+**Documented.** A technology is documented when the text of an ADR *as it is at
+the scanned commit* mentions it (ADRs added later never document an older
+commit). The searched text is each decision's title, context, decision,
+consequences and chosen option, whatever the ADR's status: a superseded ADR, or
+a rejected ADR whose own decision is about the technology ("We will not use
+MongoDB"), still documents the choice -- whether the code obeys it is the
+judge's business. Product decision (D-1, Fable): a technology named only as a
+*considered / rejected alternative* in an options list (MADR "Considered
+Options", a Nygard "Considered Options" section) is **not** documentation of
+using it, so those sections are not searched and such a technology is flagged.
+"Mentions" is a
 case-insensitive whole-word match (letters, digits and ``_`` delimit words) of
 any of :func:`technology_terms`: the catalog id and aliases, plus the package /
 module / image / provider names the evidence uses (an ADR that says
@@ -47,23 +57,30 @@ documented by accident: that loses recall, never precision.
 
 **Introducing commits.** For every evidence item the detector walks the file's
 history back from the scanned commit: from the newest commit that changed the
-file, while a parent still has the technology in that file, it moves to the
-newest commit at or below that parent that changed the file. The commit whose
-parents all lack it (or lack the file) is the introducing commit; the record
-lists the distinct ones, oldest first. A version bump does not move the
-introduction (the technology was already there), unlike ``git blame``.
+file, while a parent still uses the technology *in production* in that file, it
+moves to the newest commit at or below that parent that changed the file. The
+commit whose parents all lack a production use (or lack the file) is the
+introducing commit, so a dev-only dependency promoted to production is
+introduced by the promotion. The record lists the distinct introducing commits
+oldest first in topological order (an ancestor always before its descendants;
+never by timestamp). A version bump does not move the introduction (the
+technology was already there), unlike ``git blame``.
 
 **Grounding (fail closed).** :func:`verify_undocumented` re-checks a record from
 scratch: G2 on every evidence line and G3 (``verify_dependency``) on every
 manifest item, at the scanned commit; that the cited line really is a
 production occurrence of *this* technology in *this* category (the manifest is
-re-parsed, the import re-extracted); G5 (``verify_commits_exist``) on every
+re-parsed, the import re-extracted) and that the evidence says so
+(``Evidence.production``); that ``introducing_commits`` are in topological
+order; G5 (``verify_commits_exist``) on every
 introducing commit, which must also be an ancestor of the scanned commit; G2 on
 the introducing line at the introducing commit; presence there and absence at
 every parent; and, when ADRs are given, that none of them mentions the
 technology. Any failure turns the record into ``status=UNKNOWN,
 grounding=MISMATCH`` with the reasons: it is reported as *Could not verify*,
-never as a finding, and never dropped.
+never as a finding, and never dropped. Free-text fields (``title``, ``notes``,
+``Evidence.detail``, ``searched_terms``) are descriptive, not evidential, and
+are not verified.
 
 Known limits: name-based (see ``judge.catalog``), so technologies reached
 through generic clients, connection URLs or vendored code are not seen; the
@@ -83,7 +100,7 @@ from pydantic import BaseModel, Field
 
 from driftwarden import git
 from driftwarden.config import Config
-from driftwarden.discover.adr import scan_adrs
+from driftwarden.discover.adr import scan_adrs_at
 from driftwarden.grounding.ledger import Ledger
 from driftwarden.grounding.verify import (
     commit_problem,
@@ -190,9 +207,40 @@ def occurrence_keys(namespace: str, names: Iterable[str], ecosystem: str | None)
     ]
 
 
+# Third-party code checked into the repository: never this repository's choice.
+VENDORED_DIRS = frozenset(
+    {"node_modules", "vendor", "vendors", "third_party", "third-party", "thirdparty",
+     "bower_components", "jspm_packages", "site-packages", ".venv", "venv", "Pods"}
+)  # fmt: skip
+
+
+def is_vendored(path: str) -> bool:
+    """True when ``path`` lies in a vendored / third-party directory (any depth)."""
+    return any(seg in VENDORED_DIRS for seg in path.split("/")[:-1])
+
+
 def _dep_production(dep) -> bool:
     path = dep.manifest_path
-    return not (is_weak_scope(dep.scope) or is_test_path(path) or is_nonproduction_manifest(path))
+    return not (
+        is_weak_scope(dep.scope)
+        or is_test_path(path)
+        or is_nonproduction_manifest(path)
+        or is_vendored(path)
+    )
+
+
+class _Keys:
+    """Memoised ``occurrence_keys`` for one run (large manifests repeat the same
+    names at every commit; matching each name against the catalog once is enough)."""
+
+    def __init__(self) -> None:
+        self._memo: dict[tuple, list[Key]] = {}
+
+    def __call__(self, namespace: str, names: Iterable[str], ecosystem: str | None) -> list[Key]:
+        k = (namespace, tuple(names), ecosystem)
+        if k not in self._memo:
+            self._memo[k] = occurrence_keys(namespace, k[1], ecosystem)
+        return self._memo[k]
 
 
 # --------------------------------------------------------------------------- per-file presence
@@ -236,27 +284,35 @@ def _import_names(path: str, text: str) -> list[tuple[int, int, tuple[str, ...],
     return out
 
 
-def file_hits(path: str, text: str, key: Key, kind: str) -> list[_Hit]:
+def file_hits(
+    path: str,
+    text: str,
+    key: Key,
+    kind: str,
+    *,
+    keys: Callable[[str, Iterable[str], str | None], list[Key]] = occurrence_keys,
+    refs: list | None = None,
+) -> list[_Hit]:
     """Lines of ``path`` (with content ``text``) where the technology ``key`` occurs.
 
     ``kind`` is the evidence kind: ``dependency`` / ``infra`` re-parse the file as a
-    manifest, ``import`` re-extracts its import statements."""
+    manifest (or use the already parsed ``refs``), ``import`` re-extracts its import
+    statements. Each hit says whether that occurrence ships (``production``)."""
     hits: list[_Hit] = []
     if kind in ("dependency", "infra"):
-        res = parse_manifest(path, text)
-        for ref in res.refs:
+        for ref in refs if refs is not None else parse_manifest(path, text).refs:
             ns = catalog.ECOSYSTEM_NAMESPACE.get(ref.ecosystem or "")
             if ns is None or ref.line is None:
                 continue
-            if key in occurrence_keys(ns, (ref.package,), ref.ecosystem):
+            if key in keys(ns, (ref.package,), ref.ecosystem):
                 hits.append(
                     _Hit(ref.line, ref.line, _dep_production(ref), ref.package, ref.line,
                          (ref.package,))
                 )  # fmt: skip
     elif kind == "import":
-        prod = not is_test_path(path)
+        prod = not (is_test_path(path) or is_vendored(path))
         for start, end, names, ns in _import_names(path, text):
-            if key in occurrence_keys(ns, names, None):
+            if key in keys(ns, names, None):
                 hits.append(_Hit(start, end, prod, names=names))
     return hits
 
@@ -269,7 +325,10 @@ class _History:
         self._blob: dict[tuple[str, str], str | None] = {}
         self._text: dict[str, str] = {}
         self._hits: dict[tuple[str, str, Key, str], list[_Hit]] = {}
+        self._refs: dict[tuple[str, str], list] = {}
         self._parents: dict[str, list[str]] = {}
+        self._order: dict[str, dict[str, int]] = {}
+        self.keys = _Keys()
 
     def text(self, commit: str, path: str) -> str | None:
         k = (commit, path)
@@ -289,8 +348,25 @@ class _History:
         blob = self._blob[(commit, path)]
         hk = (blob or "", path, key, kind)
         if hk not in self._hits:
-            self._hits[hk] = file_hits(path, text, key, kind)
+            refs = None
+            if kind in ("dependency", "infra"):
+                rk = (blob or "", path)
+                if rk not in self._refs:
+                    self._refs[rk] = parse_manifest(path, text).refs
+                refs = self._refs[rk]
+            self._hits[hk] = file_hits(path, text, key, kind, keys=self.keys, refs=refs)
         return self._hits[hk]
+
+    def production_hits(self, commit: str, path: str, key: Key, kind: str) -> list[_Hit]:
+        return [h for h in self.hits(commit, path, key, kind) if h.production]
+
+    def topo_index(self, tip: str) -> dict[str, int]:
+        """Position of every commit reachable from ``tip`` in topological order,
+        ancestors first (so an ancestor always sorts before its descendants)."""
+        if tip not in self._order:
+            shas = git.rev_list_topo(self.root, tip)
+            self._order[tip] = {c: i for i, c in enumerate(shas)}
+        return self._order[tip]
 
     def parents(self, commit: str) -> list[str]:
         if commit not in self._parents:
@@ -301,16 +377,18 @@ class _History:
 def _introduction(
     hist: _History, scan_commit: str, ev: Evidence, key: Key
 ) -> tuple[Introduction | None, str]:
-    """The commit that brought ``key`` into ``ev``'s file, or (None, why)."""
+    """The commit that brought ``key`` into ``ev``'s file *as a production occurrence*
+    (a dev-only dependency later promoted to production is introduced by the
+    promotion), or (None, why)."""
     path = ev.ref.path
     cur = git.last_commit_touching(hist.root, scan_commit, path)
     seen: set[str] = set()
     while cur is not None and cur not in seen and len(seen) < MAX_HISTORY_STEPS:
         seen.add(cur)
-        here = hist.hits(cur, path, key, ev.kind)
+        here = hist.production_hits(cur, path, key, ev.kind)
         if not here:
             return None, f"{path}: technology not found at {cur[:12]} while walking history"
-        present = [p for p in hist.parents(cur) if hist.hits(p, path, key, ev.kind)]
+        present = [p for p in hist.parents(cur) if hist.production_hits(p, path, key, ev.kind)]
         if not present:
             lines = split_lines(hist.text(cur, path) or "")
             h = here[0]
@@ -410,6 +488,8 @@ def _semantic(
         return [*problems, "manifest evidence without a dependency record (G3)"]
     if ev.kind == "import" and ev.dependency is not None:
         problems.append("import evidence must not carry a dependency record")
+    if not ev.production:
+        problems.append("evidence is marked non-production; only production use is a finding")
     if ev.ref.commit != rec.commit or commit_problem(root, rec.commit) is not None:
         return problems  # reported by the commit checks
     try:
@@ -506,6 +586,11 @@ def verify_undocumented(
         if len(set(rec.introducing_commits)) != len(rec.introducing_commits):
             fail("introducing_commits lists a commit twice")
         anchor = rec.commit if bad is None else None
+        if anchor is not None:
+            order = hist.topo_index(anchor)
+            listed = list(rec.introducing_commits)
+            if all(c in order for c in listed) and listed != _oldest_first(listed, order):
+                fail("introducing_commits are not oldest first (topological order)")
         for r in verify_commits_exist(
             root, sorted(intro_commits | set(rec.introducing_commits)) or [], ancestor_of=anchor,
             subject=subj,
@@ -563,17 +648,23 @@ def _verify_intro(
         fail(f"{tag}: {g2.reason}", intro.ref, "G2")
         return
     key = _key_of(rec)
-    here = hist.hits(intro.commit, intro.ref.path, key, ev.kind)
+    here = hist.production_hits(intro.commit, intro.ref.path, key, ev.kind)
     if not any(intro.ref.line_start <= h.line_start <= intro.ref.line_end for h in here):
-        fail(f"{tag}: {rec.technology} is not at the cited lines of that commit", intro.ref)
+        fail(
+            f"{tag}: no production use of {rec.technology} at the cited lines of that commit",
+            intro.ref,
+        )
         return
     actual = hist.parents(intro.commit)
     if sorted(actual) != sorted(intro.parents):
         fail(f"{tag}: parents are {[p[:12] for p in actual]}, record says otherwise", intro.ref)
         return
     for p in actual:
-        if hist.hits(p, intro.ref.path, key, ev.kind):
-            fail(f"{tag}: {rec.technology} is already in {intro.ref.path} at parent {p[:12]}")
+        if hist.production_hits(p, intro.ref.path, key, ev.kind):
+            fail(
+                f"{tag}: {rec.technology} is already used in production in {intro.ref.path} "
+                f"at parent {p[:12]}"
+            )
             return
     checks.append(
         _check(
@@ -624,13 +715,21 @@ class _Group:
     packages: list[str] = field(default_factory=list)
 
 
-def _collect(snap: Snapshot) -> tuple[dict[Key, _Group], list[str]]:
+def _oldest_first(commits: Iterable[str], order: dict[str, int]) -> list[str]:
+    """``commits`` in topological order (an ancestor always before its descendants);
+    commits outside ``order`` go last, by SHA."""
+    return sorted(commits, key=lambda c: (order.get(c, len(order)), c))
+
+
+def _collect(snap: Snapshot, keys_of: _Keys) -> tuple[dict[Key, _Group], list[str]]:
     groups: dict[Key, _Group] = {}
     notes: list[str] = []
     seen: set[tuple] = set()
     for o in _occurrences(snap):
+        if is_vendored(o.path):
+            continue  # third-party code checked in: not this repository's choice
         eco = o.dep.ecosystem if o.dep is not None else None
-        keys = occurrence_keys(o.namespace, o.names, eco)
+        keys = keys_of(o.namespace, o.names, eco)
         if not keys:
             continue
         if o.edge is not None:
@@ -710,8 +809,9 @@ def detect_undocumented(
     max_evidence: int = DEFAULT_MAX_EVIDENCE,
 ) -> UndocumentedScan:
     """Technology choices at ``commit`` that no ADR (``decisions``, and ``claims`` if
-    given) mentions, each re-verified. ``decisions=None`` discovers the ADRs with
-    ``scan_adrs``. ``commit`` must name a commit (WORKTREE has no history).
+    given) mentions, each re-verified. ``decisions=None`` discovers the ADRs *as they
+    are at the scanned commit* (``scan_adrs_at``); the working tree is never read.
+    ``commit`` must name a commit (WORKTREE has no history).
 
     Every record's checks are appended to ``ledger`` when one is given. Raises
     git.GitError if ``commit`` is not a commit, ValueError for WORKTREE.
@@ -721,11 +821,13 @@ def detect_undocumented(
     root = git.repo_root(repo)
     snap = snapshot or load_snapshot(root, commit, config)
     if decisions is None:
-        decisions = scan_adrs(root, config).decisions
+        # The ADRs as they were at the scanned commit -- never HEAD or the working tree,
+        # so a later ADR cannot document (or a later edit undocument) an older commit.
+        decisions = scan_adrs_at(root, snap.commit, config).decisions
     claims = list(claims or [])
-    groups, notes = _collect(snap)
-    result = UndocumentedScan(commit=snap.commit, notes=notes)
     hist = _History(root)
+    groups, notes = _collect(snap, hist.keys)
+    result = UndocumentedScan(commit=snap.commit, notes=notes)
     for key in sorted(groups):
         g = groups[key]
         label = f"{key[1]}/{key[0]}"
@@ -755,7 +857,7 @@ def detect_undocumented(
                 rec_notes.append(f"{ev.id}: {why}")
             else:
                 intros.append(intro)
-        commits = sorted({i.commit for i in intros}, key=lambda c: (git.commit_time(root, c), c))
+        commits = _oldest_first({i.commit for i in intros}, hist.topo_index(snap.commit))
         rec = UndocumentedDecision.model_construct(
             id=f"UD-{key[1]}-{key[0]}",
             technology=key[0],
