@@ -17,9 +17,8 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python: ["3.10", "3.11", "3.12", "3.13"]
-        include:
-          - os: macos-latest
-            python: "3.12"
+        # macOS (~50 min) runs only after merge to main, on push events (L-029).
+        include: ${{ fromJSON(github.event_name == 'push' && '[{"os":"macos-latest","python":"3.12"}]' || '[]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
