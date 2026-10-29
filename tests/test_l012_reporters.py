@@ -1042,7 +1042,7 @@ def test_format_html_uses_l013_renderer_when_present(monkeypatch, tmp_path):
     import types
 
     fake = types.ModuleType("driftwarden.report.html")
-    fake.render_html = lambda report: f"<html>{report.metadata.repo}</html>\n"
+    fake.render_html = lambda report, **_kw: f"<html>{report.metadata.repo}</html>\n"
     monkeypatch.setitem(sys.modules, "driftwarden.report.html", fake)
     assert renderer_available("html")
     res = runner.invoke(

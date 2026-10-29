@@ -42,9 +42,9 @@ def _load_html() -> Callable[[Report], str]:
     return fn
 
 
-def render_html(report: Report) -> str:
-    """The HTML report (L-013), imported on first use."""
-    return _load_html()(report)
+def render_html(report: Report, *, link_base: str | None = None) -> str:
+    """The HTML report (L-013), imported on first use. ``link_base`` as for Markdown."""
+    return _load_html()(report, link_base=link_base)
 
 
 RENDERERS: dict[str, Callable[[Report], str]] = {
