@@ -1196,8 +1196,12 @@ def test_unknown_format_exits_2_and_writes_nothing(repo, tmp_path, fmt):
     assert not (tmp_path / "o2").exists()
 
 
-def test_html_is_unavailable_on_this_branch_and_exits_2_before_any_work(repo, tmp_path):
-    assert not (SRC / "report" / "html").exists() and not (SRC / "report" / "html.py").exists()
+def test_html_is_unavailable_on_this_branch_and_exits_2_before_any_work(
+    repo, tmp_path, monkeypatch
+):
+    # L-013 ships driftwarden.report.html; simulate a build without it (as
+    # test_l012_reporters' no_html fixture does) so the exit-2-before-work contract stays tested.
+    monkeypatch.setitem(sys.modules, "driftwarden.report.html", None)
     out = tmp_path / "o"
     r = scan_cli(repo, "--format", "md,html", "--out", str(out))
     no_traceback(r)

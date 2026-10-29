@@ -15,6 +15,13 @@
 {%- if extra %} <span class="dw-mono">{{ extra }}</span>{% endif -%}
 </span>
 {%- endmacro -%}
+{%- macro adr_loc(a, extra_class="") -%}
+{%- if a["href"] -%}<a class="dw-adr-link{{ extra_class }}" href="{{ a["href"] }}"><code class="dw-loc" dir="ltr">{{ a["label"] }}</code></a>
+{%- else -%}<code class="dw-loc{{ extra_class }}" dir="ltr">{{ a["label"] }}</code>{%- endif -%}
+{%- endmacro -%}
+{%- macro change(flag) -%}
+{%- if flag is sameas true %} <span class="dw-change">In this change</span>{% elif flag is sameas false %} <span class="dw-change dw-change--before">Present before this change</span>{% endif -%}
+{%- endmacro -%}
 {%- macro evidence_list(items) -%}
 <ol class="dw-evidence">
 {% for e in items %}
@@ -29,11 +36,11 @@
 {%- macro finding(f) -%}
 <article class="dw-card dw-card--{{ CLASSES[f["status"]] }} dw-filterable" aria-labelledby="{{ f["uid"] }}-t">
 <header class="dw-card__head">
-{{ badge(f["status"]) }}
+{{ badge(f["status"]) }}{{ change(f["in_change"]) }}
 <h3 id="{{ f["uid"] }}-t" class="dw-card__title"><span class="dw-mono dw-id">{{ f["decision_id"] }}</span> {{ f["decision_title"] }}</h3>
 </header>
 <dl class="dw-kv">
-<dt>ADR</dt><dd><code class="dw-loc" dir="ltr">{{ f["adr_label"] }}</code></dd>
+<dt>ADR</dt><dd>{{ adr_loc(f["adr"]) }}</dd>
 <dt>Claim</dt><dd><code class="dw-mono">{{ f["id"] }}</code> <code class="dw-rule">{{ f["rule"] }}</code></dd>
 <dt>Quote</dt><dd><q>{{ f["quote"] }}</q></dd>
 {% if f["rationale"] %}<dt>Why</dt><dd>{{ f["rationale"] }}</dd>{% endif %}
@@ -47,11 +54,11 @@
 {%- endmacro -%}
 {%- macro claim_row(f) -%}
 <li class="dw-row dw-filterable">
-{{ badge(f["status"]) }}
+{{ badge(f["status"]) }}{{ change(f["in_change"]) }}
 <code class="dw-mono">{{ f["id"] }}</code>
 <code class="dw-rule">{{ f["rule"] }}</code>
 <span class="dw-row__title">{{ f["decision_title"] }}</span>
-<code class="dw-loc dw-row__loc" dir="ltr">{{ f["adr_label"] }}</code>
+{{ adr_loc(f["adr"], " dw-row__loc") }}
 {% if f["rationale"] %}<span class="dw-row__why">{{ f["rationale"] }}</span>{% endif %}
 {% if f["not_judged_reason"] %}<span class="dw-row__why">Not judged: {{ f["not_judged_reason"] }}</span>{% endif %}
 {% if f["evidence"] %}<span class="dw-row__why">{{ f["evidence"]|length }} evidence item{{ "" if f["evidence"]|length == 1 else "s" }}: {% for e in f["evidence"] %}<code class="dw-loc" dir="ltr">{{ e["label"] }}</code>{{ ", " if not loop.last }}{% endfor %}</span>{% endif %}
@@ -115,7 +122,8 @@
 <li><a href="#holding">{{ badge("HOLDING", v.holding|length) }}</a></li>
 <li><a href="#unknown">{{ badge("UNKNOWN", v.unknown|length) }}</a></li>
 </ul>
-<p class="dw-scope">{{ v.summary.decisions_judged }} of {{ v.summary.decisions }} decisions judged · {{ v.summary.claims_judged }} of {{ v.summary.claims }} claims judged · {{ v.gs.verified }} of {{ v.gs.total }} verifier checks passed</p>
+<p class="dw-scope">{{ v.summary.decisions_judged }} of {{ v.summary.decisions }} decisions judged · {{ v.summary.claims_judged }} of {{ v.summary.claims }} claims judged · {{ v.gs.verified }} of {{ v.gs.total }} verifier checks passed{% if v.demoted %} · {{ v.demoted }} item{{ "" if v.demoted == 1 else "s" }} moved to Could not verify by the report-time evidence re-check{% endif %}</p>
+{% if v.pr_mode %}<p class="dw-scope">PR mode{% if v.meta.changed_paths is not none %}: {{ v.meta.changed_paths }} changed path{{ "" if v.meta.changed_paths == 1 else "s" }}{% endif %} · {{ v.in_change_count }} of {{ v.violated|length + v.drifting|length }} violated or drifting findings are in this change; they are listed first.</p>{% endif %}
 </div>
 </nav>
 
@@ -150,7 +158,7 @@
 {% for u in v.cnv %}
 <article class="dw-card dw-card--unverified dw-filterable" aria-labelledby="{{ u["uid"] }}-t">
 <header class="dw-card__head">
-{{ badge("UNVERIFIED") }}
+{{ badge("UNVERIFIED") }}{{ change(u["in_change"]) }}
 <h3 id="{{ u["uid"] }}-t" class="dw-card__title"><span class="dw-kind">{{ u["kind"] }}</span> <span class="dw-mono dw-id">{{ u["id"] }}</span>{% if u["decision_title"] %} {{ u["decision_title"] }}{% endif %}</h3>
 </header>
 <dl class="dw-kv">
@@ -158,6 +166,8 @@
 {% if u["decision_id"] and u["decision_id"] != u["id"] %}<dt>ADR</dt><dd><code class="dw-mono">{{ u["decision_id"] }}</code></dd>{% endif %}
 {% if u["claim_id"] %}<dt>Claim</dt><dd><code class="dw-mono">{{ u["claim_id"] }}</code></dd>{% endif %}
 {% if u["proposed_status"] %}<dt>Proposed</dt><dd>{{ LABELS.get(u["proposed_status"], u["proposed_status"]) }} (not shown as a finding: it did not pass grounding)</dd>{% endif %}
+{% if u["anchor"] %}<dt>ADR line</dt><dd>{{ adr_loc(u["anchor"]) }}</dd>{% endif %}
+{% if u["report_check"] %}<dt>Found by</dt><dd>the report-time evidence re-check: the saved report does not hold a matching VERIFIED verifier record</dd>{% endif %}
 {% if u["prov"] %}<dt>Cited</dt><dd><code class="dw-loc" dir="ltr">{{ u["prov"]["label"] }}</code>{% if u["prov"]["quote"] %}<pre class="dw-snippet" dir="ltr"><code>{{ u["prov"]["quote"] }}</code></pre>{% endif %}</dd>{% endif %}
 </dl>
 <h4 class="dw-sub">Reason{{ "" if u["reasons"]|length == 1 else "s" }}</h4>

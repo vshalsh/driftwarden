@@ -32,7 +32,7 @@ from driftwarden.report import (
     render_json,
     renderer_available,
 )
-from driftwarden.report.markdown import NO_LINKS, render_markdown
+from driftwarden.report.markdown import NO_LINKS
 from driftwarden.report.model import REPORT_SCHEMA_VERSION, Report, rule_text
 from driftwarden.report.view import regate
 
@@ -109,8 +109,8 @@ def _write_reports(
     for f in fmts:
         target = out_dir / f"driftwarden.{EXTENSIONS[f]}"
         try:
-            if f == "md":
-                text = render_markdown(report, link_base=_link_base(repo_root, out_dir))
+            if f in ("md", "html"):  # both link ADR lines relative to the output dir
+                text = RENDERERS[f](report, link_base=_link_base(repo_root, out_dir))
             else:
                 text = RENDERERS[f](report)
         except RendererUnavailable as exc:

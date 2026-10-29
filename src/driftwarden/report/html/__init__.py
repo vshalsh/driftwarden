@@ -1,23 +1,27 @@
 """Self-contained HTML report (L-013).
 
-``render_html(report)`` turns a :class:`~driftwarden.report.model.Report` into one
-HTML file that works fully offline: the design tokens (``tokens.css``, a vendored
-copy of ``design/tokens.css`` that a test keeps byte-identical), the component
-styles and a small vanilla script are inlined; there are no external requests,
-fonts or frameworks. The page is complete with JavaScript disabled; the script
-only adds search, the theme toggle, expand/collapse-all and copy buttons.
+``render_html(report, link_base=...)`` turns a :class:`~driftwarden.report.model.Report`
+into one HTML file that works fully offline: the design tokens (``tokens.css``, a
+vendored copy of ``design/tokens.css`` that a test keeps byte-identical), the component
+styles and a small vanilla script are inlined; there are no external requests, fonts or
+frameworks. The page is complete with JavaScript disabled; the script only adds search,
+the theme toggle, expand/collapse-all and copy buttons.
 
-Security: every string in a Report comes from a scanned repository and is
-untrusted. The template is rendered with Jinja2 autoescape on, nothing from the
-report is marked safe, no data ever reaches an ``href``/``src`` or an event
-handler (the page has none), and Unicode bidi controls are made visible (so an
-RTL override cannot disguise a path). A CSP meta tag forbids every fetch.
+Grounding (README "Grounding & traceability"): the page renders the shared verified view
+(:func:`driftwarden.report.view.build_view`, L-012), exactly like the Markdown and SARIF
+reporters. A finding is shown under its status only when every evidence item carries its
+own VERIFIED G2 (and G3) record at the judged commit; anything else, and everything in
+``Report.could_not_verify``, is shown under *Could not verify* with its reasons, in violet
+with its own icon, never as a violation. That section is always rendered, with an
+explicit empty state.
 
-Grounding (README "Grounding & traceability"): VIOLATED / DRIFTING / HOLDING are
-shown only from ``Report.verdicts()``, i.e. VERIFIED verdicts; everything in
-``Report.could_not_verify`` is shown under *Could not verify* with its reasons,
-in violet with its own icon, and never as a violation. That section is always
-rendered, with an explicit empty state.
+Security: every string in a Report comes from a scanned repository and is untrusted. The
+template is rendered with Jinja2 autoescape on and nothing from the report is marked
+safe. The page has no event handlers. The only ``href`` built from data is an ADR link:
+the ADR path must be canonical (``view.canonical_path``), it is percent-encoded, and the
+prefix is the ``link_base`` validated by the Markdown reporter's rule, so it can never
+carry a scheme. Unicode bidi and control characters are made visible (an RTL override
+cannot disguise a path). A CSP meta tag forbids every fetch.
 """
 
 from __future__ import annotations
@@ -27,15 +31,25 @@ from collections import Counter
 from functools import lru_cache
 from importlib import resources
 from typing import Any
+from urllib.parse import quote
 
 from jinja2 import Environment, StrictUndefined
 from markupsafe import Markup
 
-from driftwarden.models import WORKTREE, DependencyRef, Evidence, Provenance, Verdict
+from driftwarden.models import DependencyRef, Evidence, Provenance, Verdict
+from driftwarden.report.markdown import NO_LINKS, _anchor, _link_prefix
 from driftwarden.report.model import CHECK_IDS, Report, rule_text
+from driftwarden.report.view import (
+    Finding,
+    Undocumented,
+    Unverified,
+    build_view,
+    canonical_path,
+    full_sha,
+    short_sha,
+)
 
 PROJECT_URL = "https://github.com/vshalsh/driftwarden"
-SHORT_SHA = 12
 
 CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:"
 
@@ -87,38 +101,38 @@ def _finalize(value: Any) -> Any:
     return value
 
 
-def short(sha: str | None) -> str:
-    if not sha:
-        return "unknown"
-    if sha == WORKTREE:
-        return WORKTREE
-    return sha[:SHORT_SHA]
+def _lines(a: int, b: int) -> str:
+    return f"L{a}" if a == b else f"L{a}-L{b}"
 
 
 def range_label(p: Provenance) -> str:
     """``path:Lstart-Lend@sha``, the ADR link label."""
-    return f"{p.path}:L{p.line_start}-L{p.line_end}@{short(p.commit)}"
+    return f"{p.path}:L{p.line_start}-L{p.line_end}@{short_sha(p.commit)}"
 
 
 def loc_label(p: Provenance) -> str:
     """``file:line@sha`` (``file:Lstart-Lend@sha`` for a range)."""
-    lines = f"L{p.line_start}" if p.line_start == p.line_end else f"L{p.line_start}-L{p.line_end}"
-    return f"{p.path}:{lines}@{short(p.commit)}"
+    return f"{p.path}:{_lines(p.line_start, p.line_end)}@{short_sha(p.commit)}"
 
 
 def dep_label(d: DependencyRef) -> str:
     line = f":L{d.line}" if d.line is not None else ""
-    return f"{d.manifest_path}{line}@{short(d.commit)}"
+    return f"{d.manifest_path}{line}@{short_sha(d.commit)}"
 
 
-def _prov_view(p: Provenance | DependencyRef | dict | None) -> dict | None:
+def adr_href(p: Provenance, link_base: str | None) -> str | None:
+    """Link target for an ADR line, by the same rule as the Markdown report; None = text."""
+    if link_base == NO_LINKS or not canonical_path(p.path):
+        return None
+    base = _link_prefix(link_base)
+    if base is None:
+        return None
+    return f"{base}{quote(p.path, safe='/-._~')}{_anchor(p.line_start, p.line_end)}"
+
+
+def _prov_view(p: Provenance | DependencyRef | None) -> dict | None:
     if p is None:
         return None
-    if isinstance(p, dict):  # tolerate a raw ledger row
-        try:
-            p = Provenance(**p) if "path" in p else DependencyRef(**p)
-        except Exception:
-            return {"label": str(p), "quote": None}
     if isinstance(p, Provenance):
         return {"label": loc_label(p), "quote": p.quote}
     spec = f" {p.version_spec}" if p.version_spec else ""
@@ -139,7 +153,6 @@ def _evidence_view(e: Evidence) -> dict:
         "snippet": e.ref.quote,
         "tags": tags,
         "detail": e.detail,
-        "dependency": dep_label(e.dependency) if e.dependency else None,
     }
 
 
@@ -170,16 +183,25 @@ def _consistency_label(v: Verdict) -> str | None:
     return f"G6 {agree}/{c.executed} agree"
 
 
+def _in_change_first(items: list) -> list:
+    """PR mode: in-change items first (stable), as the Markdown report orders them."""
+    return sorted(items, key=lambda x: 0 if x.in_change else 1)
+
+
 class _View:
-    def __init__(self, report: Report) -> None:
+    def __init__(self, report: Report, link_base: str | None) -> None:
         self.r = report
-        self.decisions = {d.id: d for d in report.decisions}
+        self.view = build_view(report)
+        self.link_base = link_base
         self.timeline = {t.claim_id: t for t in report.timeline}
         self.counter = 0
 
     def uid(self, prefix: str) -> str:
         self.counter += 1
         return f"{prefix}-{self.counter}"
+
+    def adr(self, p: Provenance) -> dict:
+        return {"label": range_label(p), "href": adr_href(p, self.link_base)}
 
     def since(self, claim_id: str) -> dict | None:
         t = self.timeline.get(claim_id)
@@ -188,60 +210,77 @@ class _View:
         if t.grounding == "VERIFIED" and t.first_violating_commit:
             return {
                 "known": True,
-                "commit": short(t.first_violating_commit),
-                "full": t.first_violating_commit,
+                "commit": short_sha(t.first_violating_commit),
+                "full": full_sha(t.first_violating_commit),
                 "date": t.date,
                 "subject": t.subject,
             }
         return {"known": False}
 
-    def claim(self, cr) -> dict:
-        c = cr.claim
-        dec = self.decisions.get(c.decision_id)
-        v = cr.verdict
+    def finding(self, f: Finding) -> dict:
+        c, v, dec = f.claim, f.verdict, f.decision
         g1 = [("G1", 1, 1)] if dec is None or dec.g1.status == "VERIFIED" else [("G1", 0, 1)]
         return {
             "uid": self.uid("f"),
             "id": c.id,
-            "status": cr.status or "NOT_JUDGED",
+            "status": v.status,
             "decision_id": c.decision_id,
             "decision_title": dec.title if dec else "",
-            "adr_label": range_label(c.source),
+            "adr": self.adr(c.source),
             "quote": c.source.quote,
             "rule": rule_text(c),
-            "origin": c.origin,
-            "rationale": v.rationale if v else "",
-            "notes": list(v.notes) if v else [],
-            "evidence": [_evidence_view(e) for e in v.evidence] if v else [],
+            "rationale": v.rationale,
+            "notes": list(v.notes),
+            "evidence": [_evidence_view(e) for e in f.evidence],
             "since": self.since(c.id),
-            "grounding": _grounding_view(v.checks if v else [], g1),
-            "consistency": _consistency_label(v) if v else None,
-            "verdict_origin": v.origin if v else None,
-            "not_judged_reason": cr.not_judged_reason,
+            "grounding": _grounding_view(v.checks, g1),
+            "consistency": _consistency_label(v),
+            "in_change": f.in_change,
+            "not_judged_reason": None,
         }
 
-    def unverified(self, item) -> dict:
-        prov = _prov_view(item.provenance)
-        dec = self.decisions.get(item.decision_id or "")
+    def not_judged(self, cr) -> dict:
+        c = cr.claim
+        dec = self.view.decisions.get(c.decision_id)
+        return {
+            "uid": self.uid("n"),
+            "id": c.id,
+            "status": "NOT_JUDGED",
+            "decision_id": c.decision_id,
+            "decision_title": dec.title if dec else "",
+            "adr": self.adr(c.source),
+            "rule": rule_text(c),
+            "rationale": "",
+            "evidence": [],
+            "in_change": cr.in_change,
+            "not_judged_reason": cr.not_judged_reason or "not judged",
+        }
+
+    def unverified(self, u: Unverified) -> dict:
+        dec = self.view.decisions.get(u.decision_id or "")
         return {
             "uid": self.uid("u"),
-            "kind": KIND_LABELS.get(item.kind, item.kind),
-            "id": item.id,
-            "check_id": item.check_id,
-            "reasons": list(item.reasons),
-            "decision_id": item.decision_id,
+            "kind": KIND_LABELS.get(u.kind, u.kind),
+            "id": u.id,
+            "check_id": u.check_id,
+            "reasons": list(u.reasons),
+            "decision_id": u.decision_id,
             "decision_title": dec.title if dec else None,
-            "claim_id": item.claim_id if item.claim_id != item.id else None,
-            "prov": prov,
-            "proposed_status": item.proposed_status,
+            "claim_id": u.claim_id if u.claim_id != u.id else None,
+            "anchor": self.adr(u.anchor) if u.anchor is not None else None,
+            "prov": _prov_view(u.provenance),
+            "proposed_status": u.proposed_status,
+            "report_check": u.report_check,
+            "in_change": u.in_change,
         }
 
-    def undocumented(self, rec, draft) -> dict:
-        intro = {}
+    def undocumented(self, u: Undocumented) -> dict:
+        rec, draft = u.record, u.draft
+        intro: dict[str, list[str]] = {}
         for i in rec.introductions:
             intro.setdefault(i.commit, []).append(loc_label(i.ref))
         commits = [
-            {"short": short(sha), "full": sha, "refs": intro.get(sha, [])}
+            {"short": short_sha(sha), "full": full_sha(sha), "refs": intro.get(sha, [])}
             for sha in rec.introducing_commits
         ]
         d = None
@@ -250,7 +289,6 @@ class _View:
                 "uid": self.uid("draft"),
                 "markdown": draft.markdown or "",
                 "path": draft.path,
-                "number": draft.number,
                 "origin": draft.origin,
                 "grounding": _grounding_view(draft.checks),
             }
@@ -260,8 +298,8 @@ class _View:
             "title": rec.title or f"{rec.technology} ({rec.category})",
             "technology": rec.technology,
             "category": rec.category,
-            "commit": short(rec.commit),
-            "evidence": [_evidence_view(e) for e in rec.evidence],
+            "commit": short_sha(rec.commit),
+            "evidence": [_evidence_view(e) for e in u.evidence],
             "commits": commits,
             "searched_terms": list(rec.searched_terms),
             "grounding": _grounding_view(rec.checks),
@@ -269,23 +307,22 @@ class _View:
         }
 
     def build(self) -> dict:
-        r = self.r
+        r, view = self.r, self.view
         m = r.metadata
-        violated = [self.claim(c) for c in r.verdicts("VIOLATED")]
-        drifting = [self.claim(c) for c in r.verdicts("DRIFTING")]
-        holding = [self.claim(c) for c in r.verdicts("HOLDING")]
-        unknown = [self.claim(c) for c in r.verdicts("UNKNOWN")]
-        cnv = [self.unverified(i) for i in r.could_not_verify]
-        drafts = {d.record_id: d for d in r.drafts}
-        undocumented = [self.undocumented(u, drafts.get(u.id)) for u in r.undocumented]
-        not_judged = [self.claim(c) for c in r.claims if not c.judged]
+        violated = [self.finding(f) for f in _in_change_first(view.violated)]
+        drifting = [self.finding(f) for f in _in_change_first(view.drifting)]
+        holding = [self.finding(f) for f in _in_change_first(view.holding)]
+        unknown = [self.finding(f) for f in _in_change_first(view.unknown)]
+        cnv = [self.unverified(u) for u in _in_change_first(view.could_not_verify)]
+        undocumented = [self.undocumented(u) for u in view.undocumented]
+        not_judged = [self.not_judged(c) for c in view.not_judged]
         decisions_not_judged = [
             {"id": d.id, "title": d.title, "status": d.status, "reason": d.not_judged_reason}
             for d in r.decisions
             if not d.judged
         ]
         decided = len(violated) + len(drifting) + len(holding)
-        score = r.summary.drift_score
+        not_holding = len(violated) + len(drifting)
         gs = r.grounding_summary
         checks = []
         for cid in sorted(set(CHECK_IDS) | set(gs.by_check), key=lambda x: (x not in CHECK_IDS, x)):
@@ -303,20 +340,24 @@ class _View:
         timeline = [
             {
                 "claim_id": t.claim_id,
-                "commit": short(t.first_violating_commit) if t.first_violating_commit else None,
-                "full": t.first_violating_commit,
-                "parent": short(t.parent) if t.parent else None,
+                "commit": short_sha(t.first_violating_commit),
+                "full": full_sha(t.first_violating_commit),
+                "parent": short_sha(t.parent) if t.parent else None,
                 "date": t.date,
                 "subject": t.subject,
                 "verified": t.grounding == "VERIFIED" and bool(t.first_violating_commit),
             }
             for t in r.timeline
         ]
+        # The score is computed from the facts on this page (the verified view), so it
+        # always agrees with the counts beside it; on a fresh scan it equals
+        # summary.drift_score.
+        score = not_holding / decided if decided else None
         return {
             "meta": {
                 "repo": m.repo,
-                "commit": short(m.commit),
-                "commit_full": m.commit,
+                "commit": short_sha(m.commit),
+                "commit_full": full_sha(m.commit),
                 "scanned_at": m.scanned_at,
                 "mode": m.mode,
                 "requested_mode": m.requested_mode,
@@ -327,11 +368,14 @@ class _View:
                 "changed_paths": len(m.changed_paths) if m.changed_paths is not None else None,
                 "exit_code": r.summary.exit_code,
             },
+            "pr_mode": view.pr_mode,
+            "in_change_count": sum(1 for f in violated + drifting if f["in_change"]),
             "score": None if score is None else f"{score * 100:.0f}%",
             "score_definition": DRIFT_SCORE_DEFINITION,
             "decided": decided,
-            "not_holding": len(violated) + len(drifting),
+            "not_holding": not_holding,
             "summary": r.summary,
+            "demoted": view.demoted,
             "violated": violated,
             "drifting": drifting,
             "holding": holding,
@@ -385,14 +429,20 @@ def _assets() -> dict[str, str]:
     }
 
 
-def render_html(report: Report) -> str:
-    """Render ``report`` as one self-contained, offline HTML document."""
+def render_html(report: Report, *, link_base: str | None = None) -> str:
+    """Render ``report`` as one self-contained, offline HTML document.
+
+    ``link_base`` follows ``render_markdown``: None gives repo-relative ADR links, a
+    relative POSIX path (what the CLI passes: from the output directory to the repo root)
+    or an ``https://`` blob URL prefixes them, and ``NO_LINKS`` (``""``) or anything else
+    gives plain-text locations.
+    """
     assets = _assets()
     template = _env().from_string(assets["template"])
     # The four assets are our own package files, not report data; they are passed
     # through dedicated variables and inserted raw inside <style>/<script>.
     return template.render(
-        v=_View(report).build(),
+        v=_View(report, link_base).build(),
         tokens_css=Markup(assets["tokens_css"]),
         report_css=Markup(assets["report_css"]),
         head_js=Markup(assets["head_js"]),
@@ -400,4 +450,4 @@ def render_html(report: Report) -> str:
     )
 
 
-__all__ = ["CSP", "PROJECT_URL", "render_html"]
+__all__ = ["CSP", "PROJECT_URL", "adr_href", "render_html"]

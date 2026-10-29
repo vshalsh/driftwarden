@@ -199,3 +199,17 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
   .dw-card, .dw-row, tr { break-inside: avoid; }
   .dw-summary { background: var(--dw-bg); }
 }
+
+/* ---- PR mode & ADR links (merge with L-012) --------------------------- */
+/* "In this change": rust accent = human attention (DESIGN_TOKENS §4.2), outlined so it is
+ * never read as a status. Accent text on canvas: 6.05:1 light, 7.26:1 dark. */
+.dw-change {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 var(--dw-space-2);
+  border: var(--dw-border-width) solid var(--dw-accent); border-radius: 999px;
+  color: var(--dw-accent); background: var(--dw-bg);
+  font-size: var(--dw-text-xs); font-weight: var(--dw-weight-medium); white-space: nowrap;
+}
+.dw-change--before { border-color: var(--dw-border); color: var(--dw-fg-muted); font-weight: var(--dw-weight-regular); }
+.dw-adr-link { text-decoration: none; }
+.dw-adr-link:hover .dw-loc { text-decoration: underline; }
+.dw-adr-link .dw-loc { color: var(--dw-link); }

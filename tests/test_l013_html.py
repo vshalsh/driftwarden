@@ -209,6 +209,7 @@ def full_report(text="import pymongo", title="PostgreSQL is the only datastore")
         claim_id="ADR-0001.c5",
         status="VIOLATED",
         evidence=[evidence(1)],
+        checks=[ok("G2", "ADR-0001.c5/e1", evidence(1).ref)],
         commit=SHA,
         origin="llm",
         consistency=Consistency(
@@ -316,7 +317,7 @@ def hostile_report() -> Report:
         rationale=H,
         notes=[H],
         commit=SHA,
-        checks=[ok("G2", H, ev.ref)],
+        checks=[ok("G2", f"{c.id}/e1", ev.ref)],
     )
     dec = decision("ADR-1", H, src)
     return Report(
@@ -438,7 +439,7 @@ def test_all_sections_render_in_order():
 def test_header_and_summary_strip():
     html = render_html(full_report())
     assert "<h1" in html and ">shop</h1>" in html
-    assert SHA[:12] in html and "2026-10-29T10:00:00Z" in html and "driftwarden 0.0.1" in html
+    assert SHA[:7] in html and "2026-10-29T10:00:00Z" in html and "driftwarden 0.0.1" in html
     assert "offline" in html
     assert re.search(r"<abbr title=\"[^\"]*holding \+ drifting \+ violated", html)
     assert "75%" in html
@@ -450,11 +451,11 @@ def test_violated_card_content():
     html = render_html(full_report())
     v = section(html, "violated")
     assert "ADR-0001" in v and "PostgreSQL is the only datastore" in v
-    assert f"docs/adr/0001-pg.md:L13-L13@{SHA[:12]}" in v
+    assert f"docs/adr/0001-pg.md:L13-L13@{SHA[:7]}" in v
     assert "only(datastore) = [PostgreSQL]" in v
-    assert f"src/mod0.py:L3@{SHA[:12]}" in v
+    assert f"src/mod0.py:L3@{SHA[:7]}" in v
     assert '<pre class="dw-snippet" dir="ltr"><code>import pymongo</code></pre>' in v
-    since = f'first violated at commit <code class="dw-mono" title="{SHA2}">{SHA2[:12]}</code>'
+    since = f'first violated at commit <code class="dw-mono" title="{SHA2}">{SHA2[:7]}</code>'
     assert since in v
     assert "add mongo cache" in v
     assert "Verified" in v and "G1&nbsp;1/1" in v and "G2&nbsp;2/2" in v
@@ -480,14 +481,16 @@ def test_unverified_is_violet_and_never_a_violation():
 
 
 def test_could_not_verify_always_visible_with_empty_state():
-    r = full_report().model_copy(update={"could_not_verify": []})
+    r = full_report()
+    claims = [c for c in r.claims if c.id != "ADR-0002.c1"]  # the MISMATCH verdict
+    r = r.model_copy(update={"could_not_verify": [], "claims": claims})
     c = section(render_html(r), "could-not-verify")
     assert "Nothing here" in c and "<details" not in c
 
 
 def test_undocumented_with_draft_and_copy_button():
     u = section(render_html(full_report()), "undocumented")
-    assert "UD-queue-kafka" in u and SHA2[:12] in u and f'title="{SHA2}"' in u
+    assert "UD-queue-kafka" in u and SHA2[:7] in u and f'title="{SHA2}"' in u
     assert '<details class="dw-draft">' in u and "docs/adr/0008-use-kafka.md" in u
     m = re.search(r'data-dw-copy="(draft-\d+)" hidden', u)
     assert m and f'id="{m.group(1)}"' in u
@@ -530,7 +533,7 @@ def test_empty_report():
     html = render_html(Report(metadata=metadata(commit="WORKTREE")))
     assert "n/a" in html and "No claim was decided" in html
     assert "Nothing here" in html and "No ADR constraint is violated" in html
-    assert "WORKTREE" in html
+    assert "worktree" in html
     assert '<section id="timeline"' not in html and '<section id="not-judged"' not in html
 
 
@@ -622,8 +625,12 @@ def test_injection_is_inert():
     for _tag, attrs in doc.tags:
         for name, value in attrs.items():
             assert not name.startswith("on"), name
-            if name == "href":
-                assert value.startswith("#") or value == PROJECT_URL, value
+            if name == "href":  # in-page, the project, or a percent-encoded ADR path
+                assert (
+                    value.startswith("#")
+                    or value == PROJECT_URL
+                    or re.fullmatch(r"[A-Za-z0-9._~/%-]+#L\d+(-L\d+)?", value)
+                ), value
             assert name != "src"
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert "<script>alert" not in html and "<img" not in html
@@ -848,3 +855,222 @@ def test_browser_theme_toggle_filter_and_expand(browser, report_file):
         assert errors == []
     finally:
         ctx.close()
+
+
+# ------------------------------------------------------------------ L-012 integration
+
+
+def test_adr_links_follow_link_base():
+    r = full_report()
+    rel = section(render_html(r, link_base=".."), "violated")
+    assert '<a class="dw-adr-link" href="../docs/adr/0001-pg.md#L13">' in rel
+    default = section(render_html(r), "violated")
+    assert 'href="docs/adr/0001-pg.md#L13"' in default
+    blob = f"https://github.com/o/r/blob/{SHA}"
+    assert f'href="{blob}/docs/adr/0001-pg.md#L13"' in render_html(r, link_base=blob)
+    for bad in ("", "javascript:alert(1)", "../a b", "file:///etc"):
+        assert 'class="dw-adr-link"' not in render_html(r, link_base=bad), bad
+
+
+def test_non_canonical_adr_path_is_never_a_link():
+    src = prov("../../etc/passwd", 1, "x")
+    r = full_report()
+    cr = r.claims[0]
+    bad = cr.model_copy(update={"claim": cr.claim.model_copy(update={"source": src})})
+    html = render_html(r.model_copy(update={"claims": [bad, *r.claims[1:]]}), link_base="..")
+    assert 'href="../../../etc' not in html and "../../etc/passwd:L1-L1" in html
+
+
+def test_invalid_commits_display_as_invalid():
+    r = full_report()
+    meta = r.metadata.model_copy(update={"commit": "HEAD; rm -rf"})
+    tl = [r.timeline[0].model_copy(update={"first_violating_commit": "not-a-sha"})]
+    html = render_html(r.model_copy(update={"metadata": meta, "timeline": tl}))
+    head = html[html.index("<header") : html.index("</header>")]
+    assert ">invalid</code>" in head and "rm -rf" not in head
+    assert "not-a-sha" not in html
+
+
+def test_pr_mode_in_change_badge_and_order():
+    r = full_report()
+    meta = r.metadata.model_copy(update={"changed_paths": ["src/mod0.py"]})
+    claims = [
+        c.model_copy(update={"in_change": c.id == "ADR-0001.c5"}) if c.judged else c
+        for c in r.claims
+    ]
+    html = render_html(r.model_copy(update={"metadata": meta, "claims": claims}))
+    v = section(html, "violated")
+    assert v.index("ADR-0001.c5") < v.index("ADR-0001.c1")  # in-change first
+    assert v.count(">In this change<") == 1 and "Present before this change" in v
+    assert "PR mode: 1 changed path" in html and "1 of 3 violated or drifting" in html
+    assert ">In this change<" not in render_html(full_report())
+
+
+def test_notes_are_shown():
+    html = render_html(full_report())
+    assert "skipped ADR docs/adr/empty.md: empty file" in section(html, "notes")
+
+
+def test_unverified_evidence_moves_to_could_not_verify():
+    """build_view, not Report.verdicts(): a VIOLATED verdict whose evidence has no
+    VERIFIED G2 record of its own is not a fact."""
+    r = full_report()
+    cr = r.claims[0]
+    v = cr.verdict.model_copy(update={"checks": []})
+    html = render_html(r.model_copy(update={"claims": [cr.model_copy(update={"verdict": v})]}))
+    assert "ADR-0001.c1" not in section(html, "violated")
+    c = section(html, "could-not-verify")
+    assert "ADR-0001.c1" in c and "report-time evidence re-check" in c
+    assert "src/mod0.py" not in section(html, "violated")
+
+
+def _tamper_cases():
+    import test_l012_system as s12
+
+    def flip_drifting(d):
+        v = s12.claim_of(d, "ADR-0003.c1")["verdict"]
+        v.update(status="DRIFTING", grounding="VERIFIED", reasons=[], proposed_status=None)
+
+    def flip_no_record(d):
+        v = s12.claim_of(d, "ADR-0003.c1")["verdict"]
+        v.update(status="VIOLATED", grounding="VERIFIED", reasons=[], proposed_status=None)
+        v["checks"] = []
+        d["could_not_verify"] = [i for i in d["could_not_verify"] if i["claim_id"] != "ADR-0003.c1"]
+
+    def edit(field, value):
+        def f(d):
+            s12.violated(d, "ADR-0002.c1")["verdict"]["evidence"][0]["ref"][field] = value
+
+        return f
+
+    def consistent_unsafe(d):
+        c = s12.violated(d, "ADR-0002.c1")
+        for ref in (c["verdict"]["evidence"][0]["ref"], c["verdict"]["checks"][0]["provenance"]):
+            ref["path"] = "../../etc/shadow"
+            ref["line_start"] = 0
+
+    def delete_g3(d):
+        c = s12.violated(d, "ADR-0001.c1")
+        c["verdict"]["checks"] = [x for x in c["verdict"]["checks"] if x["check_id"] != "G3"]
+
+    def dep_edit(d):
+        s12.violated(d, "ADR-0001.c1")["verdict"]["evidence"][0]["dependency"]["package"] = "x"
+
+    def extra_item(d):
+        c = s12.violated(d, "ADR-0005.c1")
+        extra = s12.copy.deepcopy(c["verdict"]["evidence"][1])
+        extra["id"] = "e9"
+        extra["ref"]["path"] = "src/planted.py"
+        c["verdict"]["evidence"].append(extra)
+
+    def row_mismatch(d):
+        s12.violated(d, "ADR-0005.c1")["verdict"]["checks"][0]["status"] = "MISMATCH"
+
+    def fake_claim(d):
+        fake = s12.clone_claim(s12.claim_of(d, "ADR-0002.c1"), "ADR-0099.c1")
+        fake["claim"]["decision_id"] = "ADR-0099"
+        fake["verdict"]["checks"] = []
+        fake["verdict"]["evidence"][0]["ref"]["path"] = "src/fake_violation.py"
+        d["claims"].append(fake)
+
+    return [
+        ("flip_to_drifting", flip_drifting, "ADR-0003.c1", ["tests/db_check.py"]),
+        ("flip_no_record", flip_no_record, "ADR-0003.c1", ["tests/db_check.py"]),
+        ("s12_flip_mismatch", s12._flip_mismatch, "ADR-0003.c1", []),
+        ("s12_delete_g2", s12._delete_g2, "ADR-0002.c1", ["src/shop/reports.py"]),
+        ("s12_edit_path", s12._edit_path, "ADR-0002.c1", ["src/shop/other.py"]),
+        ("s12_fake_claim", s12._fake_claim, "ADR-0002.c9", []),
+        ("path_traversal", edit("path", "../../etc/passwd"), "ADR-0002.c1", ["../../etc/passwd"]),
+        ("line_zero", edit("line_start", 0), "ADR-0002.c1", []),
+        ("other_commit", edit("commit", "0" * 40), "ADR-0002.c1", []),
+        ("quote_edit", edit("quote", "totally different text"), "ADR-0002.c1", []),
+        ("consistent_unsafe", consistent_unsafe, "ADR-0002.c1", ["../../etc/shadow"]),
+        ("delete_g3", delete_g3, "ADR-0001.c1", []),
+        ("dependency_edit", dep_edit, "ADR-0001.c1", []),
+        ("extra_item", extra_item, "ADR-0005.c1", ["src/planted.py"]),
+        ("row_mismatch", row_mismatch, "ADR-0005.c1", []),
+        ("fake_claim", fake_claim, "ADR-0099.c1", ["src/fake_violation.py"]),
+    ]
+
+
+FACT_SECTIONS = ("violated", "drifting", "holding", "unknown")
+MD_NAMES = {"violated": "Violated", "drifting": "Drifting"}
+
+
+def _html_bucket(html: str, claim_id: str) -> set[str]:
+    """Sections whose cards/rows name ``claim_id`` as a code span."""
+    needle = re.compile(r'class="dw-mono[^"]*">' + re.escape(claim_id) + "</")
+    return {
+        sid for sid in (*FACT_SECTIONS, "could-not-verify") if needle.search(section(html, sid))
+    }
+
+
+@pytest.mark.parametrize("case", _tamper_cases(), ids=lambda c: c[0])
+@pytest.mark.parametrize("gated", [False, True], ids=["raw", "regate"])
+def test_tampered_reports_match_markdown(case, gated):
+    """Sonnet's L-012 tamper builders: HTML puts them in Could not verify, as Markdown."""
+    import test_l012_system as s12
+    from driftwarden.report.markdown import render_markdown
+    from driftwarden.report.view import regate
+
+    _name, tamper, cid, forbidden = case
+    d = s12.fx()
+    tamper(d)
+    r = s12.rep(d)
+    if gated:
+        r = regate(r)
+    html = render_html(r)
+    md = s12.md_sections(render_markdown(r))
+    assert _html_bucket(html, cid) == {"could-not-verify"}, _html_bucket(html, cid)
+    assert cid in md["Could not verify"].replace("\\", "")
+    for sid in FACT_SECTIONS:
+        for p in forbidden:
+            assert p not in section(html, sid), (p, sid)
+    # every judged claim is a fact in the same section in both formats
+    for c in r.claims:
+        for sid, name in MD_NAMES.items():
+            in_md = f"**{c.id}**" in md.get(name, "")
+            assert in_md == (sid in _html_bucket(html, c.id)), (c.id, sid, in_md)
+
+
+def test_untouched_fixture_has_no_demotions():
+    import test_l012_system as s12
+
+    html = render_html(s12.rep(s12.fx()))
+    for cid in ("ADR-0001.c1", "ADR-0005.c1"):
+        assert _html_bucket(html, cid) == {"violated"}
+    assert "report-time evidence re-check" not in html
+
+
+def test_cli_scan_and_report_write_html(tmp_path):
+    from typer.testing import CliRunner
+
+    from driftwarden.cli import app
+
+    runner = CliRunner()
+    repo = tmp_path / "pyshop"
+    shutil.copytree(Path(__file__).parent / "fixtures" / "judge_repos" / "pyshop", repo)
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "commit.gpgsign", "false")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "fixture")
+    args = ["scan", str(repo), "--mode", "offline", "--format", "json,html,md,sarif"]
+    res = runner.invoke(app, args)
+    assert res.exit_code in (0, 1), res.output
+    out = repo / ".driftwarden"
+    html = (out / "driftwarden.html").read_text(encoding="utf-8")
+    md = (out / "driftwarden.md").read_text(encoding="utf-8")
+    link = "../docs/adr/0001-postgresql-only.md#L13"
+    assert f"]({link})" in md
+    assert f'href="{link}"' in html  # the same link_base as Markdown
+    assert "ADR-0001" in section(html, "violated")
+    saved = tmp_path / "saved.json"
+    saved.write_text((out / "driftwarden.json").read_text(encoding="utf-8"), encoding="utf-8")
+    out2 = tmp_path / "out2"
+    res = runner.invoke(app, ["report", str(saved), "--format", "html,md", "--out", str(out2)])
+    assert res.exit_code == 0, res.output
+    again = (out2 / "driftwarden.html").read_text(encoding="utf-8")
+    md2 = (out2 / "driftwarden.md").read_text(encoding="utf-8")
+    assert "ADR-0001" in section(again, "violated")
+    # no --repo and the output dir is not in the repo: both formats agree on links
+    assert ('class="dw-adr-link"' in again) == ("](" in md2 and "#L13)" in md2)
