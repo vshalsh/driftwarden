@@ -1,0 +1,239 @@
+/*
+ * DriftWarden design tokens
+ * Source of truth: ../DESIGN_TOKENS.md (research, rationale, WCAG AA ratios).
+ * All text/background pairs listed there pass 4.5:1 in both themes.
+ *
+ * Theme resolution:
+ *   1. :root                              light defaults
+ *   2. @media (prefers-color-scheme: dark) dark, unless [data-theme="light"] is set
+ *   3. [data-theme="dark"]                 explicit dark, overrides OS preference
+ *   4. [data-theme="light"]                explicit light (restates defaults)
+ */
+
+:root {
+  /* ---- Neutral base scale ------------------------------------------- */
+  --dw-neutral-0:   #FFFFFF;
+  --dw-neutral-50:  #F4F6F8;
+  --dw-neutral-100: #EAEEF2;
+  --dw-neutral-200: #D3DAE1;
+  --dw-neutral-300: #B0BAC5;
+  --dw-neutral-400: #8A95A1;
+  --dw-neutral-500: #67737F;
+  --dw-neutral-600: #5A6673;
+  --dw-neutral-700: #363F4A;
+  --dw-neutral-800: #171D24;
+  --dw-neutral-850: #161C23;
+  --dw-neutral-900: #0E1217;
+  --dw-neutral-950: #090C10;
+
+  /* ---- Surfaces & text (light) -------------------------------------- */
+  --dw-bg:        var(--dw-neutral-0);
+  --dw-bg-muted:  var(--dw-neutral-50);
+  --dw-bg-inset:  var(--dw-neutral-100);
+  --dw-border:    var(--dw-neutral-200);
+  --dw-fg:        var(--dw-neutral-800);
+  --dw-fg-muted:  var(--dw-neutral-600);
+  --dw-fg-subtle: var(--dw-neutral-500);
+  --dw-code-bg:   var(--dw-neutral-50);
+
+  /* ---- Brand (light) ------------------------------------------------ */
+  --dw-primary:       #0B6E6A;
+  --dw-primary-hover: #085955;
+  --dw-on-primary:    #FFFFFF;
+  --dw-accent:        #A4461A;
+  --dw-on-accent:     #FFFFFF;
+  --dw-accent-2:      #3451C6;
+  --dw-link:          var(--dw-primary);
+  --dw-focus:         var(--dw-primary);
+
+  /* ---- Status (light) ----------------------------------------------- */
+  --dw-status-holding-fg:      #1A7A3C;
+  --dw-status-holding-bg:      #E3F5E8;
+  --dw-status-drifting-fg:     #8A5A00;
+  --dw-status-drifting-bg:     #FCF1D8;
+  --dw-status-violated-fg:     #C0202B;
+  --dw-status-violated-bg:     #FCE6E7;
+  --dw-status-undocumented-fg: #2456C8;
+  --dw-status-undocumented-bg: #E4ECFB;
+  --dw-status-unverified-fg:   #6B40B8;
+  --dw-status-unverified-bg:   #EFE7FA;
+
+  /* ---- Typography --------------------------------------------------- */
+  --dw-font-ui:   "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                  "Helvetica Neue", Arial, sans-serif;
+  --dw-font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
+                  "Liberation Mono", monospace;
+  --dw-text-xs:   12px;
+  --dw-text-sm:   13px;
+  --dw-text-md:   14px;
+  --dw-text-lg:   18px;
+  --dw-text-xl:   24px;
+  --dw-leading:   1.5;
+  --dw-leading-tight: 1.4;
+  --dw-weight-regular: 400;
+  --dw-weight-medium:  500;
+  --dw-weight-semibold: 600;
+
+  /* ---- Spacing & shape --------------------------------------------- */
+  --dw-space-1: 4px;
+  --dw-space-2: 8px;
+  --dw-space-3: 12px;
+  --dw-space-4: 16px;
+  --dw-space-6: 24px;
+  --dw-space-8: 32px;
+  --dw-row-height: 32px;
+  --dw-radius-sm: 4px;
+  --dw-radius-md: 6px;
+  --dw-border-width: 1px;
+  --dw-focus-ring: 2px solid var(--dw-focus);
+  --dw-focus-offset: 2px;
+
+  color-scheme: light;
+  background: var(--dw-bg);
+  color: var(--dw-fg);
+}
+
+/* ---- Dark via OS preference (unless the page pins light) ----------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --dw-bg:        var(--dw-neutral-900);
+    --dw-bg-muted:  var(--dw-neutral-850);
+    --dw-bg-inset:  var(--dw-neutral-950);
+    --dw-border:    var(--dw-neutral-700);
+    --dw-fg:        #E8EDF2;
+    --dw-fg-muted:  #98A3AF;
+    --dw-fg-subtle: var(--dw-neutral-400);
+    --dw-code-bg:   var(--dw-neutral-850);
+
+    --dw-primary:       #3CC0B6;
+    --dw-primary-hover: #5FD1C8;
+    --dw-on-primary:    #06201E;
+    --dw-accent:        #E58A5B;
+    --dw-on-accent:     #2A1409;
+    --dw-accent-2:      #8FA6FF;
+    --dw-link:          var(--dw-primary);
+    --dw-focus:         var(--dw-primary);
+
+    --dw-status-holding-fg:      #4CC46A;
+    --dw-status-holding-bg:      #10301C;
+    --dw-status-drifting-fg:     #E0A531;
+    --dw-status-drifting-bg:     #33270C;
+    --dw-status-violated-fg:     #FF6B65;
+    --dw-status-violated-bg:     #3A1518;
+    --dw-status-undocumented-fg: #7FA3FF;
+    --dw-status-undocumented-bg: #13213F;
+    --dw-status-unverified-fg:   #B79CF5;
+    --dw-status-unverified-bg:   #271A42;
+
+    color-scheme: dark;
+  }
+}
+
+/* ---- Explicit dark ------------------------------------------------- */
+:root[data-theme="dark"] {
+  --dw-bg:        var(--dw-neutral-900);
+  --dw-bg-muted:  var(--dw-neutral-850);
+  --dw-bg-inset:  var(--dw-neutral-950);
+  --dw-border:    var(--dw-neutral-700);
+  --dw-fg:        #E8EDF2;
+  --dw-fg-muted:  #98A3AF;
+  --dw-fg-subtle: var(--dw-neutral-400);
+  --dw-code-bg:   var(--dw-neutral-850);
+
+  --dw-primary:       #3CC0B6;
+  --dw-primary-hover: #5FD1C8;
+  --dw-on-primary:    #06201E;
+  --dw-accent:        #E58A5B;
+  --dw-on-accent:     #2A1409;
+  --dw-accent-2:      #8FA6FF;
+  --dw-link:          var(--dw-primary);
+  --dw-focus:         var(--dw-primary);
+
+  --dw-status-holding-fg:      #4CC46A;
+  --dw-status-holding-bg:      #10301C;
+  --dw-status-drifting-fg:     #E0A531;
+  --dw-status-drifting-bg:     #33270C;
+  --dw-status-violated-fg:     #FF6B65;
+  --dw-status-violated-bg:     #3A1518;
+  --dw-status-undocumented-fg: #7FA3FF;
+  --dw-status-undocumented-bg: #13213F;
+  --dw-status-unverified-fg:   #B79CF5;
+  --dw-status-unverified-bg:   #271A42;
+
+  color-scheme: dark;
+}
+
+/* ---- Explicit light (restates defaults so it wins over OS dark) ----- */
+:root[data-theme="light"] {
+  --dw-bg:        var(--dw-neutral-0);
+  --dw-bg-muted:  var(--dw-neutral-50);
+  --dw-bg-inset:  var(--dw-neutral-100);
+  --dw-border:    var(--dw-neutral-200);
+  --dw-fg:        var(--dw-neutral-800);
+  --dw-fg-muted:  var(--dw-neutral-600);
+  --dw-fg-subtle: var(--dw-neutral-500);
+  --dw-code-bg:   var(--dw-neutral-50);
+
+  --dw-primary:       #0B6E6A;
+  --dw-primary-hover: #085955;
+  --dw-on-primary:    #FFFFFF;
+  --dw-accent:        #A4461A;
+  --dw-on-accent:     #FFFFFF;
+  --dw-accent-2:      #3451C6;
+  --dw-link:          var(--dw-primary);
+  --dw-focus:         var(--dw-primary);
+
+  --dw-status-holding-fg:      #1A7A3C;
+  --dw-status-holding-bg:      #E3F5E8;
+  --dw-status-drifting-fg:     #8A5A00;
+  --dw-status-drifting-bg:     #FCF1D8;
+  --dw-status-violated-fg:     #C0202B;
+  --dw-status-violated-bg:     #FCE6E7;
+  --dw-status-undocumented-fg: #2456C8;
+  --dw-status-undocumented-bg: #E4ECFB;
+  --dw-status-unverified-fg:   #6B40B8;
+  --dw-status-unverified-bg:   #EFE7FA;
+
+  color-scheme: light;
+}
+
+/* ---- Base element defaults ---------------------------------------- */
+body {
+  margin: 0;
+  background: var(--dw-bg);
+  color: var(--dw-fg);
+  font-family: var(--dw-font-ui);
+  font-size: var(--dw-text-md);
+  line-height: var(--dw-leading);
+  font-feature-settings: "tnum" 1;
+}
+
+code, kbd, pre, .dw-mono {
+  font-family: var(--dw-font-mono);
+  font-size: 0.92em;
+  background: var(--dw-code-bg);
+  border-radius: var(--dw-radius-sm);
+}
+
+a { color: var(--dw-link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+:focus-visible { outline: var(--dw-focus-ring); outline-offset: var(--dw-focus-offset); }
+
+/* Status badge helper: colour + icon + label; never colour alone. */
+.dw-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--dw-space-1);
+  padding: 0 var(--dw-space-2);
+  height: 20px;
+  border-radius: 999px;
+  font-size: var(--dw-text-xs);
+  font-weight: var(--dw-weight-medium);
+  line-height: 20px;
+}
+.dw-badge--holding      { color: var(--dw-status-holding-fg);      background: var(--dw-status-holding-bg); }
+.dw-badge--drifting     { color: var(--dw-status-drifting-fg);     background: var(--dw-status-drifting-bg); }
+.dw-badge--violated     { color: var(--dw-status-violated-fg);     background: var(--dw-status-violated-bg); }
+.dw-badge--undocumented { color: var(--dw-status-undocumented-fg); background: var(--dw-status-undocumented-bg); }
+.dw-badge--unverified   { color: var(--dw-status-unverified-fg);   background: var(--dw-status-unverified-bg); }
