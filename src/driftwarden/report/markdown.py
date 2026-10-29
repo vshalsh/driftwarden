@@ -44,6 +44,7 @@ from driftwarden.report.view import (
     canonical_path,
     full_sha,
     short_sha,
+    view_stats,
 )
 
 PR_COMMENT_MARKER = "<!-- driftwarden-report -->"
@@ -408,6 +409,7 @@ def _pct(x: float | None) -> str:
 
 def _header(ctx: _Ctx, title: str) -> list[str]:
     m = ctx.view.report.metadata
+    stats = view_stats(ctx.view)  # from what is shown, never the stored summary (L-012b)
     rows = [
         ("Repository", esc(m.repo, limit=200)),
         ("Commit", code(full_sha(m.commit))),
@@ -416,8 +418,8 @@ def _header(ctx: _Ctx, title: str) -> list[str]:
             esc(m.mode) + (f" ({esc(m.provider)} {esc(m.model or '')})" if m.provider else ""),
         ),
         ("Scanned at", esc(m.scanned_at)),
-        ("Drift score", _pct(ctx.view.report.summary.drift_score)),
-        ("Exit code", str(ctx.view.report.summary.exit_code)),
+        ("Drift score", _pct(stats.drift_score)),
+        ("Exit code", str(stats.exit_code)),
     ]
     if m.changed_paths is not None:
         rows.append(("PR mode", f"{len(m.changed_paths)} changed path(s)"))
@@ -609,8 +611,8 @@ def _comment(view: ReportView, lim: _Limits, link_base: str | None) -> str:
         head,
         "",
         f"**{esc(m.repo, limit=200)}** @ {code(short_sha(m.commit))} · mode {esc(m.mode)} · "
-        f"drift score {_pct(view.report.summary.drift_score)} · "
-        f"exit code {view.report.summary.exit_code}",
+        f"drift score {_pct(view_stats(view).drift_score)} · "
+        f"exit code {view_stats(view).exit_code}",
         "",
     ]
     if view.pr_mode:

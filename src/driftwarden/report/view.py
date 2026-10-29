@@ -322,6 +322,48 @@ def build_view(report: Report) -> ReportView:
     return view
 
 
+def drift_score(by_status: dict[str, int]) -> float | None:
+    """The pipeline's definition (``report.model``): (DRIFTING + VIOLATED) /
+    (HOLDING + DRIFTING + VIOLATED); UNKNOWN is left out; None when nothing was decided."""
+    decided = by_status["HOLDING"] + by_status["DRIFTING"] + by_status["VIOLATED"]
+    return (by_status["DRIFTING"] + by_status["VIOLATED"]) / decided if decided else None
+
+
+def exit_code_for(by_status: dict[str, int], g1_mismatch: bool) -> int:
+    """3 for a G1 mismatch (wins), 1 for a VIOLATED claim, else 0 (as ``scan``)."""
+    return 3 if g1_mismatch else 1 if by_status["VIOLATED"] else 0
+
+
+@dataclass(frozen=True)
+class ViewStats:
+    """Counts and scores computed from what a view shows, never from the stored summary."""
+
+    by_status: dict[str, int]
+    drift_score: float | None
+    exit_code: int
+
+    @property
+    def unknown(self) -> int:
+        return self.by_status["UNKNOWN"]
+
+
+def view_stats(view: ReportView) -> ViewStats:
+    """THE drift score and status counts for every reporter (L-012b): HOLDING, DRIFTING and
+    VIOLATED are the verified findings the view shows; every other judged claim (UNKNOWN,
+    Could not verify, demoted by the cross-check) counts as UNKNOWN. So a raw, edited
+    report renders the same numbers as its ``regate``-d form."""
+    judged = sum(1 for c in view.report.claims if c.judged and c.verdict is not None)
+    shown = {st: len(view.bucket(st)) for st in ("HOLDING", "DRIFTING", "VIOLATED")}
+    by_status = {**shown, "UNKNOWN": judged - sum(shown.values())}
+    by_status = {st: by_status[st] for st in VERDICT_STATUSES}
+    g1 = any(u.check_id == "G1" for u in view.could_not_verify)
+    return ViewStats(
+        by_status=by_status,
+        drift_score=drift_score(by_status),
+        exit_code=exit_code_for(by_status, g1),
+    )
+
+
 REGATE_REASON = "re-render: no matching VERIFIED ledger record"
 
 
@@ -391,14 +433,8 @@ def regate(report: Report) -> Report:
 
     judged = [c for c in claims if c.judged and c.verdict is not None]
     by_status = {st: sum(1 for c in judged if c.status == st) for st in VERDICT_STATUSES}
-    decided = by_status["HOLDING"] + by_status["DRIFTING"] + by_status["VIOLATED"]
-    drift = (by_status["DRIFTING"] + by_status["VIOLATED"]) / decided if decided else None
-    if any(i.check_id == "G1" for i in items):
-        exit_code = 3
-    elif by_status["VIOLATED"]:
-        exit_code = 1
-    else:
-        exit_code = 0
+    drift = drift_score(by_status)
+    exit_code = exit_code_for(by_status, any(i.check_id == "G1" for i in items))
     summary = report.summary.model_copy(
         update={
             "claims_judged": len(judged),
@@ -450,13 +486,17 @@ __all__ = [
     "ReportView",
     "Undocumented",
     "Unverified",
+    "ViewStats",
     "REGATE_REASON",
     "build_view",
     "canonical_path",
+    "drift_score",
+    "exit_code_for",
     "evidence_verified",
     "full_sha",
     "location_ok",
     "regate",
     "short_sha",
     "valid_sha",
+    "view_stats",
 ]
