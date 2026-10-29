@@ -49,6 +49,7 @@ from driftwarden.report.view import (
     Unverified,
     build_view,
     location_ok,
+    view_stats,
 )
 
 SARIF_VERSION = "2.1.0"
@@ -405,13 +406,14 @@ def render_sarif(
     """
     m = report.metadata
     results, unlocated = _build(report)
+    stats = view_stats(build_view(report))  # not the stored summary (L-012b)
     base: dict[str, Any] = {
         "reportSchemaVersion": m.schema_version,
         "repo": _clip(m.repo, 200),
         "commit": _clip(m.commit, 80),
         "mode": m.mode,
-        "driftScore": report.summary.drift_score,
-        "exitCode": report.summary.exit_code,
+        "driftScore": stats.drift_score,
+        "exitCode": stats.exit_code,
         "resultsTotal": len(results),
     }
     total = len(results)
