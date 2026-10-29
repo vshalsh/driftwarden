@@ -940,6 +940,69 @@ def test_sarif_size_cap_with_one_huge_unlocated_diagnostic(monkeypatch):
         assert "runcated" in text  # unlocatedTruncated and/or truncated, always a note
 
 
+# --------------------------------------------------------------------------- L-012b drift score
+
+
+def _all_demoted(d):
+    for c in d["claims"]:
+        if c["verdict"] and c["verdict"]["evidence"]:
+            c["verdict"]["checks"] = []
+
+
+def _tampers():
+    import test_l012_system as sysm
+
+    return [
+        ("flip_mismatch", sysm._flip_mismatch),
+        ("delete_g2", sysm._delete_g2),
+        ("edit_path", sysm._edit_path),
+        ("fake_claim", sysm._fake_claim),
+        ("all_demoted", _all_demoted),
+    ]
+
+
+def _header_score(md: str, label: str = "| Drift score | ") -> str:
+    line = next(x for x in md.splitlines() if x.startswith(label))
+    return line[len(label) :].rstrip(" |")
+
+
+@pytest.mark.parametrize("name", [n for n, _ in _tampers()])
+def test_drift_score_comes_from_the_view_on_a_raw_tampered_report(name):
+    """Sonnet on L-013: render_markdown printed the stored summary.drift_score."""
+    from driftwarden.report.markdown import _pct
+    from driftwarden.report.view import regate, view_stats
+
+    tamper = dict(_tampers())[name]
+    data = json.loads(render_json(load_fixture()))
+    tamper(data)
+    raw = Report.model_validate(data)
+    stats = view_stats(build_view(raw))
+    want = _pct(stats.drift_score)
+    assert stats.drift_score == regate(raw).summary.drift_score  # same definition as regate
+    assert stats.exit_code == regate(raw).summary.exit_code
+    md = render_markdown(raw)
+    assert _header_score(md) == want
+    assert f"| Exit code | {stats.exit_code} |" in md
+    assert f"drift score {want} ·" in render_pr_comment(raw)
+    props = json.loads(render_sarif(raw))["runs"][0]["properties"]["driftwarden"]
+    assert props["driftScore"] == stats.drift_score and props["exitCode"] == stats.exit_code
+    v = build_view(raw)
+    decided = len(v.holding) + len(v.drifting) + len(v.violated)
+    assert stats.drift_score == ((len(v.drifting) + len(v.violated)) / decided if decided else None)
+    if name == "all_demoted":
+        assert want == "n/a" and stats.drift_score is None
+        assert raw.summary.drift_score is not None  # the stored value was stale
+
+
+def test_drift_score_unchanged_on_a_clean_report():
+    from driftwarden.report.view import view_stats
+
+    r = load_fixture()
+    s = view_stats(build_view(r))
+    assert s.drift_score == r.summary.drift_score and s.by_status == r.summary.by_status
+    assert s.exit_code == r.summary.exit_code
+
+
 def test_report_subcommand_errors(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{not json", encoding="utf-8")
