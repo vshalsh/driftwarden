@@ -477,11 +477,12 @@ def test_terminal_safe_neutralises_control_characters():
     assert terminal_safe("x\x1b[31my\u202ez\x07") == "x\\u001b[31my\\u202ez\\u0007"
 
 
-def test_cli_format_writes_nothing(pyshop, tmp_path):
+def test_cli_format_writes_report_files(pyshop, tmp_path):
+    # L-012 replaced "--format writes nothing" with real report files.
     out = tmp_path / "o"
     res = runner.invoke(app, ["scan", str(pyshop), "--out", str(out), "--format", "json,md"])
-    assert "nothing was written" in res.output
-    assert sorted(p.name for p in out.iterdir()) == ["logs"]
+    assert "nothing was written" not in res.output
+    assert sorted(p.name for p in out.iterdir()) == ["driftwarden.json", "driftwarden.md", "logs"]
 
 
 def _openai_without_model(repo: Path) -> None:

@@ -1,0 +1,3073 @@
+{
+  "claims": [
+    {
+      "claim": {
+        "decision_id": "ADR-0001",
+        "id": "ADR-0001.c1",
+        "kind": "only",
+        "origin": "rule",
+        "pattern": "only-category",
+        "rule": {
+          "category": "datastore",
+          "only": [
+            "PostgreSQL"
+          ]
+        },
+        "source": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0001-postgresql-only.md",
+          "quote": "PostgreSQL is the only datastore."
+        },
+        "subject": "datastore"
+      },
+      "in_change": null,
+      "judged": true,
+      "not_judged_reason": null,
+      "verdict": {
+        "checks": [
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 2,
+              "line_start": 2,
+              "path": "requirements.txt",
+              "quote": "pymongo==4.6.1"
+            },
+            "reason": "requirements.txt:2-2@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "ADR-0001.c1/e1"
+          },
+          {
+            "check_id": "G3",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 2,
+              "manifest_path": "requirements.txt",
+              "package": "pymongo",
+              "scope": null,
+              "version_spec": "==4.6.1"
+            },
+            "reason": "requirements.txt@c80cc5a0effc: pymongo ==4.6.1 at line 2 verified",
+            "status": "VERIFIED",
+            "subject": "ADR-0001.c1/e1"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "src/shop/legacy/catalog.py",
+              "quote": "from pymongo import MongoClient"
+            },
+            "reason": "src/shop/legacy/catalog.py:3-3@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "ADR-0001.c1/e2"
+          }
+        ],
+        "claim_id": "ADR-0001.c1",
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "consistency": null,
+        "evidence": [
+          {
+            "dependency": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 2,
+              "manifest_path": "requirements.txt",
+              "package": "pymongo",
+              "scope": null,
+              "version_spec": "==4.6.1"
+            },
+            "detail": "requirements.txt:2 declares pymongo ==4.6.1",
+            "id": "e1",
+            "kind": "dependency",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 2,
+              "line_start": 2,
+              "path": "requirements.txt",
+              "quote": "pymongo==4.6.1"
+            },
+            "relation": "alternative",
+            "technology": "mongodb"
+          },
+          {
+            "dependency": null,
+            "detail": "src/shop/legacy/catalog.py:3 imports pymongo",
+            "id": "e2",
+            "kind": "import",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "src/shop/legacy/catalog.py",
+              "quote": "from pymongo import MongoClient"
+            },
+            "relation": "alternative",
+            "technology": "mongodb"
+          }
+        ],
+        "grounding": "VERIFIED",
+        "notes": [],
+        "origin": "rule",
+        "proposed_status": null,
+        "rationale": "other datastore mongodb used (e1, e2)",
+        "reasons": [],
+        "status": "VIOLATED"
+      }
+    },
+    {
+      "claim": {
+        "decision_id": "ADR-0002",
+        "id": "ADR-0002.c1",
+        "kind": "boundary",
+        "origin": "rule",
+        "pattern": "boundary-no-outside",
+        "rule": {
+          "allowed_in": [
+            "adapters/"
+          ],
+          "target": [
+            "cloud SDK"
+          ]
+        },
+        "source": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0002-cloud-sdk-in-adapters.md",
+          "quote": "No cloud SDK outside adapters/."
+        },
+        "subject": "cloud sdk"
+      },
+      "in_change": null,
+      "judged": true,
+      "not_judged_reason": null,
+      "verdict": {
+        "checks": [
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 5,
+              "line_start": 5,
+              "path": "src/shop/reports.py",
+              "quote": "import boto3  # TODO: move behind the storage adapter"
+            },
+            "reason": "src/shop/reports.py:5-5@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "ADR-0002.c1/e1"
+          }
+        ],
+        "claim_id": "ADR-0002.c1",
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "consistency": null,
+        "evidence": [
+          {
+            "dependency": null,
+            "detail": "src/shop/reports.py:5 imports boto3",
+            "id": "e1",
+            "kind": "import",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 5,
+              "line_start": 5,
+              "path": "src/shop/reports.py",
+              "quote": "import boto3  # TODO: move behind the storage adapter"
+            },
+            "relation": "outside_boundary",
+            "technology": "aws-sdk"
+          }
+        ],
+        "grounding": "VERIFIED",
+        "notes": [],
+        "origin": "rule",
+        "proposed_status": null,
+        "rationale": "aws-sdk imported outside the allowed paths (e1)",
+        "reasons": [],
+        "status": "VIOLATED"
+      }
+    },
+    {
+      "claim": {
+        "decision_id": "ADR-0003",
+        "id": "ADR-0003.c1",
+        "kind": "forbid",
+        "origin": "rule",
+        "pattern": "forbid-must-not",
+        "rule": {
+          "action": "import",
+          "forbid": [
+            "requests library"
+          ]
+        },
+        "source": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0003-no-requests.md",
+          "quote": "Services must not import the requests library."
+        },
+        "subject": "services"
+      },
+      "in_change": null,
+      "judged": true,
+      "not_judged_reason": null,
+      "verdict": {
+        "checks": [
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 5,
+              "line_start": 5,
+              "path": "requirements.txt",
+              "quote": "import nothing"
+            },
+            "reason": "requirements.txt:5-5@c80cc5a0effc: quote not found in cited range or anywhere in the file",
+            "status": "MISMATCH",
+            "subject": "ADR-0003.c1/e1"
+          },
+          {
+            "check_id": "G3",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 5,
+              "manifest_path": "requirements.txt",
+              "package": "requests",
+              "scope": null,
+              "version_spec": "==2.31.0"
+            },
+            "reason": "requirements.txt@c80cc5a0effc: requests ==2.31.0 at line 5 verified",
+            "status": "VERIFIED",
+            "subject": "ADR-0003.c1/e1"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "tests/db_check.py",
+              "quote": "import nothing"
+            },
+            "reason": "tests/db_check.py:3-3@c80cc5a0effc: quote not found in cited range or anywhere in the file",
+            "status": "MISMATCH",
+            "subject": "ADR-0003.c1/e2"
+          }
+        ],
+        "claim_id": "ADR-0003.c1",
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "consistency": null,
+        "evidence": [
+          {
+            "dependency": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 5,
+              "manifest_path": "requirements.txt",
+              "package": "requests",
+              "scope": null,
+              "version_spec": "==2.31.0"
+            },
+            "detail": "requirements.txt:5 declares requests ==2.31.0",
+            "id": "e1",
+            "kind": "dependency",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 5,
+              "line_start": 5,
+              "path": "requirements.txt",
+              "quote": "import nothing"
+            },
+            "relation": "forbidden",
+            "technology": "requests"
+          },
+          {
+            "dependency": null,
+            "detail": "tests/db_check.py:3 imports requests",
+            "id": "e2",
+            "kind": "import",
+            "production": false,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "tests/db_check.py",
+              "quote": "import nothing"
+            },
+            "relation": "forbidden",
+            "technology": "requests"
+          }
+        ],
+        "grounding": "MISMATCH",
+        "notes": [],
+        "origin": "rule",
+        "proposed_status": "DRIFTING",
+        "rationale": "forbidden requests declared but not imported in production",
+        "reasons": [
+          "e1: requirements.txt:5-5@c80cc5a0effc: quote not found in cited range or anywhere in the file",
+          "e2: tests/db_check.py:3-3@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+        ],
+        "status": "UNKNOWN"
+      }
+    },
+    {
+      "claim": {
+        "decision_id": "ADR-0004",
+        "id": "ADR-0004.c1",
+        "kind": "require",
+        "origin": "rule",
+        "pattern": "require-we-will-use",
+        "rule": {
+          "for": "logging",
+          "require": [
+            "structlog"
+          ]
+        },
+        "source": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0004-structured-logging.md",
+          "quote": "We will use structlog for logging."
+        },
+        "subject": "logging"
+      },
+      "in_change": null,
+      "judged": true,
+      "not_judged_reason": null,
+      "verdict": {
+        "checks": [
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 4,
+              "line_start": 4,
+              "path": "requirements.txt",
+              "quote": "structlog==24.1.0"
+            },
+            "reason": "requirements.txt:4-4@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "ADR-0004.c1/e1"
+          },
+          {
+            "check_id": "G3",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 4,
+              "manifest_path": "requirements.txt",
+              "package": "structlog",
+              "scope": null,
+              "version_spec": "==24.1.0"
+            },
+            "reason": "requirements.txt@c80cc5a0effc: structlog ==24.1.0 at line 4 verified",
+            "status": "VERIFIED",
+            "subject": "ADR-0004.c1/e1"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/log.py",
+              "quote": "import structlog"
+            },
+            "reason": "src/shop/log.py:1-1@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "ADR-0004.c1/e2"
+          }
+        ],
+        "claim_id": "ADR-0004.c1",
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "consistency": null,
+        "evidence": [
+          {
+            "dependency": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 4,
+              "manifest_path": "requirements.txt",
+              "package": "structlog",
+              "scope": null,
+              "version_spec": "==24.1.0"
+            },
+            "detail": "requirements.txt:4 declares structlog ==24.1.0",
+            "id": "e1",
+            "kind": "dependency",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 4,
+              "line_start": 4,
+              "path": "requirements.txt",
+              "quote": "structlog==24.1.0"
+            },
+            "relation": "required",
+            "technology": "structlog"
+          },
+          {
+            "dependency": null,
+            "detail": "src/shop/log.py:1 imports structlog",
+            "id": "e2",
+            "kind": "import",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/log.py",
+              "quote": "import structlog"
+            },
+            "relation": "required",
+            "technology": "structlog"
+          }
+        ],
+        "grounding": "VERIFIED",
+        "notes": [],
+        "origin": "rule",
+        "proposed_status": null,
+        "rationale": "required structlog present (e1, e2)",
+        "reasons": [],
+        "status": "HOLDING"
+      }
+    },
+    {
+      "claim": {
+        "decision_id": "ADR-0005",
+        "id": "ADR-0005.c1",
+        "kind": "require",
+        "origin": "rule",
+        "pattern": "require-we-will-use",
+        "rule": {
+          "for": "message broker",
+          "require": [
+            "RabbitMQ"
+          ]
+        },
+        "source": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0005-message-broker.md",
+          "quote": "We will use RabbitMQ as the message broker."
+        },
+        "subject": "message broker"
+      },
+      "in_change": null,
+      "judged": true,
+      "not_judged_reason": null,
+      "verdict": {
+        "checks": [
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 6,
+              "line_start": 6,
+              "path": "requirements.txt",
+              "quote": "kafka-python==2.0.2"
+            },
+            "reason": "requirements.txt:6-6@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "ADR-0005.c1/e1"
+          },
+          {
+            "check_id": "G3",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 6,
+              "manifest_path": "requirements.txt",
+              "package": "kafka-python",
+              "scope": null,
+              "version_spec": "==2.0.2"
+            },
+            "reason": "requirements.txt@c80cc5a0effc: kafka-python ==2.0.2 at line 6 verified",
+            "status": "VERIFIED",
+            "subject": "ADR-0005.c1/e1"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/events.py",
+              "quote": "from kafka import KafkaProducer"
+            },
+            "reason": "src/shop/events.py:1-1@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "ADR-0005.c1/e2"
+          }
+        ],
+        "claim_id": "ADR-0005.c1",
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "consistency": null,
+        "evidence": [
+          {
+            "dependency": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 6,
+              "manifest_path": "requirements.txt",
+              "package": "kafka-python",
+              "scope": null,
+              "version_spec": "==2.0.2"
+            },
+            "detail": "requirements.txt:6 declares kafka-python ==2.0.2",
+            "id": "e1",
+            "kind": "dependency",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 6,
+              "line_start": 6,
+              "path": "requirements.txt",
+              "quote": "kafka-python==2.0.2"
+            },
+            "relation": "alternative",
+            "technology": "kafka"
+          },
+          {
+            "dependency": null,
+            "detail": "src/shop/events.py:1 imports kafka",
+            "id": "e2",
+            "kind": "import",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/events.py",
+              "quote": "from kafka import KafkaProducer"
+            },
+            "relation": "alternative",
+            "technology": "kafka"
+          }
+        ],
+        "grounding": "VERIFIED",
+        "notes": [],
+        "origin": "rule",
+        "proposed_status": null,
+        "rationale": "required technology not found; queue kafka used instead",
+        "reasons": [],
+        "status": "VIOLATED"
+      }
+    },
+    {
+      "claim": {
+        "decision_id": "ADR-0007",
+        "id": "ADR-0007.c1",
+        "kind": "free",
+        "origin": "hint",
+        "pattern": "hint:free",
+        "rule": {
+          "text": "Every service exposes /healthz"
+        },
+        "source": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 4,
+          "line_start": 4,
+          "path": "docs/adr/0007-health-endpoint.md",
+          "quote": "  free: \"Every service exposes /healthz\""
+        },
+        "subject": "free"
+      },
+      "in_change": null,
+      "judged": true,
+      "not_judged_reason": null,
+      "verdict": {
+        "checks": [],
+        "claim_id": "ADR-0007.c1",
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "consistency": null,
+        "evidence": [],
+        "grounding": "VERIFIED",
+        "notes": [],
+        "origin": "rule",
+        "proposed_status": null,
+        "rationale": "rules cannot decide: free-form claim: no deterministic rule",
+        "reasons": [],
+        "status": "UNKNOWN"
+      }
+    }
+  ],
+  "could_not_verify": [
+    {
+      "check_id": "G1",
+      "claim_id": null,
+      "decision_id": "ADR-0006",
+      "id": "ADR-0006",
+      "kind": "decision",
+      "proposed_status": null,
+      "provenance": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 13,
+        "line_start": 13,
+        "path": "docs/adr/0006-no-celery.md",
+        "quote": "We will use Celery."
+      },
+      "reasons": [
+        "docs/adr/0006-no-celery.md:13-13@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+      ]
+    },
+    {
+      "check_id": null,
+      "claim_id": "ADR-0003.c1",
+      "decision_id": "ADR-0003",
+      "id": "ADR-0003.c1",
+      "kind": "verdict",
+      "proposed_status": "DRIFTING",
+      "provenance": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 13,
+        "line_start": 13,
+        "path": "docs/adr/0003-no-requests.md",
+        "quote": "Services must not import the requests library."
+      },
+      "reasons": [
+        "e1: requirements.txt:5-5@c80cc5a0effc: quote not found in cited range or anywhere in the file",
+        "e2: tests/db_check.py:3-3@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+      ]
+    },
+    {
+      "check_id": "G2",
+      "claim_id": "ADR-0003.c1",
+      "decision_id": "ADR-0003",
+      "id": "ADR-0003.c1/e1",
+      "kind": "evidence",
+      "proposed_status": null,
+      "provenance": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 5,
+        "line_start": 5,
+        "path": "requirements.txt",
+        "quote": "import nothing"
+      },
+      "reasons": [
+        "requirements.txt:5-5@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+      ]
+    },
+    {
+      "check_id": "G2",
+      "claim_id": "ADR-0003.c1",
+      "decision_id": "ADR-0003",
+      "id": "ADR-0003.c1/e2",
+      "kind": "evidence",
+      "proposed_status": null,
+      "provenance": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 3,
+        "line_start": 3,
+        "path": "tests/db_check.py",
+        "quote": "import nothing"
+      },
+      "reasons": [
+        "tests/db_check.py:3-3@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "claim_ids": [
+        "ADR-0001.c1"
+      ],
+      "date": null,
+      "format": "nygard",
+      "g1": {
+        "check_id": "G1",
+        "provenance": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0001-postgresql-only.md",
+          "quote": "PostgreSQL is the only datastore."
+        },
+        "reason": "docs/adr/0001-postgresql-only.md:13-13@c80cc5a0effc: quote found in range",
+        "status": "VERIFIED",
+        "subject": "ADR-0001"
+      },
+      "id": "ADR-0001",
+      "judged": true,
+      "not_judged_reason": null,
+      "source": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 13,
+        "line_start": 13,
+        "path": "docs/adr/0001-postgresql-only.md",
+        "quote": "PostgreSQL is the only datastore."
+      },
+      "status": "accepted",
+      "superseded_by": null,
+      "title": "PostgreSQL is the only datastore"
+    },
+    {
+      "claim_ids": [
+        "ADR-0002.c1"
+      ],
+      "date": null,
+      "format": "nygard",
+      "g1": {
+        "check_id": "G1",
+        "provenance": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0002-cloud-sdk-in-adapters.md",
+          "quote": "No cloud SDK outside adapters/."
+        },
+        "reason": "docs/adr/0002-cloud-sdk-in-adapters.md:13-13@c80cc5a0effc: quote found in range",
+        "status": "VERIFIED",
+        "subject": "ADR-0002"
+      },
+      "id": "ADR-0002",
+      "judged": true,
+      "not_judged_reason": null,
+      "source": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 13,
+        "line_start": 13,
+        "path": "docs/adr/0002-cloud-sdk-in-adapters.md",
+        "quote": "No cloud SDK outside adapters/."
+      },
+      "status": "accepted",
+      "superseded_by": null,
+      "title": "Cloud SDKs live in adapters"
+    },
+    {
+      "claim_ids": [
+        "ADR-0003.c1"
+      ],
+      "date": null,
+      "format": "nygard",
+      "g1": {
+        "check_id": "G1",
+        "provenance": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0003-no-requests.md",
+          "quote": "Services must not import the requests library."
+        },
+        "reason": "docs/adr/0003-no-requests.md:13-13@c80cc5a0effc: quote found in range",
+        "status": "VERIFIED",
+        "subject": "ADR-0003"
+      },
+      "id": "ADR-0003",
+      "judged": true,
+      "not_judged_reason": null,
+      "source": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 13,
+        "line_start": 13,
+        "path": "docs/adr/0003-no-requests.md",
+        "quote": "Services must not import the requests library."
+      },
+      "status": "accepted",
+      "superseded_by": null,
+      "title": "No requests library"
+    },
+    {
+      "claim_ids": [
+        "ADR-0004.c1"
+      ],
+      "date": null,
+      "format": "nygard",
+      "g1": {
+        "check_id": "G1",
+        "provenance": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0004-structured-logging.md",
+          "quote": "We will use structlog for logging."
+        },
+        "reason": "docs/adr/0004-structured-logging.md:13-13@c80cc5a0effc: quote found in range",
+        "status": "VERIFIED",
+        "subject": "ADR-0004"
+      },
+      "id": "ADR-0004",
+      "judged": true,
+      "not_judged_reason": null,
+      "source": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 13,
+        "line_start": 13,
+        "path": "docs/adr/0004-structured-logging.md",
+        "quote": "We will use structlog for logging."
+      },
+      "status": "accepted",
+      "superseded_by": null,
+      "title": "Structured logging"
+    },
+    {
+      "claim_ids": [
+        "ADR-0005.c1"
+      ],
+      "date": null,
+      "format": "nygard",
+      "g1": {
+        "check_id": "G1",
+        "provenance": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0005-message-broker.md",
+          "quote": "We will use RabbitMQ as the message broker."
+        },
+        "reason": "docs/adr/0005-message-broker.md:13-13@c80cc5a0effc: quote found in range",
+        "status": "VERIFIED",
+        "subject": "ADR-0005"
+      },
+      "id": "ADR-0005",
+      "judged": true,
+      "not_judged_reason": null,
+      "source": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 13,
+        "line_start": 13,
+        "path": "docs/adr/0005-message-broker.md",
+        "quote": "We will use RabbitMQ as the message broker."
+      },
+      "status": "accepted",
+      "superseded_by": null,
+      "title": "Message broker"
+    },
+    {
+      "claim_ids": [],
+      "date": null,
+      "format": "nygard",
+      "g1": {
+        "check_id": "G1",
+        "provenance": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 13,
+          "line_start": 13,
+          "path": "docs/adr/0006-no-celery.md",
+          "quote": "We will use Celery."
+        },
+        "reason": "docs/adr/0006-no-celery.md:13-13@c80cc5a0effc: quote not found in cited range or anywhere in the file",
+        "status": "MISMATCH",
+        "subject": "ADR-0006"
+      },
+      "id": "ADR-0006",
+      "judged": false,
+      "not_judged_reason": "the decision's own quote failed G1, so its claims are not structured or judged",
+      "source": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 13,
+        "line_start": 13,
+        "path": "docs/adr/0006-no-celery.md",
+        "quote": "We will use Celery."
+      },
+      "status": "accepted",
+      "superseded_by": null,
+      "title": "No Celery"
+    },
+    {
+      "claim_ids": [
+        "ADR-0007.c1"
+      ],
+      "date": null,
+      "format": "madr",
+      "g1": {
+        "check_id": "G1",
+        "provenance": {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 14,
+          "line_start": 14,
+          "path": "docs/adr/0007-health-endpoint.md",
+          "quote": "Every service exposes a health endpoint at /healthz."
+        },
+        "reason": "docs/adr/0007-health-endpoint.md:14-14@c80cc5a0effc: quote found in range",
+        "status": "VERIFIED",
+        "subject": "ADR-0007"
+      },
+      "id": "ADR-0007",
+      "judged": true,
+      "not_judged_reason": null,
+      "source": {
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "line_end": 14,
+        "line_start": 14,
+        "path": "docs/adr/0007-health-endpoint.md",
+        "quote": "Every service exposes a health endpoint at /healthz."
+      },
+      "status": "accepted",
+      "superseded_by": null,
+      "title": "Health endpoint"
+    }
+  ],
+  "drafts": [
+    {
+      "category": "cloud-sdk",
+      "checks": [
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "requirements.txt",
+            "quote": "boto3==1.34.0"
+          },
+          "reason": "requirements.txt:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e1"
+        },
+        {
+          "check_id": "G3",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 3,
+            "manifest_path": "requirements.txt",
+            "package": "boto3",
+            "scope": null,
+            "version_spec": "==1.34.0"
+          },
+          "reason": "requirements.txt@c80cc5a0effc: boto3 ==1.34.0 at line 3 verified",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e1"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/adapters/storage.py",
+            "quote": "import boto3"
+          },
+          "reason": "src/shop/adapters/storage.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e2"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 5,
+            "line_start": 5,
+            "path": "src/shop/reports.py",
+            "quote": "import boto3  # TODO: move behind the storage adapter"
+          },
+          "reason": "src/shop/reports.py:5-5@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e3"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "requirements.txt",
+            "quote": "boto3==1.34.0"
+          },
+          "reason": "requirements.txt:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e1 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "requirements.txt",
+            "quote": "boto3==1.34.0"
+          },
+          "reason": "e1 introduced at c80cc5a0effc: present in requirements.txt at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/adapters/storage.py",
+            "quote": "import boto3"
+          },
+          "reason": "src/shop/adapters/storage.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e2 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/adapters/storage.py",
+            "quote": "import boto3"
+          },
+          "reason": "e2 introduced at c80cc5a0effc: present in src/shop/adapters/storage.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 5,
+            "line_start": 5,
+            "path": "src/shop/reports.py",
+            "quote": "import boto3  # TODO: move behind the storage adapter"
+          },
+          "reason": "src/shop/reports.py:5-5@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e3 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 5,
+            "line_start": 5,
+            "path": "src/shop/reports.py",
+            "quote": "import boto3  # TODO: move behind the storage adapter"
+          },
+          "reason": "e3 introduced at c80cc5a0effc: present in src/shop/reports.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "draft text is exactly the rendering of UD-cloud-sdk-aws-sdk",
+          "status": "VERIFIED",
+          "subject": "draft:UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "requirements.txt",
+            "quote": "boto3==1.34.0"
+          },
+          "reason": "[e1] requirements.txt:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/adapters/storage.py",
+            "quote": "import boto3"
+          },
+          "reason": "[e2] src/shop/adapters/storage.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 5,
+            "line_start": 5,
+            "path": "src/shop/reports.py",
+            "quote": "import boto3  # TODO: move behind the storage adapter"
+          },
+          "reason": "[e3] src/shop/reports.py:5-5@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "requirements.txt",
+            "quote": "boto3==1.34.0"
+          },
+          "reason": "[e1] requirements.txt:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G3",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 3,
+            "manifest_path": "requirements.txt",
+            "package": "boto3",
+            "scope": null,
+            "version_spec": "==1.34.0"
+          },
+          "reason": "[e1] requirements.txt@c80cc5a0effc: boto3 ==1.34.0 at line 3 verified",
+          "status": "VERIFIED",
+          "subject": "draft:UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/adapters/storage.py",
+            "quote": "import boto3"
+          },
+          "reason": "[e2] src/shop/adapters/storage.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 5,
+            "line_start": 5,
+            "path": "src/shop/reports.py",
+            "quote": "import boto3  # TODO: move behind the storage adapter"
+          },
+          "reason": "[e3] src/shop/reports.py:5-5@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+          "status": "VERIFIED",
+          "subject": "draft:UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "draft parses back with title 'Use Aws sdk for cloud SDK' and status 'proposed'",
+          "status": "VERIFIED",
+          "subject": "draft:UD-cloud-sdk-aws-sdk"
+        }
+      ],
+      "cited_commits": [
+        "c80cc5a0effcd4597b75533195e1bbde44020a32"
+      ],
+      "evidence_refs": [
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 3,
+          "line_start": 3,
+          "path": "requirements.txt",
+          "quote": "boto3==1.34.0"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 1,
+          "line_start": 1,
+          "path": "src/shop/adapters/storage.py",
+          "quote": "import boto3"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 5,
+          "line_start": 5,
+          "path": "src/shop/reports.py",
+          "quote": "import boto3  # TODO: move behind the storage adapter"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 3,
+          "line_start": 3,
+          "path": "requirements.txt",
+          "quote": "boto3==1.34.0"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 1,
+          "line_start": 1,
+          "path": "src/shop/adapters/storage.py",
+          "quote": "import boto3"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 5,
+          "line_start": 5,
+          "path": "src/shop/reports.py",
+          "quote": "import boto3  # TODO: move behind the storage adapter"
+        }
+      ],
+      "grounding": "VERIFIED",
+      "markdown": "---\nstatus: proposed (draft)\ndate: 2026-01-01\ndriftwarden-record: UD-cloud-sdk-aws-sdk\ndriftwarden-commit: c80cc5a0effcd4597b75533195e1bbde44020a32\n---\n\n# Use Aws sdk for cloud SDK\n\n## Context and Problem Statement\n\nThe code at commit `c80cc5a0effc` uses Aws sdk as cloud SDK: 3 production occurrences in 3 files, cited below. No ADR in this repository records that decision. Aws sdk was introduced by commit `c80cc5a0effc` (2026-01-01).\n\nThis draft was generated by DriftWarden from the repository history. Every commit and source line it cites was checked against the repository; the repository does not record why the choice was made, so the reasons are left as TODO items for the team to fill in before accepting it.\n\n## Considered Options\n\n* Aws sdk (in use)\n* TODO: confirm which alternatives were considered.\n\n## Decision Outcome\n\nChosen option: \"Aws sdk\", because TODO: confirm. The repository does not record the reasons.\n\n### Consequences\n\n* TODO: confirm the good and bad consequences of this choice.\n\n## More Information\n\n### Introducing commits\n\n- Commit `c80cc5a0effcd4597b75533195e1bbde44020a32`, 2026-01-01: `fixture`\n\n### Where it was introduced\n\n- [e1] `requirements.txt` lines 3-3 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, introduced:\n\n```text\nboto3==1.34.0\n```\n\n- [e2] `src/shop/adapters/storage.py` lines 1-1 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, introduced:\n\n```text\nimport boto3\n```\n\n- [e3] `src/shop/reports.py` lines 5-5 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, introduced:\n\n```text\nimport boto3  # TODO: move behind the storage adapter\n```\n\n### Where it is used at `c80cc5a0effc`\n\n- [e1] `requirements.txt` lines 3-3 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, `dependency` `boto3` `==1.34.0` (`pypi`):\n\n```text\nboto3==1.34.0\n```\n\n- [e2] `src/shop/adapters/storage.py` lines 1-1 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, `import`:\n\n```text\nimport boto3\n```\n\n- [e3] `src/shop/reports.py` lines 5-5 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, `import`:\n\n```text\nimport boto3  # TODO: move behind the storage adapter\n```\n",
+      "notes": [],
+      "number": 8,
+      "origin": "template",
+      "path": "docs/adr/0008-use-aws-sdk-for-cloud-sdk.md",
+      "reasons": [],
+      "record": {
+        "category": "cloud-sdk",
+        "checks": [
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "requirements.txt",
+              "quote": "boto3==1.34.0"
+            },
+            "reason": "requirements.txt:3-3@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk/e1"
+          },
+          {
+            "check_id": "G3",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 3,
+              "manifest_path": "requirements.txt",
+              "package": "boto3",
+              "scope": null,
+              "version_spec": "==1.34.0"
+            },
+            "reason": "requirements.txt@c80cc5a0effc: boto3 ==1.34.0 at line 3 verified",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk/e1"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/adapters/storage.py",
+              "quote": "import boto3"
+            },
+            "reason": "src/shop/adapters/storage.py:1-1@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk/e2"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 5,
+              "line_start": 5,
+              "path": "src/shop/reports.py",
+              "quote": "import boto3  # TODO: move behind the storage adapter"
+            },
+            "reason": "src/shop/reports.py:5-5@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk/e3"
+          },
+          {
+            "check_id": "G5",
+            "provenance": null,
+            "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "requirements.txt",
+              "quote": "boto3==1.34.0"
+            },
+            "reason": "requirements.txt:3-3@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk/e1 introduced at c80cc5a0effc"
+          },
+          {
+            "check_id": "G5",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "requirements.txt",
+              "quote": "boto3==1.34.0"
+            },
+            "reason": "e1 introduced at c80cc5a0effc: present in requirements.txt at the commit, absent at no parent(s), continuous up to the scanned commit",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/adapters/storage.py",
+              "quote": "import boto3"
+            },
+            "reason": "src/shop/adapters/storage.py:1-1@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk/e2 introduced at c80cc5a0effc"
+          },
+          {
+            "check_id": "G5",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/adapters/storage.py",
+              "quote": "import boto3"
+            },
+            "reason": "e2 introduced at c80cc5a0effc: present in src/shop/adapters/storage.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 5,
+              "line_start": 5,
+              "path": "src/shop/reports.py",
+              "quote": "import boto3  # TODO: move behind the storage adapter"
+            },
+            "reason": "src/shop/reports.py:5-5@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk/e3 introduced at c80cc5a0effc"
+          },
+          {
+            "check_id": "G5",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 5,
+              "line_start": 5,
+              "path": "src/shop/reports.py",
+              "quote": "import boto3  # TODO: move behind the storage adapter"
+            },
+            "reason": "e3 introduced at c80cc5a0effc: present in src/shop/reports.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+            "status": "VERIFIED",
+            "subject": "UD-cloud-sdk-aws-sdk"
+          }
+        ],
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "evidence": [
+          {
+            "dependency": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 3,
+              "manifest_path": "requirements.txt",
+              "package": "boto3",
+              "scope": null,
+              "version_spec": "==1.34.0"
+            },
+            "detail": "requirements.txt:3 declares boto3 ==1.34.0",
+            "id": "e1",
+            "kind": "dependency",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "requirements.txt",
+              "quote": "boto3==1.34.0"
+            },
+            "relation": null,
+            "technology": "aws-sdk"
+          },
+          {
+            "dependency": null,
+            "detail": "src/shop/adapters/storage.py:1 imports boto3",
+            "id": "e2",
+            "kind": "import",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/adapters/storage.py",
+              "quote": "import boto3"
+            },
+            "relation": null,
+            "technology": "aws-sdk"
+          },
+          {
+            "dependency": null,
+            "detail": "src/shop/reports.py:5 imports boto3",
+            "id": "e3",
+            "kind": "import",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 5,
+              "line_start": 5,
+              "path": "src/shop/reports.py",
+              "quote": "import boto3  # TODO: move behind the storage adapter"
+            },
+            "relation": null,
+            "technology": "aws-sdk"
+          }
+        ],
+        "grounding": "VERIFIED",
+        "id": "UD-cloud-sdk-aws-sdk",
+        "introducing_commits": [
+          "c80cc5a0effcd4597b75533195e1bbde44020a32"
+        ],
+        "introductions": [
+          {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "evidence_id": "e1",
+            "parents": [],
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "requirements.txt",
+              "quote": "boto3==1.34.0"
+            }
+          },
+          {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "evidence_id": "e2",
+            "parents": [],
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/adapters/storage.py",
+              "quote": "import boto3"
+            }
+          },
+          {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "evidence_id": "e3",
+            "parents": [],
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 5,
+              "line_start": 5,
+              "path": "src/shop/reports.py",
+              "quote": "import boto3  # TODO: move behind the storage adapter"
+            }
+          }
+        ],
+        "notes": [],
+        "reasons": [],
+        "searched_terms": [
+          "aws-sdk",
+          "aws sdk",
+          "aws",
+          "amazon web services",
+          "boto",
+          "boto3"
+        ],
+        "status": "UNDOCUMENTED",
+        "technology": "aws-sdk",
+        "title": "Use Aws Sdk as cloud SDK"
+      },
+      "record_id": "UD-cloud-sdk-aws-sdk",
+      "status": "DRAFT",
+      "technology": "aws-sdk",
+      "title": "Use Aws sdk for cloud SDK",
+      "written_path": null
+    },
+    {
+      "category": "datastore",
+      "checks": [
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 2,
+            "line_start": 2,
+            "path": "requirements.txt",
+            "quote": "pymongo==4.6.1"
+          },
+          "reason": "requirements.txt:2-2@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb/e1"
+        },
+        {
+          "check_id": "G3",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 2,
+            "manifest_path": "requirements.txt",
+            "package": "pymongo",
+            "scope": null,
+            "version_spec": "==4.6.1"
+          },
+          "reason": "requirements.txt@c80cc5a0effc: pymongo ==4.6.1 at line 2 verified",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb/e1"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "src/shop/legacy/catalog.py",
+            "quote": "from pymongo import MongoClient"
+          },
+          "reason": "src/shop/legacy/catalog.py:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb/e2"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 2,
+            "line_start": 2,
+            "path": "requirements.txt",
+            "quote": "pymongo==4.6.1"
+          },
+          "reason": "requirements.txt:2-2@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb/e1 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 2,
+            "line_start": 2,
+            "path": "requirements.txt",
+            "quote": "pymongo==4.6.1"
+          },
+          "reason": "e1 introduced at c80cc5a0effc: present in requirements.txt at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "src/shop/legacy/catalog.py",
+            "quote": "from pymongo import MongoClient"
+          },
+          "reason": "src/shop/legacy/catalog.py:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb/e2 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "src/shop/legacy/catalog.py",
+            "quote": "from pymongo import MongoClient"
+          },
+          "reason": "e2 introduced at c80cc5a0effc: present in src/shop/legacy/catalog.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "draft text is exactly the rendering of UD-datastore-mongodb",
+          "status": "VERIFIED",
+          "subject": "draft:UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 2,
+            "line_start": 2,
+            "path": "requirements.txt",
+            "quote": "pymongo==4.6.1"
+          },
+          "reason": "[e1] requirements.txt:2-2@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "src/shop/legacy/catalog.py",
+            "quote": "from pymongo import MongoClient"
+          },
+          "reason": "[e2] src/shop/legacy/catalog.py:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 2,
+            "line_start": 2,
+            "path": "requirements.txt",
+            "quote": "pymongo==4.6.1"
+          },
+          "reason": "[e1] requirements.txt:2-2@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G3",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 2,
+            "manifest_path": "requirements.txt",
+            "package": "pymongo",
+            "scope": null,
+            "version_spec": "==4.6.1"
+          },
+          "reason": "[e1] requirements.txt@c80cc5a0effc: pymongo ==4.6.1 at line 2 verified",
+          "status": "VERIFIED",
+          "subject": "draft:UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "src/shop/legacy/catalog.py",
+            "quote": "from pymongo import MongoClient"
+          },
+          "reason": "[e2] src/shop/legacy/catalog.py:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+          "status": "VERIFIED",
+          "subject": "draft:UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "draft parses back with title 'Use Mongodb for datastore' and status 'proposed'",
+          "status": "VERIFIED",
+          "subject": "draft:UD-datastore-mongodb"
+        }
+      ],
+      "cited_commits": [
+        "c80cc5a0effcd4597b75533195e1bbde44020a32"
+      ],
+      "evidence_refs": [
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 2,
+          "line_start": 2,
+          "path": "requirements.txt",
+          "quote": "pymongo==4.6.1"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 3,
+          "line_start": 3,
+          "path": "src/shop/legacy/catalog.py",
+          "quote": "from pymongo import MongoClient"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 2,
+          "line_start": 2,
+          "path": "requirements.txt",
+          "quote": "pymongo==4.6.1"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 3,
+          "line_start": 3,
+          "path": "src/shop/legacy/catalog.py",
+          "quote": "from pymongo import MongoClient"
+        }
+      ],
+      "grounding": "VERIFIED",
+      "markdown": "---\nstatus: proposed (draft)\ndate: 2026-01-01\ndriftwarden-record: UD-datastore-mongodb\ndriftwarden-commit: c80cc5a0effcd4597b75533195e1bbde44020a32\n---\n\n# Use Mongodb for datastore\n\n## Context and Problem Statement\n\nThe code at commit `c80cc5a0effc` uses Mongodb as datastore: 2 production occurrences in 2 files, cited below. No ADR in this repository records that decision. Mongodb was introduced by commit `c80cc5a0effc` (2026-01-01).\n\nThis draft was generated by DriftWarden from the repository history. Every commit and source line it cites was checked against the repository; the repository does not record why the choice was made, so the reasons are left as TODO items for the team to fill in before accepting it.\n\n## Considered Options\n\n* Mongodb (in use)\n* TODO: confirm which alternatives were considered.\n\n## Decision Outcome\n\nChosen option: \"Mongodb\", because TODO: confirm. The repository does not record the reasons.\n\n### Consequences\n\n* TODO: confirm the good and bad consequences of this choice.\n\n## More Information\n\n### Introducing commits\n\n- Commit `c80cc5a0effcd4597b75533195e1bbde44020a32`, 2026-01-01: `fixture`\n\n### Where it was introduced\n\n- [e1] `requirements.txt` lines 2-2 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, introduced:\n\n```text\npymongo==4.6.1\n```\n\n- [e2] `src/shop/legacy/catalog.py` lines 3-3 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, introduced:\n\n```text\nfrom pymongo import MongoClient\n```\n\n### Where it is used at `c80cc5a0effc`\n\n- [e1] `requirements.txt` lines 2-2 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, `dependency` `pymongo` `==4.6.1` (`pypi`):\n\n```text\npymongo==4.6.1\n```\n\n- [e2] `src/shop/legacy/catalog.py` lines 3-3 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, `import`:\n\n```text\nfrom pymongo import MongoClient\n```\n",
+      "notes": [],
+      "number": 9,
+      "origin": "template",
+      "path": "docs/adr/0009-use-mongodb-for-datastore.md",
+      "reasons": [],
+      "record": {
+        "category": "datastore",
+        "checks": [
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 2,
+              "line_start": 2,
+              "path": "requirements.txt",
+              "quote": "pymongo==4.6.1"
+            },
+            "reason": "requirements.txt:2-2@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-datastore-mongodb/e1"
+          },
+          {
+            "check_id": "G3",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 2,
+              "manifest_path": "requirements.txt",
+              "package": "pymongo",
+              "scope": null,
+              "version_spec": "==4.6.1"
+            },
+            "reason": "requirements.txt@c80cc5a0effc: pymongo ==4.6.1 at line 2 verified",
+            "status": "VERIFIED",
+            "subject": "UD-datastore-mongodb/e1"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "src/shop/legacy/catalog.py",
+              "quote": "from pymongo import MongoClient"
+            },
+            "reason": "src/shop/legacy/catalog.py:3-3@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-datastore-mongodb/e2"
+          },
+          {
+            "check_id": "G5",
+            "provenance": null,
+            "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+            "status": "VERIFIED",
+            "subject": "UD-datastore-mongodb"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 2,
+              "line_start": 2,
+              "path": "requirements.txt",
+              "quote": "pymongo==4.6.1"
+            },
+            "reason": "requirements.txt:2-2@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-datastore-mongodb/e1 introduced at c80cc5a0effc"
+          },
+          {
+            "check_id": "G5",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 2,
+              "line_start": 2,
+              "path": "requirements.txt",
+              "quote": "pymongo==4.6.1"
+            },
+            "reason": "e1 introduced at c80cc5a0effc: present in requirements.txt at the commit, absent at no parent(s), continuous up to the scanned commit",
+            "status": "VERIFIED",
+            "subject": "UD-datastore-mongodb"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "src/shop/legacy/catalog.py",
+              "quote": "from pymongo import MongoClient"
+            },
+            "reason": "src/shop/legacy/catalog.py:3-3@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-datastore-mongodb/e2 introduced at c80cc5a0effc"
+          },
+          {
+            "check_id": "G5",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "src/shop/legacy/catalog.py",
+              "quote": "from pymongo import MongoClient"
+            },
+            "reason": "e2 introduced at c80cc5a0effc: present in src/shop/legacy/catalog.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+            "status": "VERIFIED",
+            "subject": "UD-datastore-mongodb"
+          }
+        ],
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "evidence": [
+          {
+            "dependency": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 2,
+              "manifest_path": "requirements.txt",
+              "package": "pymongo",
+              "scope": null,
+              "version_spec": "==4.6.1"
+            },
+            "detail": "requirements.txt:2 declares pymongo ==4.6.1",
+            "id": "e1",
+            "kind": "dependency",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 2,
+              "line_start": 2,
+              "path": "requirements.txt",
+              "quote": "pymongo==4.6.1"
+            },
+            "relation": null,
+            "technology": "mongodb"
+          },
+          {
+            "dependency": null,
+            "detail": "src/shop/legacy/catalog.py:3 imports pymongo",
+            "id": "e2",
+            "kind": "import",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "src/shop/legacy/catalog.py",
+              "quote": "from pymongo import MongoClient"
+            },
+            "relation": null,
+            "technology": "mongodb"
+          }
+        ],
+        "grounding": "VERIFIED",
+        "id": "UD-datastore-mongodb",
+        "introducing_commits": [
+          "c80cc5a0effcd4597b75533195e1bbde44020a32"
+        ],
+        "introductions": [
+          {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "evidence_id": "e1",
+            "parents": [],
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 2,
+              "line_start": 2,
+              "path": "requirements.txt",
+              "quote": "pymongo==4.6.1"
+            }
+          },
+          {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "evidence_id": "e2",
+            "parents": [],
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 3,
+              "line_start": 3,
+              "path": "src/shop/legacy/catalog.py",
+              "quote": "from pymongo import MongoClient"
+            }
+          }
+        ],
+        "notes": [],
+        "reasons": [],
+        "searched_terms": [
+          "mongodb",
+          "mongo",
+          "mongo db",
+          "pymongo",
+          "pymongo.MongoClient"
+        ],
+        "status": "UNDOCUMENTED",
+        "technology": "mongodb",
+        "title": "Use Mongodb as datastore"
+      },
+      "record_id": "UD-datastore-mongodb",
+      "status": "DRAFT",
+      "technology": "mongodb",
+      "title": "Use Mongodb for datastore",
+      "written_path": null
+    },
+    {
+      "category": "queue",
+      "checks": [
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 6,
+            "line_start": 6,
+            "path": "requirements.txt",
+            "quote": "kafka-python==2.0.2"
+          },
+          "reason": "requirements.txt:6-6@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka/e1"
+        },
+        {
+          "check_id": "G3",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 6,
+            "manifest_path": "requirements.txt",
+            "package": "kafka-python",
+            "scope": null,
+            "version_spec": "==2.0.2"
+          },
+          "reason": "requirements.txt@c80cc5a0effc: kafka-python ==2.0.2 at line 6 verified",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka/e1"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/events.py",
+            "quote": "from kafka import KafkaProducer"
+          },
+          "reason": "src/shop/events.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka/e2"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 6,
+            "line_start": 6,
+            "path": "requirements.txt",
+            "quote": "kafka-python==2.0.2"
+          },
+          "reason": "requirements.txt:6-6@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka/e1 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 6,
+            "line_start": 6,
+            "path": "requirements.txt",
+            "quote": "kafka-python==2.0.2"
+          },
+          "reason": "e1 introduced at c80cc5a0effc: present in requirements.txt at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/events.py",
+            "quote": "from kafka import KafkaProducer"
+          },
+          "reason": "src/shop/events.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka/e2 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/events.py",
+            "quote": "from kafka import KafkaProducer"
+          },
+          "reason": "e2 introduced at c80cc5a0effc: present in src/shop/events.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "draft text is exactly the rendering of UD-queue-kafka",
+          "status": "VERIFIED",
+          "subject": "draft:UD-queue-kafka"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 6,
+            "line_start": 6,
+            "path": "requirements.txt",
+            "quote": "kafka-python==2.0.2"
+          },
+          "reason": "[e1] requirements.txt:6-6@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-queue-kafka"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/events.py",
+            "quote": "from kafka import KafkaProducer"
+          },
+          "reason": "[e2] src/shop/events.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-queue-kafka"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 6,
+            "line_start": 6,
+            "path": "requirements.txt",
+            "quote": "kafka-python==2.0.2"
+          },
+          "reason": "[e1] requirements.txt:6-6@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-queue-kafka"
+        },
+        {
+          "check_id": "G3",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 6,
+            "manifest_path": "requirements.txt",
+            "package": "kafka-python",
+            "scope": null,
+            "version_spec": "==2.0.2"
+          },
+          "reason": "[e1] requirements.txt@c80cc5a0effc: kafka-python ==2.0.2 at line 6 verified",
+          "status": "VERIFIED",
+          "subject": "draft:UD-queue-kafka"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/events.py",
+            "quote": "from kafka import KafkaProducer"
+          },
+          "reason": "[e2] src/shop/events.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "draft:UD-queue-kafka"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+          "status": "VERIFIED",
+          "subject": "draft:UD-queue-kafka"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "draft parses back with title 'Use Kafka for queue / message broker' and status 'proposed'",
+          "status": "VERIFIED",
+          "subject": "draft:UD-queue-kafka"
+        }
+      ],
+      "cited_commits": [
+        "c80cc5a0effcd4597b75533195e1bbde44020a32"
+      ],
+      "evidence_refs": [
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 6,
+          "line_start": 6,
+          "path": "requirements.txt",
+          "quote": "kafka-python==2.0.2"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 1,
+          "line_start": 1,
+          "path": "src/shop/events.py",
+          "quote": "from kafka import KafkaProducer"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 6,
+          "line_start": 6,
+          "path": "requirements.txt",
+          "quote": "kafka-python==2.0.2"
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "line_end": 1,
+          "line_start": 1,
+          "path": "src/shop/events.py",
+          "quote": "from kafka import KafkaProducer"
+        }
+      ],
+      "grounding": "VERIFIED",
+      "markdown": "---\nstatus: proposed (draft)\ndate: 2026-01-01\ndriftwarden-record: UD-queue-kafka\ndriftwarden-commit: c80cc5a0effcd4597b75533195e1bbde44020a32\n---\n\n# Use Kafka for queue / message broker\n\n## Context and Problem Statement\n\nThe code at commit `c80cc5a0effc` uses Kafka as queue / message broker: 2 production occurrences in 2 files, cited below. No ADR in this repository records that decision. Kafka was introduced by commit `c80cc5a0effc` (2026-01-01).\n\nThis draft was generated by DriftWarden from the repository history. Every commit and source line it cites was checked against the repository; the repository does not record why the choice was made, so the reasons are left as TODO items for the team to fill in before accepting it.\n\n## Considered Options\n\n* Kafka (in use)\n* TODO: confirm which alternatives were considered.\n\n## Decision Outcome\n\nChosen option: \"Kafka\", because TODO: confirm. The repository does not record the reasons.\n\n### Consequences\n\n* TODO: confirm the good and bad consequences of this choice.\n\n## More Information\n\n### Introducing commits\n\n- Commit `c80cc5a0effcd4597b75533195e1bbde44020a32`, 2026-01-01: `fixture`\n\n### Where it was introduced\n\n- [e1] `requirements.txt` lines 6-6 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, introduced:\n\n```text\nkafka-python==2.0.2\n```\n\n- [e2] `src/shop/events.py` lines 1-1 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, introduced:\n\n```text\nfrom kafka import KafkaProducer\n```\n\n### Where it is used at `c80cc5a0effc`\n\n- [e1] `requirements.txt` lines 6-6 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, `dependency` `kafka-python` `==2.0.2` (`pypi`):\n\n```text\nkafka-python==2.0.2\n```\n\n- [e2] `src/shop/events.py` lines 1-1 at `c80cc5a0effcd4597b75533195e1bbde44020a32`, `import`:\n\n```text\nfrom kafka import KafkaProducer\n```\n",
+      "notes": [],
+      "number": 10,
+      "origin": "template",
+      "path": "docs/adr/0010-use-kafka-for-queue.md",
+      "reasons": [],
+      "record": {
+        "category": "queue",
+        "checks": [
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 6,
+              "line_start": 6,
+              "path": "requirements.txt",
+              "quote": "kafka-python==2.0.2"
+            },
+            "reason": "requirements.txt:6-6@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-queue-kafka/e1"
+          },
+          {
+            "check_id": "G3",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 6,
+              "manifest_path": "requirements.txt",
+              "package": "kafka-python",
+              "scope": null,
+              "version_spec": "==2.0.2"
+            },
+            "reason": "requirements.txt@c80cc5a0effc: kafka-python ==2.0.2 at line 6 verified",
+            "status": "VERIFIED",
+            "subject": "UD-queue-kafka/e1"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/events.py",
+              "quote": "from kafka import KafkaProducer"
+            },
+            "reason": "src/shop/events.py:1-1@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-queue-kafka/e2"
+          },
+          {
+            "check_id": "G5",
+            "provenance": null,
+            "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+            "status": "VERIFIED",
+            "subject": "UD-queue-kafka"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 6,
+              "line_start": 6,
+              "path": "requirements.txt",
+              "quote": "kafka-python==2.0.2"
+            },
+            "reason": "requirements.txt:6-6@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-queue-kafka/e1 introduced at c80cc5a0effc"
+          },
+          {
+            "check_id": "G5",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 6,
+              "line_start": 6,
+              "path": "requirements.txt",
+              "quote": "kafka-python==2.0.2"
+            },
+            "reason": "e1 introduced at c80cc5a0effc: present in requirements.txt at the commit, absent at no parent(s), continuous up to the scanned commit",
+            "status": "VERIFIED",
+            "subject": "UD-queue-kafka"
+          },
+          {
+            "check_id": "G2",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/events.py",
+              "quote": "from kafka import KafkaProducer"
+            },
+            "reason": "src/shop/events.py:1-1@c80cc5a0effc: quote found in range",
+            "status": "VERIFIED",
+            "subject": "UD-queue-kafka/e2 introduced at c80cc5a0effc"
+          },
+          {
+            "check_id": "G5",
+            "provenance": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/events.py",
+              "quote": "from kafka import KafkaProducer"
+            },
+            "reason": "e2 introduced at c80cc5a0effc: present in src/shop/events.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+            "status": "VERIFIED",
+            "subject": "UD-queue-kafka"
+          }
+        ],
+        "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+        "evidence": [
+          {
+            "dependency": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "ecosystem": "pypi",
+              "line": 6,
+              "manifest_path": "requirements.txt",
+              "package": "kafka-python",
+              "scope": null,
+              "version_spec": "==2.0.2"
+            },
+            "detail": "requirements.txt:6 declares kafka-python ==2.0.2",
+            "id": "e1",
+            "kind": "dependency",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 6,
+              "line_start": 6,
+              "path": "requirements.txt",
+              "quote": "kafka-python==2.0.2"
+            },
+            "relation": null,
+            "technology": "kafka"
+          },
+          {
+            "dependency": null,
+            "detail": "src/shop/events.py:1 imports kafka",
+            "id": "e2",
+            "kind": "import",
+            "production": true,
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/events.py",
+              "quote": "from kafka import KafkaProducer"
+            },
+            "relation": null,
+            "technology": "kafka"
+          }
+        ],
+        "grounding": "VERIFIED",
+        "id": "UD-queue-kafka",
+        "introducing_commits": [
+          "c80cc5a0effcd4597b75533195e1bbde44020a32"
+        ],
+        "introductions": [
+          {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "evidence_id": "e1",
+            "parents": [],
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 6,
+              "line_start": 6,
+              "path": "requirements.txt",
+              "quote": "kafka-python==2.0.2"
+            }
+          },
+          {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "evidence_id": "e2",
+            "parents": [],
+            "ref": {
+              "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+              "line_end": 1,
+              "line_start": 1,
+              "path": "src/shop/events.py",
+              "quote": "from kafka import KafkaProducer"
+            }
+          }
+        ],
+        "notes": [],
+        "reasons": [],
+        "searched_terms": [
+          "kafka",
+          "apache kafka",
+          "redpanda",
+          "kafka-python",
+          "kafka.KafkaProducer"
+        ],
+        "status": "UNDOCUMENTED",
+        "technology": "kafka",
+        "title": "Use Kafka as queue / message broker"
+      },
+      "record_id": "UD-queue-kafka",
+      "status": "DRAFT",
+      "technology": "kafka",
+      "title": "Use Kafka for queue / message broker",
+      "written_path": null
+    }
+  ],
+  "grounding_summary": {
+    "by_check": {
+      "G1": {
+        "mismatch": 1,
+        "pass_rate": 0.9230769230769231,
+        "total": 13,
+        "verified": 12
+      },
+      "G2": {
+        "mismatch": 2,
+        "pass_rate": 0.9607843137254902,
+        "total": 51,
+        "verified": 49
+      },
+      "G3": {
+        "mismatch": 0,
+        "pass_rate": 1.0,
+        "total": 13,
+        "verified": 13
+      },
+      "G4": {
+        "mismatch": 0,
+        "pass_rate": null,
+        "total": 0,
+        "verified": 0
+      },
+      "G5": {
+        "mismatch": 0,
+        "pass_rate": 1.0,
+        "total": 29,
+        "verified": 29
+      },
+      "G6": {
+        "mismatch": 0,
+        "pass_rate": null,
+        "total": 0,
+        "verified": 0
+      }
+    },
+    "mismatch": 3,
+    "pass_rate": 0.9716981132075472,
+    "total": 106,
+    "verified": 103
+  },
+  "metadata": {
+    "changed_paths": null,
+    "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+    "draft_adrs": true,
+    "mode": "offline",
+    "model": null,
+    "provider": null,
+    "repo": "pyshop",
+    "requested_mode": "offline",
+    "scanned_at": "2026-10-29T00:00:00Z",
+    "schema_version": 1,
+    "tool": "driftwarden",
+    "tool_version": "0.0.1"
+  },
+  "notes": [],
+  "summary": {
+    "by_status": {
+      "DRIFTING": 0,
+      "HOLDING": 1,
+      "UNKNOWN": 2,
+      "VIOLATED": 3
+    },
+    "claims": 6,
+    "claims_judged": 6,
+    "could_not_verify": 4,
+    "decisions": 7,
+    "decisions_judged": 6,
+    "drafts": 3,
+    "drift_score": 0.75,
+    "exit_code": 3,
+    "undocumented": 3,
+    "unknown": 2
+  },
+  "timeline": [],
+  "undocumented": [
+    {
+      "category": "cloud-sdk",
+      "checks": [
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "requirements.txt",
+            "quote": "boto3==1.34.0"
+          },
+          "reason": "requirements.txt:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e1"
+        },
+        {
+          "check_id": "G3",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 3,
+            "manifest_path": "requirements.txt",
+            "package": "boto3",
+            "scope": null,
+            "version_spec": "==1.34.0"
+          },
+          "reason": "requirements.txt@c80cc5a0effc: boto3 ==1.34.0 at line 3 verified",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e1"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/adapters/storage.py",
+            "quote": "import boto3"
+          },
+          "reason": "src/shop/adapters/storage.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e2"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 5,
+            "line_start": 5,
+            "path": "src/shop/reports.py",
+            "quote": "import boto3  # TODO: move behind the storage adapter"
+          },
+          "reason": "src/shop/reports.py:5-5@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e3"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "requirements.txt",
+            "quote": "boto3==1.34.0"
+          },
+          "reason": "requirements.txt:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e1 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "requirements.txt",
+            "quote": "boto3==1.34.0"
+          },
+          "reason": "e1 introduced at c80cc5a0effc: present in requirements.txt at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/adapters/storage.py",
+            "quote": "import boto3"
+          },
+          "reason": "src/shop/adapters/storage.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e2 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/adapters/storage.py",
+            "quote": "import boto3"
+          },
+          "reason": "e2 introduced at c80cc5a0effc: present in src/shop/adapters/storage.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 5,
+            "line_start": 5,
+            "path": "src/shop/reports.py",
+            "quote": "import boto3  # TODO: move behind the storage adapter"
+          },
+          "reason": "src/shop/reports.py:5-5@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk/e3 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 5,
+            "line_start": 5,
+            "path": "src/shop/reports.py",
+            "quote": "import boto3  # TODO: move behind the storage adapter"
+          },
+          "reason": "e3 introduced at c80cc5a0effc: present in src/shop/reports.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-cloud-sdk-aws-sdk"
+        }
+      ],
+      "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+      "evidence": [
+        {
+          "dependency": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 3,
+            "manifest_path": "requirements.txt",
+            "package": "boto3",
+            "scope": null,
+            "version_spec": "==1.34.0"
+          },
+          "detail": "requirements.txt:3 declares boto3 ==1.34.0",
+          "id": "e1",
+          "kind": "dependency",
+          "production": true,
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "requirements.txt",
+            "quote": "boto3==1.34.0"
+          },
+          "relation": null,
+          "technology": "aws-sdk"
+        },
+        {
+          "dependency": null,
+          "detail": "src/shop/adapters/storage.py:1 imports boto3",
+          "id": "e2",
+          "kind": "import",
+          "production": true,
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/adapters/storage.py",
+            "quote": "import boto3"
+          },
+          "relation": null,
+          "technology": "aws-sdk"
+        },
+        {
+          "dependency": null,
+          "detail": "src/shop/reports.py:5 imports boto3",
+          "id": "e3",
+          "kind": "import",
+          "production": true,
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 5,
+            "line_start": 5,
+            "path": "src/shop/reports.py",
+            "quote": "import boto3  # TODO: move behind the storage adapter"
+          },
+          "relation": null,
+          "technology": "aws-sdk"
+        }
+      ],
+      "grounding": "VERIFIED",
+      "id": "UD-cloud-sdk-aws-sdk",
+      "introducing_commits": [
+        "c80cc5a0effcd4597b75533195e1bbde44020a32"
+      ],
+      "introductions": [
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "evidence_id": "e1",
+          "parents": [],
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "requirements.txt",
+            "quote": "boto3==1.34.0"
+          }
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "evidence_id": "e2",
+          "parents": [],
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/adapters/storage.py",
+            "quote": "import boto3"
+          }
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "evidence_id": "e3",
+          "parents": [],
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 5,
+            "line_start": 5,
+            "path": "src/shop/reports.py",
+            "quote": "import boto3  # TODO: move behind the storage adapter"
+          }
+        }
+      ],
+      "notes": [],
+      "reasons": [],
+      "searched_terms": [
+        "aws-sdk",
+        "aws sdk",
+        "aws",
+        "amazon web services",
+        "boto",
+        "boto3"
+      ],
+      "status": "UNDOCUMENTED",
+      "technology": "aws-sdk",
+      "title": "Use Aws Sdk as cloud SDK"
+    },
+    {
+      "category": "datastore",
+      "checks": [
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 2,
+            "line_start": 2,
+            "path": "requirements.txt",
+            "quote": "pymongo==4.6.1"
+          },
+          "reason": "requirements.txt:2-2@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb/e1"
+        },
+        {
+          "check_id": "G3",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 2,
+            "manifest_path": "requirements.txt",
+            "package": "pymongo",
+            "scope": null,
+            "version_spec": "==4.6.1"
+          },
+          "reason": "requirements.txt@c80cc5a0effc: pymongo ==4.6.1 at line 2 verified",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb/e1"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "src/shop/legacy/catalog.py",
+            "quote": "from pymongo import MongoClient"
+          },
+          "reason": "src/shop/legacy/catalog.py:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb/e2"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 2,
+            "line_start": 2,
+            "path": "requirements.txt",
+            "quote": "pymongo==4.6.1"
+          },
+          "reason": "requirements.txt:2-2@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb/e1 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 2,
+            "line_start": 2,
+            "path": "requirements.txt",
+            "quote": "pymongo==4.6.1"
+          },
+          "reason": "e1 introduced at c80cc5a0effc: present in requirements.txt at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "src/shop/legacy/catalog.py",
+            "quote": "from pymongo import MongoClient"
+          },
+          "reason": "src/shop/legacy/catalog.py:3-3@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb/e2 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "src/shop/legacy/catalog.py",
+            "quote": "from pymongo import MongoClient"
+          },
+          "reason": "e2 introduced at c80cc5a0effc: present in src/shop/legacy/catalog.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-datastore-mongodb"
+        }
+      ],
+      "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+      "evidence": [
+        {
+          "dependency": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 2,
+            "manifest_path": "requirements.txt",
+            "package": "pymongo",
+            "scope": null,
+            "version_spec": "==4.6.1"
+          },
+          "detail": "requirements.txt:2 declares pymongo ==4.6.1",
+          "id": "e1",
+          "kind": "dependency",
+          "production": true,
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 2,
+            "line_start": 2,
+            "path": "requirements.txt",
+            "quote": "pymongo==4.6.1"
+          },
+          "relation": null,
+          "technology": "mongodb"
+        },
+        {
+          "dependency": null,
+          "detail": "src/shop/legacy/catalog.py:3 imports pymongo",
+          "id": "e2",
+          "kind": "import",
+          "production": true,
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "src/shop/legacy/catalog.py",
+            "quote": "from pymongo import MongoClient"
+          },
+          "relation": null,
+          "technology": "mongodb"
+        }
+      ],
+      "grounding": "VERIFIED",
+      "id": "UD-datastore-mongodb",
+      "introducing_commits": [
+        "c80cc5a0effcd4597b75533195e1bbde44020a32"
+      ],
+      "introductions": [
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "evidence_id": "e1",
+          "parents": [],
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 2,
+            "line_start": 2,
+            "path": "requirements.txt",
+            "quote": "pymongo==4.6.1"
+          }
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "evidence_id": "e2",
+          "parents": [],
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 3,
+            "line_start": 3,
+            "path": "src/shop/legacy/catalog.py",
+            "quote": "from pymongo import MongoClient"
+          }
+        }
+      ],
+      "notes": [],
+      "reasons": [],
+      "searched_terms": [
+        "mongodb",
+        "mongo",
+        "mongo db",
+        "pymongo",
+        "pymongo.MongoClient"
+      ],
+      "status": "UNDOCUMENTED",
+      "technology": "mongodb",
+      "title": "Use Mongodb as datastore"
+    },
+    {
+      "category": "queue",
+      "checks": [
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 6,
+            "line_start": 6,
+            "path": "requirements.txt",
+            "quote": "kafka-python==2.0.2"
+          },
+          "reason": "requirements.txt:6-6@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka/e1"
+        },
+        {
+          "check_id": "G3",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 6,
+            "manifest_path": "requirements.txt",
+            "package": "kafka-python",
+            "scope": null,
+            "version_spec": "==2.0.2"
+          },
+          "reason": "requirements.txt@c80cc5a0effc: kafka-python ==2.0.2 at line 6 verified",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka/e1"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/events.py",
+            "quote": "from kafka import KafkaProducer"
+          },
+          "reason": "src/shop/events.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka/e2"
+        },
+        {
+          "check_id": "G5",
+          "provenance": null,
+          "reason": "c80cc5a0effc: commit exists and is in the history of c80cc5a0effc",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 6,
+            "line_start": 6,
+            "path": "requirements.txt",
+            "quote": "kafka-python==2.0.2"
+          },
+          "reason": "requirements.txt:6-6@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka/e1 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 6,
+            "line_start": 6,
+            "path": "requirements.txt",
+            "quote": "kafka-python==2.0.2"
+          },
+          "reason": "e1 introduced at c80cc5a0effc: present in requirements.txt at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka"
+        },
+        {
+          "check_id": "G2",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/events.py",
+            "quote": "from kafka import KafkaProducer"
+          },
+          "reason": "src/shop/events.py:1-1@c80cc5a0effc: quote found in range",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka/e2 introduced at c80cc5a0effc"
+        },
+        {
+          "check_id": "G5",
+          "provenance": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/events.py",
+            "quote": "from kafka import KafkaProducer"
+          },
+          "reason": "e2 introduced at c80cc5a0effc: present in src/shop/events.py at the commit, absent at no parent(s), continuous up to the scanned commit",
+          "status": "VERIFIED",
+          "subject": "UD-queue-kafka"
+        }
+      ],
+      "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+      "evidence": [
+        {
+          "dependency": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "ecosystem": "pypi",
+            "line": 6,
+            "manifest_path": "requirements.txt",
+            "package": "kafka-python",
+            "scope": null,
+            "version_spec": "==2.0.2"
+          },
+          "detail": "requirements.txt:6 declares kafka-python ==2.0.2",
+          "id": "e1",
+          "kind": "dependency",
+          "production": true,
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 6,
+            "line_start": 6,
+            "path": "requirements.txt",
+            "quote": "kafka-python==2.0.2"
+          },
+          "relation": null,
+          "technology": "kafka"
+        },
+        {
+          "dependency": null,
+          "detail": "src/shop/events.py:1 imports kafka",
+          "id": "e2",
+          "kind": "import",
+          "production": true,
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/events.py",
+            "quote": "from kafka import KafkaProducer"
+          },
+          "relation": null,
+          "technology": "kafka"
+        }
+      ],
+      "grounding": "VERIFIED",
+      "id": "UD-queue-kafka",
+      "introducing_commits": [
+        "c80cc5a0effcd4597b75533195e1bbde44020a32"
+      ],
+      "introductions": [
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "evidence_id": "e1",
+          "parents": [],
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 6,
+            "line_start": 6,
+            "path": "requirements.txt",
+            "quote": "kafka-python==2.0.2"
+          }
+        },
+        {
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "evidence_id": "e2",
+          "parents": [],
+          "ref": {
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "line_end": 1,
+            "line_start": 1,
+            "path": "src/shop/events.py",
+            "quote": "from kafka import KafkaProducer"
+          }
+        }
+      ],
+      "notes": [],
+      "reasons": [],
+      "searched_terms": [
+        "kafka",
+        "apache kafka",
+        "redpanda",
+        "kafka-python",
+        "kafka.KafkaProducer"
+      ],
+      "status": "UNDOCUMENTED",
+      "technology": "kafka",
+      "title": "Use Kafka as queue / message broker"
+    }
+  ],
+  "unverified_claims": []
+}
