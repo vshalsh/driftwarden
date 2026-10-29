@@ -1,3 +1,4 @@
+# ruff: noqa: E501  (long literal regexes and HTML fragments in assertions)
 """L-013 system tests (independent): the self-contained HTML report.
 
 Black-box on ``render_html`` / the CLI, driven through real Chromium (Playwright) for the
@@ -9,7 +10,6 @@ determinism. Run serially; never the full suite.
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import os
 import random
@@ -29,29 +29,25 @@ import pytest
 from typer.testing import CliRunner
 
 sys.path.insert(0, str(Path(__file__).parent))
-from conftest import GIT_ENV  # noqa: E402
 from driftwarden.cli import app  # noqa: E402
 from driftwarden.report import render_markdown  # noqa: E402
 from driftwarden.report.html import PROJECT_URL, render_html  # noqa: E402
 from driftwarden.report.model import Report  # noqa: E402
 from test_l012_system import (  # noqa: E402
-    FIXTURES,
-    claim_of,
-    clone_claim,
-    fx,
-    gen_report,
-    git_run,
-    inject,
-    make_pyshop,
-    md_sections,
-    path_payload,
-    rep,
-    subst,
-    violated,
     _delete_g2,
     _edit_path,
     _fake_claim,
     _flip_mismatch,
+    claim_of,
+    clone_claim,
+    fx,
+    gen_report,
+    inject,
+    make_pyshop,
+    path_payload,
+    rep,
+    subst,
+    violated,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -231,14 +227,22 @@ def md_facts(md: str) -> dict:
                 pairs.add((key, _unesc(m.group(1)), None))
         elif key == "cnv":
             for m in re.finditer(r"^- \*\*(\S+) (.+?)\*\*(.*)$", body, flags=re.M):
-                tag = "in" if "in this change" in m.group(3) else (
-                    "before" if "present before this change" in m.group(3) else None)
+                tag = (
+                    "in"
+                    if "in this change" in m.group(3)
+                    else ("before" if "present before this change" in m.group(3) else None)
+                )
                 pairs.add((key, _unesc(m.group(2)), tag))
         else:
             for m in re.finditer(r"^- \*\*(.+?)\*\* \((.*)$", body, flags=re.M):
                 rest = m.group(2)
-                tag = "in" if rest.rstrip().endswith("**in this change**") else (
-                    "before" if rest.rstrip().endswith("present before this change") else None)
+                tag = (
+                    "in"
+                    if rest.rstrip().endswith("**in this change**")
+                    else (
+                        "before" if rest.rstrip().endswith("present before this change") else None
+                    )
+                )
                 pairs.add((key, _unesc(m.group(1)), tag))
     score = re.search(r"\| Drift score \| (\S+) \|", md)
     return {
@@ -286,10 +290,18 @@ def html_facts(html: str) -> dict:
         for li in re.findall(r'<li class="dw-row.*?</li>', _section(html, sid), re.S):
             cid = re.search(r'<code class="dw-mono">(.*?)</code>', li, re.S)
             pairs.add((sid, unescape(cid.group(1)), tag_of(li.split('<code class="dw-mono">')[0])))
-    for card in re.findall(r'<article class="dw-card.*?</article>', _section(html, "could-not-verify"), re.S):
-        h = re.search(r'<h3[^>]*><span class="dw-kind">(.*?)</span> <span class="dw-mono dw-id">(.*?)</span>', card, re.S)
+    for card in re.findall(
+        r'<article class="dw-card.*?</article>', _section(html, "could-not-verify"), re.S
+    ):
+        h = re.search(
+            r'<h3[^>]*><span class="dw-kind">(.*?)</span> <span class="dw-mono dw-id">(.*?)</span>',
+            card,
+            re.S,
+        )
         pairs.add(("cnv", unescape(h.group(2)), tag_of(card.split("<h3")[0])))
-    for card in re.findall(r'<article class="dw-card.*?</article>', _section(html, "undocumented"), re.S):
+    for card in re.findall(
+        r'<article class="dw-card.*?</article>', _section(html, "undocumented"), re.S
+    ):
         h = re.search(r'<h3[^>]*><span class="dw-mono dw-id">(.*?)</span>', card, re.S)
         pairs.add(("undocumented", unescape(h.group(1)), None))
     score = re.search(r'<strong class="dw-score__value">(.*?)</strong>', html)
@@ -297,7 +309,9 @@ def html_facts(html: str) -> dict:
         "pairs": pairs,
         "counts": counts,
         "score": None if score.group(1) == "n/a" else float(score.group(1)[:-1]),
-        "exit": int(re.search(r"<dt>Exit code</dt><dd><code class=\"dw-mono\">(\d+)</code>", html).group(1)),
+        "exit": int(
+            re.search(r"<dt>Exit code</dt><dd><code class=\"dw-mono\">(\d+)</code>", html).group(1)
+        ),
         "drafts": html.count('class="dw-draft"'),
         "notes": len(re.findall(r"<li>", _section(html, "notes"))),
     }
@@ -308,8 +322,10 @@ def parity_problems(report: Report, link_base=None, score: bool = True) -> list[
     ht = html_facts(render_html(report, link_base=link_base))
     out: list[str] = []
     if md["pairs"] != ht["pairs"]:
-        out.append(f"(section,id,change) md-only={sorted(md['pairs'] - ht['pairs'], key=str)} "
-                   f"html-only={sorted(ht['pairs'] - md['pairs'], key=str)}")
+        out.append(
+            f"(section,id,change) md-only={sorted(md['pairs'] - ht['pairs'], key=str)} "
+            f"html-only={sorted(ht['pairs'] - md['pairs'], key=str)}"
+        )
     if md["counts"] != ht["counts"]:
         out.append(f"counts md={md['counts']} html={ht['counts']}")
     ms, hs = md["score"], ht["score"]
@@ -336,8 +352,12 @@ def browser():
     try:
         b = pw.chromium.launch(
             executable_path=exe if Path(exe).exists() else None,
-            args=["--disable-background-networking", "--no-first-run", "--disable-sync",
-                  "--disable-dev-shm-usage"],
+            args=[
+                "--disable-background-networking",
+                "--no-first-run",
+                "--disable-sync",
+                "--disable-dev-shm-usage",
+            ],
         )
     except Exception as e:  # noqa: BLE001
         pw.stop()
@@ -366,14 +386,22 @@ def long_file(tmp_path_factory):
 class Opened:
     def __init__(self, ctx, page, errors, requests, dialogs):
         self.ctx, self.page, self.errors, self.requests, self.dialogs = (
-            ctx, page, errors, requests, dialogs)
+            ctx,
+            page,
+            errors,
+            requests,
+            dialogs,
+        )
 
 
 @contextmanager
-def opened(browser, path: Path, width=1280, scheme="light", js=True, offline=False, name="x",
-           height=900):
+def opened(
+    browser, path: Path, width=1280, scheme="light", js=True, offline=False, name="x", height=900
+):
     ctx = browser.new_context(
-        viewport={"width": width, "height": height}, color_scheme=scheme, java_script_enabled=js,
+        viewport={"width": width, "height": height},
+        color_scheme=scheme,
+        java_script_enabled=js,
         offline=offline,
     )
     page = ctx.new_page()
@@ -392,8 +420,9 @@ def opened(browser, path: Path, width=1280, scheme="light", js=True, offline=Fal
     except BaseException:
         ARTIFACTS.mkdir(exist_ok=True)
         try:
-            page.screenshot(path=str(ARTIFACTS / f"l013sys-FAIL-{name}-{scheme}-{width}.png"),
-                            full_page=True)
+            page.screenshot(
+                path=str(ARTIFACTS / f"l013sys-FAIL-{name}-{scheme}-{width}.png"), full_page=True
+            )
         except Exception:  # noqa: BLE001
             pass
         raise
@@ -527,7 +556,9 @@ def _contrast_all(browser, rich_file) -> dict:
                 o.page.evaluate(f"document.documentElement.setAttribute('data-theme','{forced}')")
             body_bg = o.page.evaluate("getComputedStyle(document.body).backgroundColor")
             assert body_bg == ("rgb(14, 18, 23)" if theme == "dark" else "rgb(255, 255, 255)"), (
-                label, body_bg)
+                label,
+                body_bg,
+            )
             res = contrast_scan(o.page)
             focus = collect_focus(o.page)
         for t in res["text"]:
@@ -537,30 +568,44 @@ def _contrast_all(browser, rich_file) -> dict:
             if cur is None or t["ratio"] < cur[0]:
                 lowest[theme] = (t["ratio"], t["key"], t["fg"], t["bg"], t["sample"], label)
             if t["ratio"] < need:
-                problems.append(f"[{label}] text {t['key']} '{t['sample']}' {t['fg']} on {t['bg']} = "
-                                f"{t['ratio']:.2f} < {need}")
+                problems.append(
+                    f"[{label}] text {t['key']} '{t['sample']}' {t['fg']} on {t['bg']} = "
+                    f"{t['ratio']:.2f} < {need}"
+                )
         for p in res["placeholder"]:
             if p["ratio"] < 4.5:
-                problems.append(f"[{label}] placeholder {p['key']} {p['fg']} on {p['bg']} = {p['ratio']:.2f}")
+                problems.append(
+                    f"[{label}] placeholder {p['key']} {p['fg']} on {p['bg']} = {p['ratio']:.2f}"
+                )
         for u in res["ui"]:
             comp = re.search(r"dw-(badge|change|btn|chip|ground)|^input|^button", u["key"])
             if comp and u["ratio"] < 3.0:
-                border_problems.append(f"[{label}] border of {u['key']} {u['color']} on {u['bg']} = {u['ratio']:.2f} < 3")
+                border_problems.append(
+                    f"[{label}] border of {u['key']} {u['color']} on {u['bg']} = {u['ratio']:.2f} < 3"
+                )
         for f in focus:
             if f["style"] == "none" or f["width"] <= 0:
                 problems.append(f"[{label}] no visible focus ring on {f['key']}")
             elif min(f["ratio"], f["ratioInside"]) < 3.0:
-                problems.append(f"[{label}] focus ring {f['key']} {f['color']} = "
-                                f"{min(f['ratio'], f['ratioInside']):.2f} < 3")
+                problems.append(
+                    f"[{label}] focus ring {f['key']} {f['color']} = "
+                    f"{min(f['ratio'], f['ratioInside']):.2f} < 3"
+                )
         report[label] = {"text": res["text"], "ui": res["ui"], "focus": focus}
     ARTIFACTS.mkdir(exist_ok=True)
     (ARTIFACTS / "l013sys-contrast.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     for theme in ("light", "dark"):
         r = lowest[theme]
-        print(f"\nLOWEST {theme}: {r[0]:.2f}:1  {r[1]}  '{r[4]}' fg={r[2]} bg={r[3]} ({r[5]}); "
-              f"{n_checked[theme]} distinct text pairs")
-    CONTRAST_RESULTS["all"] = {"problems": problems, "borders": border_problems,
-                               "n": n_checked, "report": report}
+        print(
+            f"\nLOWEST {theme}: {r[0]:.2f}:1  {r[1]}  '{r[4]}' fg={r[2]} bg={r[3]} ({r[5]}); "
+            f"{n_checked[theme]} distinct text pairs"
+        )
+    CONTRAST_RESULTS["all"] = {
+        "problems": problems,
+        "borders": border_problems,
+        "n": n_checked,
+        "report": report,
+    }
     return CONTRAST_RESULTS["all"]
 
 
@@ -570,9 +615,20 @@ def test_wcag_aa_text_and_focus_contrast_in_both_themes(browser, rich_file):
     assert n_checked["light"] > 25 and n_checked["dark"] > 25
     # every element type the brief names was actually measured
     keys = " ".join(t["key"] for t in report["light"]["text"])
-    for needle in ("dw-badge--violated", "dw-badge--drifting", "dw-badge--holding",
-                   "dw-badge--unknown", "dw-badge--unverified", "dw-badge--undocumented",
-                   "dw-change", "th", "code", "a", "dw-card--unverified", "dw-ground"):
+    for needle in (
+        "dw-badge--violated",
+        "dw-badge--drifting",
+        "dw-badge--holding",
+        "dw-badge--unknown",
+        "dw-badge--unverified",
+        "dw-badge--undocumented",
+        "dw-change",
+        "th",
+        "code",
+        "a",
+        "dw-card--unverified",
+        "dw-ground",
+    ):
         assert needle in keys, needle
     assert not problems, "\n".join(problems)
 
@@ -604,8 +660,18 @@ def test_offline_zero_requests_no_console_errors_all_sections(browser, rich_file
             assert others == [], others
             assert o.errors == [], o.errors
             assert o.dialogs == []
-            for sid in ("violated", "drifting", "could-not-verify", "undocumented", "holding",
-                        "unknown", "not-judged", "timeline", "grounding", "notes"):
+            for sid in (
+                "violated",
+                "drifting",
+                "could-not-verify",
+                "undocumented",
+                "holding",
+                "unknown",
+                "not-judged",
+                "timeline",
+                "grounding",
+                "notes",
+            ):
                 assert o.page.locator(f"#{sid}").count() == 1, sid
                 assert o.page.locator(f"#{sid}").is_visible(), sid
             assert o.page.locator("h1").inner_text().strip() == "pyshop"
@@ -614,7 +680,9 @@ def test_offline_zero_requests_no_console_errors_all_sections(browser, rich_file
 def test_offline_network_aborted_by_route(browser, rich_file):
     ctx = browser.new_context()
     hits: list[str] = []
-    ctx.route(re.compile(r"^(?!file:)"), lambda route: (hits.append(route.request.url), route.abort()))
+    ctx.route(
+        re.compile(r"^(?!file:)"), lambda route: (hits.append(route.request.url), route.abort())
+    )
     page = ctx.new_page()
     errors = []
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
@@ -637,16 +705,24 @@ def test_source_has_no_external_references_or_css_urls():
     assert "@import" not in html
     assert "url(" not in html
     d = Doc(html)
-    assert not [t for t, a in d.tags if t in ("link", "iframe", "object", "embed", "img", "form",
-                                               "base", "audio", "video", "source")]
+    assert not [
+        t
+        for t, a in d.tags
+        if t
+        in ("link", "iframe", "object", "embed", "img", "form", "base", "audio", "video", "source")
+    ]
     for t, a in d.tags:
         for k, v in a.items():
             if k in ("src", "srcset", "action", "poster", "data", "formaction"):
                 pytest.fail(f"<{t} {k}={v}>")
-    csp = [a["content"] for t, a in d.tags if t == "meta" and a.get("http-equiv", "").lower()
-           == "content-security-policy"]
-    assert csp == ["default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
-                   "img-src data:"]
+    csp = [
+        a["content"]
+        for t, a in d.tags
+        if t == "meta" and a.get("http-equiv", "").lower() == "content-security-policy"
+    ]
+    assert csp == [
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:"
+    ]
     # github blob link_base is the only other allowed origin
     blob = "https://github.com/vshalsh/driftwarden/blob/" + SHA
     html2 = render_html(rich_report(), link_base=blob)
@@ -664,10 +740,13 @@ def test_no_horizontal_overflow_with_long_path_snippet_title(browser, long_file,
     with opened(browser, long_file, width, scheme, name="long") as o:
         info = o.page.evaluate(
             "({sw: document.documentElement.scrollWidth, iw: window.innerWidth,"
-            " bw: document.body.scrollWidth})")
+            " bw: document.body.scrollWidth})"
+        )
         assert info["sw"] <= info["iw"], info
         o.page.evaluate("document.querySelectorAll('details').forEach(d => d.open = true)")
-        info = o.page.evaluate("({sw: document.documentElement.scrollWidth, iw: window.innerWidth})")
+        info = o.page.evaluate(
+            "({sw: document.documentElement.scrollWidth, iw: window.innerWidth})"
+        )
         assert info["sw"] <= info["iw"], ("details opened", info)
         # the long content is really on the page (not silently dropped)
         txt = o.page.content()
@@ -680,8 +759,10 @@ def test_no_horizontal_overflow_of_the_rich_report_and_zoom(browser, rich_file, 
     with opened(browser, rich_file, width, "dark", name="rich-overflow") as o:
         assert o.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         # WCAG reflow: 400% zoom at 1280 == 320 css px; also check text spacing is not clipped
-        o.page.add_style_tag(content="*{line-height:1.5!important;letter-spacing:.12em!important;"
-                                     "word-spacing:.16em!important}")
+        o.page.add_style_tag(
+            content="*{line-height:1.5!important;letter-spacing:.12em!important;"
+            "word-spacing:.16em!important}"
+        )
         assert o.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
@@ -696,13 +777,18 @@ def _gen_parity_reports() -> list[tuple[str, Report]]:
         d = json.loads(r.model_dump_json())
         # every status for sure, in a few reports
         if d["claims"] and seed % 4 == 0:
-            for c, st in zip(d["claims"], ["VIOLATED", "DRIFTING", "HOLDING", "UNKNOWN"]):
+            for c, st in zip(
+                d["claims"], ["VIOLATED", "DRIFTING", "HOLDING", "UNKNOWN"], strict=False
+            ):
                 c["verdict"]["status"] = st
         # undocumented records and drafts: keep a random subset (0..3) of the golden ones
         keep = rng.randint(0, 3)
         d["undocumented"] = d["undocumented"][:keep]
-        d["drafts"] = [x for x in d["drafts"] if x["id"] in {u["id"] for u in d["undocumented"]}] \
-            if d["drafts"] and "id" in d["drafts"][0] else d["drafts"][:keep]
+        d["drafts"] = (
+            [x for x in d["drafts"] if x["id"] in {u["id"] for u in d["undocumented"]}]
+            if d["drafts"] and "id" in d["drafts"][0]
+            else d["drafts"][:keep]
+        )
         # PR mode: in_change true / false / None mixture, changed paths set or not
         d["metadata"]["changed_paths"] = ["a.py", "b.py"] if seed % 3 else None
         if seed % 3 == 0:
@@ -715,12 +801,29 @@ def _gen_parity_reports() -> list[tuple[str, Report]]:
     # the untouched fixture and the rich one
     out.append(("golden", rep(fx())))
     out.append(("rich", rich_report()))
-    out.append(("empty", rep(resum({**fx(), "claims": [], "could_not_verify": [],
-                                    "undocumented": [], "drafts": [], "decisions": []}))))
+    out.append(
+        (
+            "empty",
+            rep(
+                resum(
+                    {
+                        **fx(),
+                        "claims": [],
+                        "could_not_verify": [],
+                        "undocumented": [],
+                        "drafts": [],
+                        "decisions": [],
+                    }
+                )
+            ),
+        )
+    )
     return out
 
 
-@pytest.mark.parametrize("name,report", _gen_parity_reports(), ids=lambda x: x if isinstance(x, str) else "")
+@pytest.mark.parametrize(
+    "name,report", _gen_parity_reports(), ids=lambda x: x if isinstance(x, str) else ""
+)
 def test_html_states_the_same_facts_as_markdown(name, report):
     problems = parity_problems(report)
     assert not problems, "\n".join(problems)
@@ -770,9 +873,20 @@ def _tamper_dict(kind: str) -> dict:
     return d
 
 
-TAMPERS = ["flip_mismatch", "delete_g2", "edit_path", "fake_claim", "delete_g3", "package",
-           "extra_evidence", "row_mismatch", "fake_ud", "commit_swap", "no_checks_all",
-           "drifting_flip"]
+TAMPERS = [
+    "flip_mismatch",
+    "delete_g2",
+    "edit_path",
+    "fake_claim",
+    "delete_g3",
+    "package",
+    "extra_evidence",
+    "row_mismatch",
+    "fake_ud",
+    "commit_swap",
+    "no_checks_all",
+    "drifting_flip",
+]
 
 
 @pytest.mark.parametrize("kind", TAMPERS)
@@ -788,7 +902,9 @@ def test_tampered_reports_state_the_same_drift_score_in_html_and_markdown(kind):
     r = rep(_tamper_dict(kind))
     md, ht = md_facts(render_markdown(r)), html_facts(render_html(r))
     assert md["score"] == ht["score"] or (
-        md["score"] is not None and ht["score"] is not None and abs(md["score"] - ht["score"]) <= 0.51
+        md["score"] is not None
+        and ht["score"] is not None
+        and abs(md["score"] - ht["score"]) <= 0.51
     ), f"markdown says {md['score']}, html says {ht['score']} (counts {md['counts']})"
 
 
@@ -839,9 +955,9 @@ PAYLOADS = {
     "style": "</style><style>*{display:none}</style>",
     "entity": "&lt;script&gt;window.__pwned=1&lt;/script&gt; &#x3C;img src=x onerror=window.__pwned=1&#x3E;",
     "meta": '<meta http-equiv="refresh" content="0;url=javascript:window.__pwned=1">',
-    "all": "<script>window.__pwned=1</script> \"><img src=x onerror=window.__pwned=1> "
-           "javascript:window.__pwned=1 </textarea> {{ 7*7 }} ${} <svg onload=window.__pwned=1> "
-           "style=expression(1) ‮ \x00",
+    "all": '<script>window.__pwned=1</script> "><img src=x onerror=window.__pwned=1> '
+    "javascript:window.__pwned=1 </textarea> {{ 7*7 }} ${} <svg onload=window.__pwned=1> "
+    "style=expression(1) ‮ \x00",
 }
 
 
@@ -885,10 +1001,16 @@ def test_hostile_payload_is_inert_in_the_dom(name, browser, tmp_path):
         assert doc.scripts[0].strip() == asset("head.js").strip()
         assert doc.scripts[1].strip() == asset("report.js").strip()
         for t, v in doc.attrs("href"):
-            ok = (v.startswith("#") or v == PROJECT_URL
-                  or v.startswith("https://github.com/vshalsh/driftwarden/blob/" + SHA + "/")
-                  or (re.match(r"^[A-Za-z0-9._~%/-]+(#L\d+(-L\d+)?)?$", v) and ":" not in v.split("#")[0]
-                      and not v.startswith("//")))
+            ok = (
+                v.startswith("#")
+                or v == PROJECT_URL
+                or v.startswith("https://github.com/vshalsh/driftwarden/blob/" + SHA + "/")
+                or (
+                    re.match(r"^[A-Za-z0-9._~%/-]+(#L\d+(-L\d+)?)?$", v)
+                    and ":" not in v.split("#")[0]
+                    and not v.startswith("//")
+                )
+            )
             assert ok, (t, v)
     path = tmp_path / "x.html"
     path.write_text(render_html(report, link_base=".."), encoding="utf-8")
@@ -933,27 +1055,49 @@ def test_bidi_and_control_characters_are_shown_as_u_plus_codes():
 
 @pytest.mark.parametrize(
     "bad",
-    ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "//evil.example/x", "http://evil.example/x",
-     "https://evil.example/x", "data:text/html,<script>1</script>", "\\\\evil\\share",
-     "/etc/passwd", "../../etc/passwd", "vbscript:x", " javascript:alert(1)", "a b/c.md",
-     "docs/adr/x.md\nonclick=1", "file:///etc/passwd"],
+    [
+        "javascript:alert(1)",
+        "JaVaScRiPt:alert(1)",
+        "//evil.example/x",
+        "http://evil.example/x",
+        "https://evil.example/x",
+        "data:text/html,<script>1</script>",
+        "\\\\evil\\share",
+        "/etc/passwd",
+        "../../etc/passwd",
+        "vbscript:x",
+        " javascript:alert(1)",
+        "a b/c.md",
+        "docs/adr/x.md\nonclick=1",
+        "file:///etc/passwd",
+    ],
 )
 def test_adr_path_that_looks_like_a_url_never_becomes_an_active_link(bad):
     d = fx()
     d = subst(d, {"docs/adr/0001-postgresql-only.md": bad})
     html = render_html(rep(d), link_base="..")
-    for t, v in Doc(html).attrs("href"):
+    for _t, v in Doc(html).attrs("href"):
         low = v.strip().lower()
-        assert not low.startswith(("javascript:", "vbscript:", "data:", "http:", "file:", "//")) \
-            or v == PROJECT_URL, v
+        assert (
+            not low.startswith(("javascript:", "vbscript:", "data:", "http:", "file:", "//"))
+            or v == PROJECT_URL
+        ), v
         assert "evil" not in v and "etc/passwd" not in v and not v.startswith("/"), v
         assert ".." not in v.replace("../", "", 1) or v.startswith("../"), v
 
 
 def test_link_base_values_that_are_not_safe_produce_no_link():
     r = rich_report()
-    for lb in ("javascript:alert(1)", "//evil.example", "http://evil.example", "a b", "..\\x",
-               '"onmouseover="x', "../../..", "https://evil.example/x y"):
+    for lb in (
+        "javascript:alert(1)",
+        "//evil.example",
+        "http://evil.example",
+        "a b",
+        "..\\x",
+        '"onmouseover="x',
+        "../../..",
+        "https://evil.example/x y",
+    ):
         hrefs = [v for _, v in Doc(render_html(r, link_base=lb)).attrs("href")]
         for v in hrefs:
             assert v.startswith("#") or v == PROJECT_URL or re.match(r"^(\.\./)*[\w./%-]+#?", v), v
@@ -967,8 +1111,17 @@ def test_link_base_values_that_are_not_safe_produce_no_link():
 def test_without_javascript_all_content_is_visible_and_no_control_is_broken(browser, rich_file):
     with opened(browser, rich_file, 360, "dark", js=False, name="nojs") as o:
         pg = o.page
-        for sid in ("violated", "drifting", "could-not-verify", "undocumented", "holding",
-                    "unknown", "timeline", "grounding", "notes"):
+        for sid in (
+            "violated",
+            "drifting",
+            "could-not-verify",
+            "undocumented",
+            "holding",
+            "unknown",
+            "timeline",
+            "grounding",
+            "notes",
+        ):
             assert pg.locator(f"#{sid}").is_visible(), sid
         # every card and every table is visible and has size
         for sel in (".dw-card", ".dw-table", ".dw-chips li", ".dw-score"):
@@ -993,7 +1146,9 @@ def test_without_javascript_all_content_is_visible_and_no_control_is_broken(brow
         pg.locator("#undocumented details.dw-draft summary").first.click()
         assert pg.locator("#undocumented .dw-draft__md").first.is_visible()
         # chip anchors really navigate to existing targets
-        for href in pg.eval_on_selector_all(".dw-chips a", "els => els.map(e => e.getAttribute('href'))"):
+        for href in pg.eval_on_selector_all(
+            ".dw-chips a", "els => els.map(e => e.getAttribute('href'))"
+        ):
             assert pg.locator(href).count() == 1, href
             pg.click(f".dw-chips a[href='{href}']")
             assert pg.evaluate("location.hash") == href
@@ -1033,7 +1188,9 @@ def test_with_javascript_controls_work(browser, rich_file):
 
 def _scan(tmp_path: Path, *extra: str):
     repo = make_pyshop(tmp_path)
-    res = runner.invoke(app, ["scan", str(repo), "--mode", "offline", "--format", "json,md,html", *extra])
+    res = runner.invoke(
+        app, ["scan", str(repo), "--mode", "offline", "--format", "json,md,html", *extra]
+    )
     assert res.exit_code in (0, 1, 3), res.output
     return repo, repo / ".driftwarden"
 
@@ -1060,8 +1217,9 @@ def test_cli_scan_writes_html_whose_adr_links_resolve(tmp_path):
 
 
 def git_status_clean_except_out(repo: Path) -> bool:
-    out = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True,
-                         text=True).stdout
+    out = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True
+    ).stdout
     return all(".driftwarden" in line for line in out.splitlines())
 
 
@@ -1070,8 +1228,9 @@ def test_cli_report_from_saved_json_matches_the_scan_html(tmp_path):
     scan_html = (out / "driftwarden.html").read_text(encoding="utf-8")
     shutil.copy(out / "driftwarden.json", out / "saved.json")
     (out / "driftwarden.html").unlink()
-    res = runner.invoke(app, ["report", str(out / "saved.json"), "--format", "html",
-                              "--repo", str(repo)])
+    res = runner.invoke(
+        app, ["report", str(out / "saved.json"), "--format", "html", "--repo", str(repo)]
+    )
     assert res.exit_code == 0, res.output
     again = (out / "driftwarden.html").read_text(encoding="utf-8")
     norm = lambda s: re.sub(r'(<time datetime=")[^"]*(">)[^<]*', r"\1\2", s)  # noqa: E731
@@ -1081,7 +1240,9 @@ def test_cli_report_from_saved_json_matches_the_scan_html(tmp_path):
     cwd = os.getcwd()
     try:
         os.chdir(repo)
-        res = runner.invoke(app, ["report", ".driftwarden/saved.json", "--format", "html", "--repo", "."])
+        res = runner.invoke(
+            app, ["report", ".driftwarden/saved.json", "--format", "html", "--repo", "."]
+        )
     finally:
         os.chdir(cwd)
     assert res.exit_code == 0, res.output
@@ -1095,7 +1256,9 @@ def test_cli_tampered_saved_json_shows_demoted_items_in_could_not_verify(tmp_pat
     vio = [c for c in d["claims"] if c["verdict"] and c["verdict"]["status"] == "VIOLATED"]
     cid = vio[0]["claim"]["id"]
     if tamper == "delete_g2":
-        vio[0]["verdict"]["checks"] = [x for x in vio[0]["verdict"]["checks"] if x["check_id"] != "G2"]
+        vio[0]["verdict"]["checks"] = [
+            x for x in vio[0]["verdict"]["checks"] if x["check_id"] != "G2"
+        ]
     elif tamper == "path":
         vio[0]["verdict"]["evidence"][0]["ref"]["path"] = "src/not/there.py"
     else:
@@ -1103,27 +1266,37 @@ def test_cli_tampered_saved_json_shows_demoted_items_in_could_not_verify(tmp_pat
     saved = tmp_path / "tampered.json"
     saved.write_text(json.dumps(d), encoding="utf-8")
     o2 = tmp_path / "o2"
-    res = runner.invoke(app, ["report", str(saved), "--format", "html,md", "--out", str(o2),
-                              "--repo", str(repo)])
+    res = runner.invoke(
+        app, ["report", str(saved), "--format", "html,md", "--out", str(o2), "--repo", str(repo)]
+    )
     assert res.exit_code == 0, res.output
     html = (o2 / "driftwarden.html").read_text(encoding="utf-8")
     f = html_facts(html)
     secs = {s for s, i, _ in f["pairs"] if i == cid}
     assert secs == {"cnv"}, (cid, secs)
-    card = [c for c in re.findall(r'<article class="dw-card.*?</article>', _section(html, "could-not-verify"), re.S)
-            if f">{cid}<" in c]
+    card = [
+        c
+        for c in re.findall(
+            r'<article class="dw-card.*?</article>', _section(html, "could-not-verify"), re.S
+        )
+        if f">{cid}<" in c
+    ]
     assert card and "<li>" in card[0], "demoted item shows no reason"
     assert md_facts((o2 / "driftwarden.md").read_text(encoding="utf-8"))["pairs"] == f["pairs"]
     assert "src/not/there.py" not in "".join(
-        _section(html, s) for s in ("violated", "drifting", "holding", "unknown"))
+        _section(html, s) for s in ("violated", "drifting", "holding", "unknown")
+    )
 
 
 def test_cli_html_only_format_writes_only_html(tmp_path):
     repo = make_pyshop(tmp_path)
     res = runner.invoke(app, ["scan", str(repo), "--mode", "offline", "--format", "html"])
     assert res.exit_code in (0, 1, 3), res.output
-    assert sorted(p.name for p in (repo / ".driftwarden").iterdir() if p.is_file()
-                  and p.suffix in (".html", ".md", ".json", ".sarif")) == ["driftwarden.html"]
+    assert sorted(
+        p.name
+        for p in (repo / ".driftwarden").iterdir()
+        if p.is_file() and p.suffix in (".html", ".md", ".json", ".sarif")
+    ) == ["driftwarden.html"]
 
 
 # =========================================================================== 8. size and performance
@@ -1162,7 +1335,11 @@ def test_one_thousand_findings_page_opens_in_a_browser(browser, tmp_path):
 def test_same_report_gives_identical_bytes():
     r = rich_report()
     a = render_html(r, link_base="..")
-    assert a == render_html(r, link_base="..") == render_html(Report.model_validate_json(r.model_dump_json()), link_base="..")
+    assert (
+        a
+        == render_html(r, link_base="..")
+        == render_html(Report.model_validate_json(r.model_dump_json()), link_base="..")
+    )
     hostile = rep(inject_all(PAYLOADS["all"]))
     assert render_html(hostile) == render_html(hostile)
 
@@ -1179,12 +1356,20 @@ def test_identical_bytes_across_processes_with_different_hash_seeds(tmp_path):
     digests = set()
     for seed in ("0", "1", "12345"):
         env = {**os.environ, "PYTHONHASHSEED": seed}
-        digests.add(subprocess.run([sys.executable, "-c", code, str(f)], capture_output=True,
-                                   text=True, env=env, check=True).stdout.strip())
+        digests.add(
+            subprocess.run(
+                [sys.executable, "-c", code, str(f)],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=True,
+            ).stdout.strip()
+        )
     assert len(digests) == 1, digests
 
 
 def test_tokens_css_is_byte_identical_to_design_tokens():
     assert (ROOT / "design" / "tokens.css").read_bytes() == resources.files(
-        "driftwarden.report.html").joinpath("tokens.css").read_bytes()
+        "driftwarden.report.html"
+    ).joinpath("tokens.css").read_bytes()
     assert asset("tokens.css") in render_html(rich_report())

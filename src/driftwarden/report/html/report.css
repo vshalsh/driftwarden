@@ -31,9 +31,12 @@ code { padding: 0 var(--dw-space-1); font-size: var(--dw-text-sm); }
 .dw-meta dd { margin: 0; min-width: 0; }
 
 /* ---- Buttons & controls ---------------------------------------------- */
+/* Interactive-control boundaries (buttons, the filter input, the "before" chip) use
+ * --dw-neutral-500 for WCAG 1.4.11 (>= 3:1): on canvas 4.84:1 light / 3.88:1 dark, on the
+ * muted surface 4.47:1 / 3.54:1. Decorative dividers keep --dw-border. */
 .dw-btn {
   font: inherit; font-size: var(--dw-text-sm); color: var(--dw-fg); background: var(--dw-bg-muted);
-  border: var(--dw-border-width) solid var(--dw-border); border-radius: var(--dw-radius-md);
+  border: var(--dw-border-width) solid var(--dw-neutral-500); border-radius: var(--dw-radius-md);
   padding: var(--dw-space-1) var(--dw-space-3); cursor: pointer; line-height: var(--dw-leading-tight);
 }
 .dw-btn:hover { border-color: var(--dw-fg-muted); }
@@ -41,7 +44,7 @@ code { padding: 0 var(--dw-space-1); font-size: var(--dw-text-sm); }
 .dw-search { flex: 1 1 240px; min-width: 0; }
 .dw-search input {
   width: 100%; font: inherit; color: var(--dw-fg); background: var(--dw-bg);
-  border: var(--dw-border-width) solid var(--dw-border); border-radius: var(--dw-radius-md);
+  border: var(--dw-border-width) solid var(--dw-neutral-500); border-radius: var(--dw-radius-md);
   padding: var(--dw-space-1) var(--dw-space-3); min-height: var(--dw-row-height);
 }
 .dw-search input::placeholder { color: var(--dw-fg-subtle); opacity: 1; }
@@ -209,7 +212,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visibl
   color: var(--dw-accent); background: var(--dw-bg);
   font-size: var(--dw-text-xs); font-weight: var(--dw-weight-medium); white-space: nowrap;
 }
-.dw-change--before { border-color: var(--dw-border); color: var(--dw-fg-muted); font-weight: var(--dw-weight-regular); }
+.dw-change--before { border-color: var(--dw-neutral-500); color: var(--dw-fg-muted); font-weight: var(--dw-weight-regular); }
 .dw-adr-link { text-decoration: none; }
 .dw-adr-link:hover .dw-loc { text-decoration: underline; }
 .dw-adr-link .dw-loc { color: var(--dw-link); }
