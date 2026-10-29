@@ -1,0 +1,648 @@
+{
+  "adr_styles": [
+    "freeform",
+    "madr",
+    "madr-fm",
+    "nygard"
+  ],
+  "commits": 30,
+  "counts": {
+    "claim": 15,
+    "evidence_decoy": 4,
+    "evidence_proof": 5,
+    "evidence_violation": 7,
+    "undocumented": 6
+  },
+  "ecosystem": "python",
+  "head": "52d213485bd78731dddd696492bac23af90bc1ab",
+  "layout": "single",
+  "records": [
+    {
+      "adr_path": "docs/adr/0001-postgresql-is-the-only-datastore.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0001",
+      "expected_offline": "VIOLATED",
+      "id": "shopfront:ADR-0001",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "terms": [
+        "pymongo"
+      ],
+      "title": "PostgreSQL is the only datastore",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0001",
+      "id": "shopfront:ADR-0001:v:src/shopfront/legacy/catalog.py:1",
+      "introduced_commit": "4e5f3239afee4dc57bd4ebd3c1836f5c1ecc2d71",
+      "kind": "import",
+      "line": 1,
+      "path": "src/shopfront/legacy/catalog.py",
+      "repo": "shopfront",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0001",
+      "id": "shopfront:ADR-0001:v:requirements.txt:7",
+      "introduced_commit": "b84325234672e3bcb66b897fbc8aa56a854b8308",
+      "kind": "dependency",
+      "line": 7,
+      "path": "requirements.txt",
+      "repo": "shopfront",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0002-cloud-sdks-live-in-adapters.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0002",
+      "expected_offline": "VIOLATED",
+      "id": "shopfront:ADR-0002",
+      "kind": "boundary",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated"
+      ],
+      "terms": [
+        "boto3"
+      ],
+      "title": "Cloud SDKs live in adapters",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "id": "shopfront:ADR-0002:v:src/shopfront/reports.py:1",
+      "introduced_commit": "e7248b9fa81f1c079a0ced2fc695cda77da30e25",
+      "kind": "import",
+      "line": 1,
+      "path": "src/shopfront/reports.py",
+      "repo": "shopfront",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "decoy_kind": "allowed-location",
+      "id": "shopfront:ADR-0002:d:src/shopfront/adapters/storage.py:1",
+      "introduced_commit": "d9875d2de77bbf5af7ac7a8a5c85a4bfb616195a",
+      "line": 1,
+      "path": "src/shopfront/adapters/storage.py",
+      "repo": "shopfront",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "decoy_kind": "comment",
+      "id": "shopfront:ADR-0002:d:src/shopfront/orders.py:3",
+      "introduced_commit": "08f6510786244a51d439c4914e4142b724c521d8",
+      "line": 3,
+      "path": "src/shopfront/orders.py",
+      "repo": "shopfront",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0003-no-requests-library.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0003",
+      "expected_offline": "HOLDING",
+      "id": "shopfront:ADR-0003",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding",
+        "adversarial"
+      ],
+      "terms": [
+        "import requests",
+        "requests=="
+      ],
+      "title": "No requests library",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "id": "shopfront:ADR-0003:p:src/shopfront/http.py:2",
+      "introduced_commit": "08f6510786244a51d439c4914e4142b724c521d8",
+      "kind": "import",
+      "line": 2,
+      "needle": "import urllib.request",
+      "path": "src/shopfront/http.py",
+      "repo": "shopfront",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "decoy_kind": "comment",
+      "id": "shopfront:ADR-0003:d:src/shopfront/http.py:4",
+      "introduced_commit": "08f6510786244a51d439c4914e4142b724c521d8",
+      "line": 4,
+      "path": "src/shopfront/http.py",
+      "repo": "shopfront",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0004-structured-logging.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0004",
+      "expected_offline": "HOLDING",
+      "id": "shopfront:ADR-0004",
+      "kind": "require",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "terms": [],
+      "title": "Structured logging",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "id": "shopfront:ADR-0004:p:src/shopfront/log.py:1",
+      "introduced_commit": "d9875d2de77bbf5af7ac7a8a5c85a4bfb616195a",
+      "kind": "import",
+      "line": 1,
+      "needle": "import structlog",
+      "path": "src/shopfront/log.py",
+      "repo": "shopfront",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0005-no-celery.md",
+      "adr_status": "Accepted",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0005",
+      "expected_offline": "DRIFTING",
+      "id": "shopfront:ADR-0005",
+      "kind": "forbid",
+      "note": "forbidden library only in a dev requirements file: not a violation",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "DRIFTING",
+      "tags": [
+        "supported",
+        "adversarial",
+        "dev-only"
+      ],
+      "terms": [
+        "celery"
+      ],
+      "title": "No Celery",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "decoy_kind": "dev-dependency",
+      "id": "shopfront:ADR-0005:d:requirements-dev.txt:2",
+      "introduced_commit": "08f6510786244a51d439c4914e4142b724c521d8",
+      "line": 2,
+      "path": "requirements-dev.txt",
+      "repo": "shopfront",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0006-fastapi-as-web-framework.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0006",
+      "expected_offline": "HOLDING",
+      "id": "shopfront:ADR-0006",
+      "kind": "require",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "terms": [],
+      "title": "FastAPI as web framework",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0006",
+      "id": "shopfront:ADR-0006:p:src/shopfront/app.py:1",
+      "introduced_commit": "d9875d2de77bbf5af7ac7a8a5c85a4bfb616195a",
+      "kind": "import",
+      "line": 1,
+      "needle": "from fastapi",
+      "path": "src/shopfront/app.py",
+      "repo": "shopfront",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0007-graphql-for-the-public-api.md",
+      "adr_status": "Proposed",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0007",
+      "expected_offline": "SKIPPED",
+      "id": "shopfront:ADR-0007",
+      "kind": null,
+      "note": "proposed ADR: not an accepted decision",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "proposed"
+      ],
+      "terms": [],
+      "title": "GraphQL for the public API",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0008-redis-cache.md",
+      "adr_status": "Superseded by [9. later decision](0009-x.md)",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0008",
+      "expected_offline": "SKIPPED",
+      "id": "shopfront:ADR-0008",
+      "kind": null,
+      "note": "superseded: the code obeys ADR-0009",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "superseded"
+      ],
+      "terms": [],
+      "title": "Redis cache",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0009-memcached-cache.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0009",
+      "expected_offline": "HOLDING",
+      "id": "shopfront:ADR-0009",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "terms": [
+        "redis"
+      ],
+      "title": "Memcached cache",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0009",
+      "id": "shopfront:ADR-0009:p:src/shopfront/cache.py:1",
+      "introduced_commit": "675ad862d18d4a5fafa0d1ba068c2a2331bae92b",
+      "kind": "import",
+      "line": 1,
+      "needle": "from pymemcache",
+      "path": "src/shopfront/cache.py",
+      "repo": "shopfront",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0010-health-endpoint.md",
+      "adr_status": "Accepted",
+      "adr_style": "freeform",
+      "decision_id": "ADR-0010",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "shopfront:ADR-0010",
+      "kind": null,
+      "note": "",
+      "phrasing": "free-form",
+      "repo": "shopfront",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "terms": [],
+      "title": "Health endpoint",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0010",
+      "id": "shopfront:ADR-0010:p:src/shopfront/app.py:6",
+      "introduced_commit": "d9875d2de77bbf5af7ac7a8a5c85a4bfb616195a",
+      "kind": "route",
+      "line": 6,
+      "needle": "@app.get(\"/healthz\")",
+      "path": "src/shopfront/app.py",
+      "repo": "shopfront",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0011-message-broker.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0011",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "shopfront:ADR-0011",
+      "kind": "only",
+      "note": "",
+      "phrasing": "inverted-only",
+      "repo": "shopfront",
+      "status": "VIOLATED",
+      "tags": [
+        "unsupported-phrasing",
+        "violated"
+      ],
+      "terms": [
+        "pika"
+      ],
+      "title": "Message broker",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0011",
+      "id": "shopfront:ADR-0011:v:src/shopfront/events.py:1",
+      "introduced_commit": "7e25bb955600bdfe928f9c62da86c8b04bc68bdf",
+      "kind": "import",
+      "line": 1,
+      "path": "src/shopfront/events.py",
+      "repo": "shopfront",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0011",
+      "id": "shopfront:ADR-0011:v:requirements.txt:6",
+      "introduced_commit": "f1c0be4d295af3b51b4d0480e3bb8bfdc4ba9764",
+      "kind": "dependency",
+      "line": 6,
+      "path": "requirements.txt",
+      "repo": "shopfront",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0012-no-elasticsearch.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0012",
+      "expected_offline": "VIOLATED",
+      "id": "shopfront:ADR-0012",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated",
+        "prompt-injection"
+      ],
+      "terms": [
+        "elasticsearch"
+      ],
+      "title": "No Elasticsearch",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0012",
+      "id": "shopfront:ADR-0012:v:src/shopfront/search.py:1",
+      "introduced_commit": "8d5ebf5a9f5142a7ca11d647c3c4f599f407212a",
+      "kind": "import",
+      "line": 1,
+      "path": "src/shopfront/search.py",
+      "repo": "shopfront",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0012",
+      "id": "shopfront:ADR-0012:v:requirements.txt:8",
+      "introduced_commit": "7d56ec670aa690bb1b6dca4a7e78b49087078fc7",
+      "kind": "dependency",
+      "line": 8,
+      "path": "requirements.txt",
+      "repo": "shopfront",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/adr/0013-sentry-only-in-production.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0013",
+      "expected_offline": "UNKNOWN",
+      "id": "shopfront:ADR-0013",
+      "kind": "only",
+      "note": "runtime-environment qualifier: not decidable from static code",
+      "phrasing": "qualifier",
+      "repo": "shopfront",
+      "status": "UNKNOWN",
+      "tags": [
+        "qualifier",
+        "unknown"
+      ],
+      "terms": [],
+      "title": "Sentry only in production",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0014-dynamodb-for-sessions.md",
+      "adr_status": "Rejected",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0014",
+      "expected_offline": "SKIPPED",
+      "id": "shopfront:ADR-0014",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "rejected"
+      ],
+      "terms": [],
+      "title": "DynamoDB for sessions",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/adr/0015-flask-admin.md",
+      "adr_status": "Deprecated",
+      "adr_style": "nygard",
+      "decision_id": "ADR-0015",
+      "expected_offline": "SKIPPED",
+      "id": "shopfront:ADR-0015",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "shopfront",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "deprecated"
+      ],
+      "terms": [],
+      "title": "Flask admin",
+      "type": "claim"
+    },
+    {
+      "category": "datastore",
+      "evidence": [
+        {
+          "commit": "4e5f3239afee4dc57bd4ebd3c1836f5c1ecc2d71",
+          "line": 1,
+          "path": "src/shopfront/legacy/catalog.py"
+        }
+      ],
+      "first_commit": "4e5f3239afee4dc57bd4ebd3c1836f5c1ecc2d71",
+      "id": "shopfront:ud:mongodb:positive",
+      "introducing_commits": [
+        "4e5f3239afee4dc57bd4ebd3c1836f5c1ecc2d71"
+      ],
+      "reason": "",
+      "repo": "shopfront",
+      "role": "positive",
+      "technology": "mongodb",
+      "type": "undocumented"
+    },
+    {
+      "category": "queue",
+      "evidence": [
+        {
+          "commit": "7e25bb955600bdfe928f9c62da86c8b04bc68bdf",
+          "line": 1,
+          "path": "src/shopfront/events.py"
+        }
+      ],
+      "first_commit": "7e25bb955600bdfe928f9c62da86c8b04bc68bdf",
+      "id": "shopfront:ud:rabbitmq:positive",
+      "introducing_commits": [
+        "7e25bb955600bdfe928f9c62da86c8b04bc68bdf"
+      ],
+      "reason": "",
+      "repo": "shopfront",
+      "role": "positive",
+      "technology": "rabbitmq",
+      "type": "undocumented"
+    },
+    {
+      "category": "cloud-sdk",
+      "evidence": [
+        {
+          "commit": "d9875d2de77bbf5af7ac7a8a5c85a4bfb616195a",
+          "line": 1,
+          "path": "src/shopfront/adapters/storage.py"
+        },
+        {
+          "commit": "e7248b9fa81f1c079a0ced2fc695cda77da30e25",
+          "line": 1,
+          "path": "src/shopfront/reports.py"
+        }
+      ],
+      "first_commit": "d9875d2de77bbf5af7ac7a8a5c85a4bfb616195a",
+      "id": "shopfront:ud:aws-sdk:positive",
+      "introducing_commits": [
+        "d9875d2de77bbf5af7ac7a8a5c85a4bfb616195a",
+        "e7248b9fa81f1c079a0ced2fc695cda77da30e25"
+      ],
+      "reason": "",
+      "repo": "shopfront",
+      "role": "positive",
+      "technology": "aws-sdk",
+      "type": "undocumented"
+    },
+    {
+      "category": "vendor-sdk",
+      "evidence": [
+        {
+          "commit": "0de1159cf8a4534ef6b50fb58b2fe2188f3232a9",
+          "line": 1,
+          "path": "src/shopfront/payments.py"
+        }
+      ],
+      "first_commit": "0de1159cf8a4534ef6b50fb58b2fe2188f3232a9",
+      "id": "shopfront:ud:stripe:positive",
+      "introducing_commits": [
+        "0de1159cf8a4534ef6b50fb58b2fe2188f3232a9"
+      ],
+      "reason": "",
+      "repo": "shopfront",
+      "role": "positive",
+      "technology": "stripe",
+      "type": "undocumented"
+    },
+    {
+      "category": "queue",
+      "evidence": [
+        {
+          "commit": "7e25bb955600bdfe928f9c62da86c8b04bc68bdf",
+          "line": 3,
+          "path": "src/shopfront/events.py"
+        }
+      ],
+      "first_commit": "7e25bb955600bdfe928f9c62da86c8b04bc68bdf",
+      "id": "shopfront:ud:nats:negative",
+      "introducing_commits": [
+        "7e25bb955600bdfe928f9c62da86c8b04bc68bdf"
+      ],
+      "reason": "comment-only",
+      "repo": "shopfront",
+      "role": "negative",
+      "technology": "nats",
+      "type": "undocumented"
+    },
+    {
+      "category": "vendor-sdk",
+      "evidence": [
+        {
+          "commit": "0de1159cf8a4534ef6b50fb58b2fe2188f3232a9",
+          "line": 1,
+          "path": "tests/test_sms.py"
+        }
+      ],
+      "first_commit": "0de1159cf8a4534ef6b50fb58b2fe2188f3232a9",
+      "id": "shopfront:ud:twilio:negative",
+      "introducing_commits": [
+        "0de1159cf8a4534ef6b50fb58b2fe2188f3232a9"
+      ],
+      "reason": "nonproduction",
+      "repo": "shopfront",
+      "role": "negative",
+      "technology": "twilio",
+      "type": "undocumented"
+    }
+  ],
+  "repo": "shopfront",
+  "schema": 1
+}

@@ -1,0 +1,721 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "DriftWarden",
+          "version": "0.0.1",
+          "semanticVersion": "0.0.1",
+          "informationUri": "https://github.com/vshalsh/driftwarden",
+          "rules": [
+            {
+              "id": "forbid",
+              "name": "ForbiddenTechnology",
+              "shortDescription": {
+                "text": "Code uses a technology an accepted ADR forbids"
+              },
+              "fullDescription": {
+                "text": "An accepted architecture decision forbids this technology, and the repository uses it. The evidence lines were checked verbatim by a deterministic verifier."
+              },
+              "helpUri": "https://github.com/vshalsh/driftwarden",
+              "help": {
+                "text": "An accepted architecture decision forbids this technology, and the repository uses it. The evidence lines were checked verbatim by a deterministic verifier."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "tags": [
+                  "architecture",
+                  "adr",
+                  "drift"
+                ]
+              }
+            },
+            {
+              "id": "require",
+              "name": "RequiredTechnology",
+              "shortDescription": {
+                "text": "Code departs from a technology an accepted ADR requires"
+              },
+              "fullDescription": {
+                "text": "An accepted architecture decision requires a technology; the repository is missing it or uses an alternative. The evidence lines were checked verbatim."
+              },
+              "helpUri": "https://github.com/vshalsh/driftwarden",
+              "help": {
+                "text": "An accepted architecture decision requires a technology; the repository is missing it or uses an alternative. The evidence lines were checked verbatim."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "tags": [
+                  "architecture",
+                  "adr",
+                  "drift"
+                ]
+              }
+            },
+            {
+              "id": "only",
+              "name": "OnlyAllowedTechnology",
+              "shortDescription": {
+                "text": "Code uses a technology outside the only one(s) an accepted ADR allows"
+              },
+              "fullDescription": {
+                "text": "An accepted architecture decision allows only certain technologies in a category; the repository uses another one. The evidence lines were checked verbatim."
+              },
+              "helpUri": "https://github.com/vshalsh/driftwarden",
+              "help": {
+                "text": "An accepted architecture decision allows only certain technologies in a category; the repository uses another one. The evidence lines were checked verbatim."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "tags": [
+                  "architecture",
+                  "adr",
+                  "drift"
+                ]
+              }
+            },
+            {
+              "id": "boundary",
+              "name": "ModuleBoundary",
+              "shortDescription": {
+                "text": "Code crosses a boundary an accepted ADR sets"
+              },
+              "fullDescription": {
+                "text": "An accepted architecture decision limits where a module or technology may be used; the repository uses it outside those paths. The evidence lines were checked verbatim."
+              },
+              "helpUri": "https://github.com/vshalsh/driftwarden",
+              "help": {
+                "text": "An accepted architecture decision limits where a module or technology may be used; the repository uses it outside those paths. The evidence lines were checked verbatim."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "tags": [
+                  "architecture",
+                  "adr",
+                  "drift"
+                ]
+              }
+            },
+            {
+              "id": "free",
+              "name": "FreeFormDecision",
+              "shortDescription": {
+                "text": "Code contradicts a free-form accepted ADR"
+              },
+              "fullDescription": {
+                "text": "A judged free-form architecture decision does not hold. Every cited line was checked verbatim by a deterministic verifier."
+              },
+              "helpUri": "https://github.com/vshalsh/driftwarden",
+              "help": {
+                "text": "A judged free-form architecture decision does not hold. Every cited line was checked verbatim by a deterministic verifier."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "tags": [
+                  "architecture",
+                  "adr",
+                  "drift"
+                ]
+              }
+            },
+            {
+              "id": "undocumented-decision",
+              "name": "UndocumentedDecision",
+              "shortDescription": {
+                "text": "Architectural choice in the code that no ADR covers"
+              },
+              "fullDescription": {
+                "text": "The repository uses a technology (datastore, queue, framework, cloud SDK...) that no ADR records. DriftWarden can draft the missing ADR (--draft-adrs)."
+              },
+              "helpUri": "https://github.com/vshalsh/driftwarden",
+              "help": {
+                "text": "The repository uses a technology (datastore, queue, framework, cloud SDK...) that no ADR records. DriftWarden can draft the missing ADR (--draft-adrs)."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "tags": [
+                  "architecture",
+                  "adr",
+                  "drift"
+                ]
+              }
+            },
+            {
+              "id": "could-not-verify",
+              "name": "CouldNotVerify",
+              "shortDescription": {
+                "text": "A finding DriftWarden could not verify"
+              },
+              "fullDescription": {
+                "text": "A decision, claim, verdict or evidence item failed its deterministic verifier. It is not a finding and is never shown as a violation; the reason is in the message."
+              },
+              "helpUri": "https://github.com/vshalsh/driftwarden#grounding--traceability",
+              "help": {
+                "text": "A decision, claim, verdict or evidence item failed its deterministic verifier. It is not a finding and is never shown as a violation; the reason is in the message."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "tags": [
+                  "architecture",
+                  "adr",
+                  "drift"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "endTimeUtc": "2026-10-29T00:00:00Z"
+        }
+      ],
+      "results": [
+        {
+          "ruleId": "only",
+          "ruleIndex": 2,
+          "level": "error",
+          "message": {
+            "text": "ADR-0001.c1 VIOLATED: only(datastore) = [PostgreSQL]. ADR ADR-0001 (PostgreSQL is the only datastore) says \"PostgreSQL is the only datastore.\" at docs/adr/0001-postgresql-only.md:13. other datastore mongodb used (e1, e2)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "requirements.txt",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 2,
+                  "endLine": 2
+                }
+              }
+            }
+          ],
+          "relatedLocations": [
+            {
+              "id": 1,
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "docs/adr/0001-postgresql-only.md",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 13,
+                  "endLine": 13
+                }
+              },
+              "message": {
+                "text": "ADR ADR-0001 source (ADR-0001.c1)"
+              }
+            },
+            {
+              "id": 2,
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/shop/legacy/catalog.py",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 3,
+                  "endLine": 3
+                }
+              },
+              "message": {
+                "text": "evidence e2: src/shop/legacy/catalog.py:3 imports pymongo"
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "driftwarden/v1": "656f3f45b884a466b1d695af8c66840d90434ae9b70af17c2bc684d8fd9e1a0a"
+          },
+          "properties": {
+            "status": "VIOLATED",
+            "grounding": "VERIFIED",
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "adrId": "ADR-0001",
+            "claimId": "ADR-0001.c1",
+            "evidence": [
+              "e1",
+              "e2"
+            ]
+          }
+        },
+        {
+          "ruleId": "boundary",
+          "ruleIndex": 3,
+          "level": "error",
+          "message": {
+            "text": "ADR-0002.c1 VIOLATED: boundary [cloud SDK] allowed_in [adapters/]. ADR ADR-0002 (Cloud SDKs live in adapters) says \"No cloud SDK outside adapters/.\" at docs/adr/0002-cloud-sdk-in-adapters.md:13. aws-sdk imported outside the allowed paths (e1)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/shop/reports.py",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 5,
+                  "endLine": 5
+                }
+              }
+            }
+          ],
+          "relatedLocations": [
+            {
+              "id": 1,
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "docs/adr/0002-cloud-sdk-in-adapters.md",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 13,
+                  "endLine": 13
+                }
+              },
+              "message": {
+                "text": "ADR ADR-0002 source (ADR-0002.c1)"
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "driftwarden/v1": "dfb3b42ef1cf6181cc8771e9a353e2ceb206f3e513a7ff515692ae15c74430f2"
+          },
+          "properties": {
+            "status": "VIOLATED",
+            "grounding": "VERIFIED",
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "adrId": "ADR-0002",
+            "claimId": "ADR-0002.c1",
+            "evidence": [
+              "e1"
+            ]
+          }
+        },
+        {
+          "ruleId": "require",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "ADR-0005.c1 VIOLATED: require [RabbitMQ]. ADR ADR-0005 (Message broker) says \"We will use RabbitMQ as the message broker.\" at docs/adr/0005-message-broker.md:13. required technology not found; queue kafka used instead"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "requirements.txt",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 6,
+                  "endLine": 6
+                }
+              }
+            }
+          ],
+          "relatedLocations": [
+            {
+              "id": 1,
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "docs/adr/0005-message-broker.md",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 13,
+                  "endLine": 13
+                }
+              },
+              "message": {
+                "text": "ADR ADR-0005 source (ADR-0005.c1)"
+              }
+            },
+            {
+              "id": 2,
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/shop/events.py",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1,
+                  "endLine": 1
+                }
+              },
+              "message": {
+                "text": "evidence e2: src/shop/events.py:1 imports kafka"
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "driftwarden/v1": "6b07079af6756ad9d86f398b9dfed4bfb466b9ebe9fc735f3711dda37102612d"
+          },
+          "properties": {
+            "status": "VIOLATED",
+            "grounding": "VERIFIED",
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "adrId": "ADR-0005",
+            "claimId": "ADR-0005.c1",
+            "evidence": [
+              "e1",
+              "e2"
+            ]
+          }
+        },
+        {
+          "ruleId": "could-not-verify",
+          "ruleIndex": 6,
+          "level": "note",
+          "message": {
+            "text": "Could not verify decision ADR-0006 [G1]: docs/adr/0006-no-celery.md:13-13@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "docs/adr/0006-no-celery.md",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 13,
+                  "endLine": 13
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "driftwarden/v1": "a74a1b30639506f211a52af3cc462498f0b50b93d58cf5b55e36c331f49b7fcc"
+          },
+          "properties": {
+            "status": "COULD_NOT_VERIFY",
+            "grounding": "MISMATCH",
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "kind": "decision",
+            "itemId": "ADR-0006",
+            "reasons": [
+              "docs/adr/0006-no-celery.md:13-13@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+            ],
+            "adrId": "ADR-0006",
+            "checkId": "G1"
+          }
+        },
+        {
+          "ruleId": "could-not-verify",
+          "ruleIndex": 6,
+          "level": "note",
+          "message": {
+            "text": "Could not verify verdict ADR-0003.c1 (proposed DRIFTING, not reported as a finding): e1: requirements.txt:5-5@c80cc5a0effc: quote not found in cited range or anywhere in the file; e2: tests/db_check.py:3-3@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "docs/adr/0003-no-requests.md",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 13,
+                  "endLine": 13
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "driftwarden/v1": "364b0d443a1197086f90f8b9a5865a5b38a70ab13dbedb289e1b706d9991f8b0"
+          },
+          "properties": {
+            "status": "COULD_NOT_VERIFY",
+            "grounding": "MISMATCH",
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "kind": "verdict",
+            "itemId": "ADR-0003.c1",
+            "reasons": [
+              "e1: requirements.txt:5-5@c80cc5a0effc: quote not found in cited range or anywhere in the file",
+              "e2: tests/db_check.py:3-3@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+            ],
+            "adrId": "ADR-0003",
+            "claimId": "ADR-0003.c1"
+          }
+        },
+        {
+          "ruleId": "could-not-verify",
+          "ruleIndex": 6,
+          "level": "note",
+          "message": {
+            "text": "Could not verify evidence ADR-0003.c1/e1 [G2]: requirements.txt:5-5@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "docs/adr/0003-no-requests.md",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 13,
+                  "endLine": 13
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "driftwarden/v1": "0e73ee1a39ab7e375dea64100d6dccd40cd98fff03cddc7566de553633abb7bd"
+          },
+          "properties": {
+            "status": "COULD_NOT_VERIFY",
+            "grounding": "MISMATCH",
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "kind": "evidence",
+            "itemId": "ADR-0003.c1/e1",
+            "reasons": [
+              "requirements.txt:5-5@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+            ],
+            "adrId": "ADR-0003",
+            "claimId": "ADR-0003.c1",
+            "checkId": "G2"
+          }
+        },
+        {
+          "ruleId": "could-not-verify",
+          "ruleIndex": 6,
+          "level": "note",
+          "message": {
+            "text": "Could not verify evidence ADR-0003.c1/e2 [G2]: tests/db_check.py:3-3@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "docs/adr/0003-no-requests.md",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 13,
+                  "endLine": 13
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "driftwarden/v1": "907a627df8291057ef1ec7ac88957bdadff943b491ee461b2033a1e335beed98"
+          },
+          "properties": {
+            "status": "COULD_NOT_VERIFY",
+            "grounding": "MISMATCH",
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "kind": "evidence",
+            "itemId": "ADR-0003.c1/e2",
+            "reasons": [
+              "tests/db_check.py:3-3@c80cc5a0effc: quote not found in cited range or anywhere in the file"
+            ],
+            "adrId": "ADR-0003",
+            "claimId": "ADR-0003.c1",
+            "checkId": "G2"
+          }
+        },
+        {
+          "ruleId": "undocumented-decision",
+          "ruleIndex": 5,
+          "level": "note",
+          "message": {
+            "text": "Undocumented decision UD-cloud-sdk-aws-sdk: Use Aws Sdk as cloud SDK (category cloud-sdk). No ADR covers it; introduced by commit c80cc5a0effc."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "requirements.txt",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 3,
+                  "endLine": 3
+                }
+              }
+            }
+          ],
+          "relatedLocations": [
+            {
+              "id": 1,
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/shop/adapters/storage.py",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1,
+                  "endLine": 1
+                }
+              },
+              "message": {
+                "text": "evidence e2: src/shop/adapters/storage.py:1 imports boto3"
+              }
+            },
+            {
+              "id": 2,
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/shop/reports.py",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 5,
+                  "endLine": 5
+                }
+              },
+              "message": {
+                "text": "evidence e3: src/shop/reports.py:5 imports boto3"
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "driftwarden/v1": "60c45df5af466942d9db506444aad1350cdac916da34d4377a040acc308d257d"
+          },
+          "properties": {
+            "status": "UNDOCUMENTED",
+            "grounding": "VERIFIED",
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "recordId": "UD-cloud-sdk-aws-sdk",
+            "introducingCommits": [
+              "c80cc5a0effcd4597b75533195e1bbde44020a32"
+            ]
+          }
+        },
+        {
+          "ruleId": "undocumented-decision",
+          "ruleIndex": 5,
+          "level": "note",
+          "message": {
+            "text": "Undocumented decision UD-datastore-mongodb: Use Mongodb as datastore (category datastore). No ADR covers it; introduced by commit c80cc5a0effc."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "requirements.txt",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 2,
+                  "endLine": 2
+                }
+              }
+            }
+          ],
+          "relatedLocations": [
+            {
+              "id": 1,
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/shop/legacy/catalog.py",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 3,
+                  "endLine": 3
+                }
+              },
+              "message": {
+                "text": "evidence e2: src/shop/legacy/catalog.py:3 imports pymongo"
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "driftwarden/v1": "b6d3897b6797cee4d45796baf8812fe5870fd439ca12ac1b1dc9026579660a1a"
+          },
+          "properties": {
+            "status": "UNDOCUMENTED",
+            "grounding": "VERIFIED",
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "recordId": "UD-datastore-mongodb",
+            "introducingCommits": [
+              "c80cc5a0effcd4597b75533195e1bbde44020a32"
+            ]
+          }
+        },
+        {
+          "ruleId": "undocumented-decision",
+          "ruleIndex": 5,
+          "level": "note",
+          "message": {
+            "text": "Undocumented decision UD-queue-kafka: Use Kafka as queue / message broker (category queue). No ADR covers it; introduced by commit c80cc5a0effc."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "requirements.txt",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 6,
+                  "endLine": 6
+                }
+              }
+            }
+          ],
+          "relatedLocations": [
+            {
+              "id": 1,
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/shop/events.py",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1,
+                  "endLine": 1
+                }
+              },
+              "message": {
+                "text": "evidence e2: src/shop/events.py:1 imports kafka"
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "driftwarden/v1": "27cdaa9c8d172f985295a0db0d30826d413bfe1d8a483ca65b2b6d1f2a016738"
+          },
+          "properties": {
+            "status": "UNDOCUMENTED",
+            "grounding": "VERIFIED",
+            "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+            "recordId": "UD-queue-kafka",
+            "introducingCommits": [
+              "c80cc5a0effcd4597b75533195e1bbde44020a32"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "driftwarden": {
+          "reportSchemaVersion": 1,
+          "repo": "pyshop",
+          "commit": "c80cc5a0effcd4597b75533195e1bbde44020a32",
+          "mode": "offline",
+          "driftScore": 0.75,
+          "exitCode": 3,
+          "resultsTotal": 10
+        }
+      }
+    }
+  ]
+}

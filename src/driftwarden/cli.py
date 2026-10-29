@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
+import unicodedata
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import typer
 from rich.console import Console
 from rich.markup import escape
+from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from driftwarden import __version__, git
 from driftwarden.config import ConfigError, load_config
@@ -20,7 +24,17 @@ from driftwarden.grounding.ledger import Ledger
 from driftwarden.llm import get_provider
 from driftwarden.models import WORKTREE
 from driftwarden.pipeline import run_scan
-from driftwarden.report.model import Report, rule_text
+from driftwarden.report import (
+    EXTENSIONS,
+    HTML_UNAVAILABLE,
+    RENDERERS,
+    RendererUnavailable,
+    render_json,
+    renderer_available,
+)
+from driftwarden.report.markdown import NO_LINKS, render_markdown
+from driftwarden.report.model import REPORT_SCHEMA_VERSION, Report, rule_text
+from driftwarden.report.view import regate
 
 app = typer.Typer(
     name="driftwarden",
@@ -49,7 +63,67 @@ def _parse_formats(value: str | None) -> list[str]:
         raise typer.BadParameter(
             f"unknown format(s): {', '.join(bad)}; choose from {', '.join(VALID_FORMATS)}"
         )
-    return fmts
+    return list(dict.fromkeys(fmts))  # de-duplicated, in the order given
+
+
+def _require_renderers(fmts: list[str]) -> None:
+    """Exit 2 before any work when a requested format is not in this build (html, L-013)."""
+    for f in fmts:
+        if not renderer_available(f):
+            err.print(f"[red]error:[/red] {safe(HTML_UNAVAILABLE if f == 'html' else f)}")
+            raise typer.Exit(2)
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _link_base(root: Path | None, out_dir: Path) -> str:
+    """Relative POSIX path from ``out_dir`` to the repo root, so the Markdown report's ADR
+    links resolve from where the file is written; plain text when the root is unknown."""
+    if root is None:
+        return NO_LINKS
+    try:
+        rel = os.path.relpath(root.resolve(), out_dir.resolve())
+    except ValueError:  # different drives (Windows)
+        return NO_LINKS
+    return PurePath(rel).as_posix()
+
+
+def _write_reports(
+    report: Report, fmts: list[str], out_dir: Path, *, repo_root: Path | None = None
+) -> list[Path]:
+    """Render each format and write ``out_dir/driftwarden.<ext>``; exit 2 on failure."""
+    written: list[Path] = []
+    for f in fmts:
+        target = out_dir / f"driftwarden.{EXTENSIONS[f]}"
+        try:
+            if f == "md":
+                text = render_markdown(report, link_base=_link_base(repo_root, out_dir))
+            else:
+                text = RENDERERS[f](report)
+        except RendererUnavailable as exc:
+            err.print(f"[red]error:[/red] {safe(exc)}")
+            raise typer.Exit(2) from exc
+        try:
+            _atomic_write(target, text)
+        except OSError as exc:
+            err.print(f"[red]error:[/red] cannot write {safe(target)}: {safe(exc)}")
+            raise typer.Exit(2) from exc
+        written.append(target)
+        console.print(f"Wrote {safe(f)}: {safe(target)}", highlight=False, soft_wrap=True)
+    return written
 
 
 DEFAULT_OUT_DIR = ".driftwarden"
@@ -97,15 +171,15 @@ def _default_out(root: Path) -> Path:
                 ignore.write_text("# Written by driftwarden scan; run output, not source.\n*\n")
             except OSError as exc:
                 err.print(
-                    f"[yellow]warning:[/yellow] could not write {escape(str(ignore))}: "
-                    f"{escape(exc.strerror or str(exc))}; the ledger may show in git status"
+                    f"[yellow]warning:[/yellow] could not write {safe(str(ignore))}: "
+                    f"{safe(exc.strerror or str(exc))}; the ledger may show in git status"
                 )
         return base
     for alt in _fallback_dirs(root):
         if _writable(alt):
             err.print(
-                f"[yellow]warning:[/yellow] cannot write {escape(str(base))}; "
-                f"writing the grounding ledger to {escape(str(alt))} instead (use --out DIR)",
+                f"[yellow]warning:[/yellow] cannot write {safe(str(base))}; "
+                f"writing the grounding ledger to {safe(str(alt))} instead (use --out DIR)",
                 highlight=False,
             )
             return alt
@@ -128,17 +202,17 @@ def _resolve_provider(requested: str, cfg, root: Path) -> tuple[str, object | No
         provider = get_provider(cfg.model_copy(update={"mode": requested}), root)
     except Exception as exc:  # noqa: BLE001 - any init failure: fallback or exit 2
         if requested == "llm":
-            err.print(f"[red]error:[/red] LLM provider failed to initialise: {escape(str(exc))}")
+            err.print(f"[red]error:[/red] LLM provider failed to initialise: {safe(str(exc))}")
             raise typer.Exit(2) from exc
         err.print(
             f"[yellow]warning:[/yellow] LLM provider failed to initialise "
-            f"({escape(str(exc))}); falling back to offline mode",
+            f"({safe(str(exc))}); falling back to offline mode",
             highlight=False,
         )
         return "offline", None
     if provider.offline:
         reason = getattr(provider, "reason", "offline mode")
-        err.print(f"[dim]auto mode: {escape(reason)}[/dim]", highlight=False)
+        err.print(f"[dim]auto mode: {safe(reason)}[/dim]", highlight=False)
         return "offline", None
     return "llm", provider
 
@@ -147,6 +221,40 @@ def _loc(path: str, a: int, b: int, commit: str) -> str:
     sha = "worktree" if commit == WORKTREE else commit[:7]
     lines = f"{a}" if a == b else f"{a}-{b}"
     return f"{path}:{lines}@{sha}"
+
+
+def safe(value: object) -> str:
+    """THE output helper (L-028 D3): every repo-, user- or OS-derived value the CLI prints
+    goes through here. ``terminal_safe`` first (ESC, OSC-8, C1, bidi and other control /
+    format characters, and newlines, become visible ``\\uXXXX``, so one value is one inert
+    line), then rich ``escape`` (so ``[...]`` is never markup). ``tests/test_l028_pipeline``
+    checks with an AST walk that no f-string value printed by this module bypasses it."""
+    return escape(terminal_safe(str(value), multiline=False))
+
+
+def terminal_safe(text: str, *, multiline: bool = True) -> str:
+    """``text`` with every control, format or separator character replaced by a visible
+    ``\\uXXXX`` escape, so it cannot drive the terminal. ``multiline`` keeps newline and tab
+    (for a whole document such as a draft); otherwise they are escaped too."""
+    out = []
+    keep = "\n\t" if multiline else ""
+    for ch in text:
+        if ch in keep:
+            out.append(ch)
+        elif unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") or ch == "\x7f":
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+_FAILURE_NOTE = re.compile(r"\b(failed|error|could not read|cannot read)\b", re.IGNORECASE)
+
+
+def is_failure_note(note: str) -> bool:
+    """A report note that records a failure (LLM provider / claim extraction / judge,
+    unreadable ADR): printed as a warning as well as in the Notes section."""
+    return bool(_FAILURE_NOTE.search(note))
 
 
 def _detail(ev) -> str:
@@ -176,52 +284,66 @@ def _print_report(report: Report) -> None:
             assert v is not None
             src = c.source
             console.print(
-                f"  {escape(c.id)}  {escape(rule_text(c))}  "
-                f"{escape(_loc(src.path, src.line_start, src.line_end, src.commit))}",
+                f"  {safe(c.id)}  {safe(rule_text(c))}  "
+                f"{safe(_loc(src.path, src.line_start, src.line_end, src.commit))}",
                 highlight=False,
             )
-            console.print(f"    {escape(v.rationale)}", highlight=False)
+            console.print(f"    {safe(v.rationale)}", highlight=False)
             for ev in v.evidence:
                 r = ev.ref
                 console.print(
-                    f"    evidence  {escape(_loc(r.path, r.line_start, r.line_end, r.commit))}"
-                    f"  {escape(_detail(ev))}",
+                    f"    evidence  {safe(_loc(r.path, r.line_start, r.line_end, r.commit))}"
+                    f"  {safe(_detail(ev))}",
                     highlight=False,
                 )
     skipped = [c for c in report.claims if not c.judged]
     for cr in skipped:
         console.print(
-            f"[dim]not judged {escape(cr.id)}: {escape(cr.not_judged_reason or '')}[/dim]",
+            f"[dim]not judged {safe(cr.id)}: {safe(cr.not_judged_reason or '')}[/dim]",
             highlight=False,
         )
     for item in report.could_not_verify:
         check = f" [{item.check_id}]" if item.check_id else ""
         reason = "; ".join(item.reasons)
         console.print(
-            f"[red]Could not verify[/red] {item.kind} {escape(item.id)}{escape(check)}: "
-            f"{escape(reason)}",
+            f"[red]Could not verify[/red] {safe(item.kind)} {safe(item.id)}{safe(check)}: "
+            f"{safe(reason)}",
             highlight=False,
         )
     for rec in report.undocumented:
         first = rec.introducing_commits[0][:7] if rec.introducing_commits else "?"
         console.print(
-            f"[yellow]Undocumented[/yellow] {escape(rec.id)}: {escape(rec.title)} "
-            f"(introduced {first})",
+            f"[yellow]Undocumented[/yellow] {safe(rec.id)}: {safe(rec.title)} "
+            f"(introduced {safe(first)})",
             highlight=False,
         )
         for ev in rec.evidence:
             r = ev.ref
             console.print(
-                f"    evidence  {escape(_loc(r.path, r.line_start, r.line_end, r.commit))}"
-                f"  {escape(_detail(ev))}",
+                f"    evidence  {safe(_loc(r.path, r.line_start, r.line_end, r.commit))}"
+                f"  {safe(_detail(ev))}",
                 highlight=False,
             )
     for d in report.drafts:
         console.print(
-            f"Draft ADR for {escape(d.record_id)}: {escape(d.title)} -> suggested path "
-            f"{escape(d.path or '?')} (shown only, not written)",
+            f"Draft ADR for {safe(d.record_id)}: {safe(d.title)} -> suggested path "
+            f"{safe(d.path or '?')} (shown only, not written)",
             highlight=False,
         )
+        # The verified markdown, as inert text: never parsed as rich markup, and any
+        # control / format character (ANSI escapes included) shown as a visible escape.
+        console.print(
+            Panel(Text(terminal_safe(d.markdown or "")), title=safe(d.path or d.record_id)),
+            highlight=False,
+            soft_wrap=False,
+        )
+    if report.notes:
+        console.print(f"Notes ({len(report.notes)}):", highlight=False)
+        for note in report.notes:
+            console.print(f"  - {safe(note)}", highlight=False)
+            if is_failure_note(note):
+                # A provider / extraction failure must be visible, not only in --json-out.
+                err.print(f"[yellow]warning:[/yellow] {safe(note)}", highlight=False)
     gs = report.grounding_summary
     parts = []
     for cid, cs in gs.by_check.items():
@@ -256,14 +378,14 @@ def scan(
     format: str = typer.Option(
         "",
         "--format",
-        help="Comma list of report formats: json,md,sarif,html. Not written yet "
-        "(arrives in L-012/L-013); use --json-out for JSON.",
+        help="Comma list of report files to write: json,md,sarif,html. Each goes to "
+        "OUT/driftwarden.<ext> (html needs the HTML report, L-013).",
     ),
     out: Path | None = typer.Option(
         None,
         "--out",
-        help="Output directory (grounding ledger goes to OUT/logs/grounding). "
-        "Default: <repo>/.driftwarden.",
+        help="Output directory for --format files and the grounding ledger "
+        "(OUT/logs/grounding). Default: <repo>/.driftwarden (self-ignored).",
     ),
     config: Path | None = typer.Option(None, "--config", help="Config file to use."),
     json_out: Path | None = typer.Option(
@@ -285,8 +407,9 @@ def scan(
     cited lines). When both 1 and 3 apply, the exit code is 3.
     """
     fmts = _parse_formats(format)
+    _require_renderers(fmts)
     if not path.exists():
-        err.print(f"[red]error:[/red] path does not exist: {path}")
+        err.print(f"[red]error:[/red] path does not exist: {safe(path)}")
         raise typer.Exit(2)
     # Config errors are reported first (D-002): a broken config is a usage error the
     # user must see even when the path is also not a git repository.
@@ -299,18 +422,19 @@ def scan(
     try:
         cfg = load_config(root, config)
     except ConfigError as exc:
-        err.print(f"[red]config error:[/red] {escape(str(exc))}")
+        err.print(f"[red]config error:[/red] {safe(str(exc))}")
         raise typer.Exit(2) from exc
     if git_error is not None:
-        err.print(f"[red]error:[/red] {git_error}")
+        err.print(f"[red]error:[/red] {safe(git_error)}")
         raise typer.Exit(2) from git_error
 
     requested = cfg.mode if mode is Mode.auto else mode.value
     resolved, provider = _resolve_provider(requested, cfg, root)
 
-    console.print(f"driftwarden {__version__} - scan {root}")
+    console.print(f"driftwarden {__version__} - scan {safe(root)}")
     console.print(
-        f"mode={resolved} formats={','.join(fmts) or '(none)'} config={cfg.source or 'defaults'}",
+        f"mode={resolved} formats={','.join(fmts) or '(none)'} "
+        f"config={safe(cfg.source or 'defaults')}",
         highlight=False,
     )
 
@@ -318,20 +442,20 @@ def scan(
     if result.head is None:
         console.print("[yellow]note:[/yellow] repository has no commits; reading working tree")
     for rel, msg in result.errors:
-        err.print(f"[yellow]warning:[/yellow] could not read {rel}: {msg}")
+        err.print(f"[yellow]warning:[/yellow] could not read {safe(rel)}: {safe(msg)}")
     for rel, note in result.skipped:
-        console.print(f"[yellow]skipped[/yellow] {escape(rel)}: {escape(note)}", highlight=False)
+        console.print(f"[yellow]skipped[/yellow] {safe(rel)}: {safe(note)}", highlight=False)
 
     if out is not None:
         if not _writable(out):
-            err.print(f"[red]error:[/red] cannot write ledger to {escape(str(out))}; use --out DIR")
+            err.print(f"[red]error:[/red] cannot write ledger to {safe(str(out))}; use --out DIR")
             raise typer.Exit(2)
         ledger_base = out
     else:
         try:
             ledger_base = _default_out(root)
         except LedgerLocationError as exc:
-            err.print(f"[red]error:[/red] cannot write ledger to {escape(str(exc))}; use --out DIR")
+            err.print(f"[red]error:[/red] cannot write ledger to {safe(str(exc))}; use --out DIR")
             raise typer.Exit(2) from exc
     ledger = Ledger(ledger_base)
     try:
@@ -345,7 +469,7 @@ def scan(
             adrs=result,
         )
     except git.GitError as exc:
-        err.print(f"[red]error:[/red] {escape(str(exc))}")
+        err.print(f"[red]error:[/red] {safe(str(exc))}")
         raise typer.Exit(2) from exc
 
     decisions = report.decisions
@@ -357,12 +481,14 @@ def scan(
         commit = "worktree" if src.commit == WORKTREE else src.commit[:7]
         lines = f"{src.path}:{src.line_start}-{src.line_end}@{commit}"
         g = "[green]VERIFIED[/green]" if dec.g1.status == "VERIFIED" else "[red]MISMATCH[/red]"
-        table.add_row(escape(dec.id), escape(dec.title), dec.status, dec.format, escape(lines), g)
+        table.add_row(
+            safe(dec.id), safe(dec.title), safe(dec.status), safe(dec.format), safe(lines), g
+        )
     console.print(table)
     for dec in decisions:
         if not dec.judged and dec.g1.status == "VERIFIED":
             console.print(
-                f"[dim]not judged {escape(dec.id)}: {escape(dec.not_judged_reason or '')}[/dim]",
+                f"[dim]not judged {safe(dec.id)}: {safe(dec.not_judged_reason or '')}[/dim]",
                 highlight=False,
             )
 
@@ -384,28 +510,111 @@ def scan(
 
     _print_report(report)
     ledger.write_summary()
-    console.print(f"Ledger: {ledger.path}", highlight=False, soft_wrap=True)
+    console.print(f"Ledger: {safe(ledger.path)}", highlight=False, soft_wrap=True)
 
     if json_out is not None:
         try:
-            json_out.parent.mkdir(parents=True, exist_ok=True)
-            json_out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+            _atomic_write(json_out, render_json(report))
         except OSError as exc:
-            err.print(f"[red]error:[/red] cannot write {escape(str(json_out))}: {escape(str(exc))}")
+            err.print(f"[red]error:[/red] cannot write {safe(str(json_out))}: {safe(str(exc))}")
             raise typer.Exit(2) from exc
-        console.print(f"Report JSON: {json_out}", highlight=False, soft_wrap=True)
+        console.print(f"Report JSON: {safe(json_out)}", highlight=False, soft_wrap=True)
     if fmts:
-        console.print(
-            "[dim]--format: report file formats arrive in L-012/L-013; nothing was written "
-            "for --format (use --json-out FILE for the JSON report).[/dim]",
+        _write_reports(report, fmts, ledger_base, repo_root=root)
+    if not report.timeline:
+        console.print("[dim]Not yet implemented: drift timeline (L-011).[/dim]", highlight=False)
+    raise typer.Exit(report.summary.exit_code)
+
+
+def _default_repo(report: Report) -> Path | None:
+    """The current directory, when it is a git root that holds every ADR file the report
+    cites; otherwise None (Markdown locations are then plain text)."""
+    cwd = Path.cwd()
+    try:
+        root = git.repo_root(cwd)
+    except git.GitError:
+        return None
+    if root.resolve() != cwd.resolve():
+        return None
+    paths = {d.source.path for d in report.decisions}
+    if not paths or not all((root / p).is_file() for p in paths):
+        return None
+    return root
+
+
+@app.command("report")
+def report_cmd(
+    report_json: Path = typer.Argument(..., help="A Report JSON written by scan."),
+    format: str = typer.Option(
+        "md", "--format", help="Comma list of report files to write: json,md,sarif,html."
+    ),
+    out: Path | None = typer.Option(
+        None, "--out", help="Output directory. Default: the directory of REPORT_JSON."
+    ),
+    exit_code: bool = typer.Option(
+        False,
+        "--exit-code",
+        help="Exit with the re-checked report's exit code (0/1/3, as scan) instead of 0.",
+    ),
+    repo: Path | None = typer.Option(
+        None,
+        "--repo",
+        help="Repository root, for Markdown ADR links relative to OUT. Default: the current "
+        "directory when it is the git root holding the report's ADR files, else plain text.",
+    ),
+) -> None:
+    """Re-render report files from a saved Report JSON, without rescanning.
+
+    Writes OUT/driftwarden.<ext> for each format. The loaded report is re-gated once first:
+    a finding whose evidence has no matching VERIFIED verifier record inside the file is
+    turned into Could not verify, and the summary and exit code are recomputed, so every
+    format (json included) agrees. A file whose verifier records were forged as well can
+    only be caught by re-scanning: report re-renders, scan verifies.
+    Exit codes: 0 = written (with --exit-code: the re-checked report's 0, 1 or 3);
+    2 = unreadable or invalid report, unknown or unavailable format, or an output that
+    cannot be written.
+    """
+    fmts = _parse_formats(format)
+    if not fmts:
+        err.print("[red]error:[/red] --format needs at least one of json,md,sarif,html")
+        raise typer.Exit(2)
+    _require_renderers(fmts)
+    try:
+        raw = report_json.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        err.print(f"[red]error:[/red] cannot read {safe(report_json)}: {safe(exc)}")
+        raise typer.Exit(2) from exc
+    try:
+        report = Report.model_validate_json(raw)
+    except ValueError as exc:
+        first = str(exc).splitlines()[0] if str(exc) else "invalid"
+        err.print(
+            f"[red]error:[/red] {safe(report_json)} is not a DriftWarden Report JSON: {safe(first)}"
+        )
+        raise typer.Exit(2) from exc
+    if report.metadata.schema_version > REPORT_SCHEMA_VERSION:
+        err.print(
+            f"[red]error:[/red] report schema version {safe(report.metadata.schema_version)} "
+            f"is newer than this build supports ({safe(REPORT_SCHEMA_VERSION)}); "
+            "upgrade driftwarden"
+        )
+        raise typer.Exit(2)
+    gated = regate(report)
+    demoted = len(gated.could_not_verify) - len(report.could_not_verify)
+    if demoted:
+        err.print(
+            f"[yellow]warning:[/yellow] {safe(demoted)} item(s) failed the re-render check and "
+            "are reported as Could not verify",
             highlight=False,
         )
-    console.print(
-        "[dim]Not yet implemented: drift timeline (L-011), report file formats "
-        "(L-012/L-013).[/dim]",
-        highlight=False,
-    )
-    raise typer.Exit(report.summary.exit_code)
+    if repo is not None and not repo.is_dir():
+        err.print(f"[red]error:[/red] --repo is not a directory: {safe(repo)}")
+        raise typer.Exit(2)
+    root = repo if repo is not None else _default_repo(gated)
+    out_dir = out if out is not None else report_json.parent
+    _write_reports(gated, fmts, out_dir, repo_root=root)
+    if exit_code:
+        raise typer.Exit(gated.summary.exit_code)
 
 
 @app.command()

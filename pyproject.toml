@@ -30,7 +30,7 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = ["anthropic", "openai"]
-dev = ["pytest>=8", "pytest-cov", "ruff"]
+dev = ["pytest>=8", "pytest-cov", "ruff", "jsonschema>=4"]
 
 [project.scripts]
 driftwarden = "driftwarden.cli:app"

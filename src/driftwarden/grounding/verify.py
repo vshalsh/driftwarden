@@ -561,3 +561,529 @@ def verify_commits_exist(
             reason += f" and is in the history of {str(ancestor_of)[:12]}"
         out.append(_result(None, ok, reason, check_id, subject))
     return out
+
+
+# --------------------------------------------------------------------------- G4
+
+
+def verify_first_violation(
+    repo: str | Path, entry, claim, config=None, *, head: str | None = None
+) -> list[GroundingResult]:
+    """G4: re-check a drift-timeline entry (``timeline.TimelineEntry``) from scratch.
+
+    ``head`` is the commit the entry is expected to have been built for (any rev;
+    ``first_violation`` passes its own); when given, ``entry.head`` must be it. The
+    claim is re-judged with a fresh snapshot cache and the offline judge.
+
+    Principle: every fact the entry asserts about history is re-established from the
+    repository by this function, never taken from the entry's own counters or notes.
+    Every field is checked, re-derived from the repository, or (sampled only) bounded:
+
+    * window: ``head`` is a full pinned SHA (never WORKTREE); ``commits_in_window``
+      = w is 1..len(first-parent history of head); the window is its newest w
+      commits; ``oldest_available`` is the oldest of them (FOUND / TRUNCATED);
+      ``truncated_by`` is re-derived (``shallow`` iff that commit is a .git/shallow
+      boundary, ``max_commits`` iff older history exists, else None). So a head
+      moved to another commit no longer matches its window.
+    * FOUND, commit C: (a) C is in the window and ``parent`` is C's first parent
+      (``None`` only for a true root commit, not a shallow boundary); (b) at C the
+      claim is VERIFIED VIOLATED and ``evidence`` equals, item for item and in
+      order, the evidence of that verdict (nothing dropped, reordered, duplicated
+      or foreign), each item passing G2/G3 (``judge.verify_evidence``); (c) at the
+      parent the claim is not VERIFIED VIOLATED; (d) ``subject`` and
+      ``author_date`` match ``git log -1`` of C (subject sanitised as in
+      ``undocumented.draft.sanitise_subject``); (e) the claim is VERIFIED VIOLATED
+      at the pinned head, which is on the first-parent chain above C (the
+      violation is current).
+    * ``earlier_transitions``: each is a real held -> violated transition in the
+      window, older than C, oldest first, no duplicates. ``non_monotonic`` is
+      consistent with them and with ``search``: True needs an earlier transition
+      (or a violated window start in a truncated window); False needs none; a
+      ``sampled`` entry must say None and list none.
+    * ``exhaustive`` FOUND: every commit of the window is re-judged; C must be the
+      most recent held -> violated transition, and ``earlier_transitions``,
+      ``non_monotonic`` and the gap notes must equal what the fresh judgements give.
+    * ``commits_judged``: exactly the window size for ``exhaustive`` and
+      TRUNCATED, 1 for NOT_VIOLATED_AT_HEAD; for ``sampled`` only bounded (at
+      least the sample count, at most the window): the exact count is unverified
+      metadata, the one field G4 cannot re-derive without replaying the sampler.
+    * ``notes``: the fixed notes are re-derived (``timeline.bisect.entry_notes``)
+      and must match exactly and in order. Gap notes: re-derived from the full
+      window (exhaustive, TRUNCATED); for ``sampled`` each must name a window
+      commit, in history order, and equal a fresh judgement's note.
+    * TRUNCATED: the claim is VERIFIED VIOLATED at **every** commit of the window
+      (all re-judged; up to the window size, snapshots cached), with matching
+      evidence at ``oldest_available``; ``search`` is exhaustive, ``non_monotonic``
+      False, and commit, parent, subject, date and earlier transitions are empty.
+      NOT_VIOLATED_AT_HEAD: the claim is not VERIFIED VIOLATED at head, and every
+      commit / evidence / search / window-start field is empty. UNKNOWN entries
+      state nothing and get one MISMATCH.
+    * ``reasons`` / ``proposed_status`` / ``grounding`` are fixed by the model
+      invariants (a VERIFIED entry has none). ``checks`` (G4's own recorded
+      output), when present, must equal this re-verification's results exactly.
+
+    Every result has check_id ``G4`` and a precise reason. Cheap structural checks
+    run first; when one fails, no judgement is made, and the full-window re-judgement
+    runs only once the boundary checks have passed. Cost: an exhaustive or TRUNCATED
+    entry costs one judgement per window commit (about the search's own cost; a
+    fresh snapshot cache, nothing reused from the search). Plain and deterministic, no
+    model. Never raises for a bad entry; raises only if ``repo`` is not a git
+    repository."""
+    root = git.repo_root(repo)
+    subj = f"{getattr(claim, 'id', '?')}/timeline"
+    try:
+        results = _verify_first_violation(root, entry, claim, config, subj, head)
+    except git.NotAGitRepoError:
+        raise
+    except Exception as exc:  # a bad entry is a MISMATCH, never a crash
+        return [_result(None, False, f"could not verify ({type(exc).__name__}: {exc})", "G4", subj)]
+    recorded = list(getattr(entry, "checks", None) or [])
+    if recorded:
+        # The entry carries the G4 results from when it was built: they must be exactly
+        # what this re-verification gives (a recorded check cannot be edited or added).
+        same = [r.model_dump() for r in recorded] == [r.model_dump() for r in results]
+        reason = (
+            f"checks: the {len(recorded)} recorded G4 result(s) are reproduced"
+            if same
+            else f"checks: the {len(recorded)} recorded G4 result(s) differ from a fresh "
+            f"verification ({len(results)} result(s))"
+        )
+        results.append(_result(None, same, reason, "G4", subj))
+    return results
+
+
+def _verify_first_violation(
+    root: Path, entry, claim, config, subj: str, expected_head: str | None
+) -> list[GroundingResult]:
+    from driftwarden.judge.judge import verify_evidence
+    from driftwarden.timeline import bisect as tl
+    from driftwarden.undocumented.draft import sanitise_subject
+
+    out: list[GroundingResult] = []
+
+    def res(ok: bool, reason: str, prov=None) -> bool:
+        out.append(_result(prov, ok, reason, "G4", subj))
+        return ok
+
+    def failed() -> bool:
+        return any(r.status != "VERIFIED" for r in out)
+
+    if entry.claim_id != claim.id:
+        res(False, f"entry is for claim {entry.claim_id!r}, not {claim.id!r}")
+        return out
+    status = entry.status
+    if status == "UNKNOWN":
+        why = "; ".join(entry.reasons)[:300] or "no reason given"
+        res(False, f"no first-violation result to verify: {why}")
+        return out
+    if status not in ("FOUND", "TRUNCATED", "NOT_VIOLATED_AT_HEAD"):
+        res(False, f"unknown entry status {status!r}")
+        return out
+
+    # ---- window -----------------------------------------------------------------
+    head = entry.head
+    if head is None:
+        bad = "no head commit"
+    elif head == WORKTREE:
+        bad = "a timeline head must be a full commit SHA, not the WORKTREE sentinel"
+    else:
+        bad = commit_problem(root, head)
+    if bad is not None:
+        res(False, f"head: {bad}")
+        return out
+    if expected_head is not None:
+        try:
+            want = git.resolve_commit(root, expected_head)
+        except git.GitError:
+            res(False, f"expected head {expected_head!r} is not a commit")
+            return out
+        if head != want:
+            res(False, f"head {head[:12]} is not the expected head {want[:12]}")
+            return out
+    chain = tl.first_parent_chain(root, head)  # newest first, whole history
+    w = entry.commits_in_window
+    if not isinstance(w, int) or not 1 <= w <= len(chain):
+        res(False, f"commits_in_window {w!r} not in 1..{len(chain)} (history of {head[:12]})")
+        return out
+    window = list(reversed(chain[:w]))  # oldest first
+    pos = {sha: i for i, sha in enumerate(window)}
+    oldest = window[0]
+    shallow = git.shallow_boundary(root)
+    if oldest in shallow:
+        tb = "shallow"
+    elif w < len(chain):
+        tb = "max_commits"
+    else:
+        tb = None
+    try:
+        adr_check = git.blob_at(root, head, claim.source.path) is not None
+    except git.GitError:
+        adr_check = False
+    res(True, f"window: {w} first-parent commit(s) of {head[:12]}, oldest {oldest[:12]}")
+
+    def empty(*names: str) -> None:
+        for name in names:
+            val = getattr(entry, name)
+            if val not in (None, []):
+                res(False, f"a {status} entry must not state {name} (got {str(val)[:60]!r})")
+
+    c = entry.first_violating_commit
+    parents_c: list[str] = []
+    if status == "NOT_VIOLATED_AT_HEAD":
+        empty("first_violating_commit", "parent", "author_date", "subject", "evidence")
+        empty("earlier_transitions", "oldest_available", "truncated_by", "search")
+        empty("non_monotonic")
+        if entry.commits_judged != 1:
+            res(False, f"commits_judged {entry.commits_judged} != 1 (only head is judged)")
+    else:
+        if entry.oldest_available != oldest:
+            res(
+                False,
+                f"oldest_available {str(entry.oldest_available)[:12]} is not the oldest "
+                f"commit of the window ({oldest[:12]})",
+            )
+        if entry.truncated_by != tb:
+            res(False, f"truncated_by {entry.truncated_by!r} but the window gives {tb!r}")
+        if status == "TRUNCATED":
+            empty("first_violating_commit", "parent", "author_date", "subject")
+            empty("earlier_transitions")
+            if tb is None:
+                res(False, f"window reaches the root commit {oldest[:12]}: not truncated")
+            if entry.search != "exhaustive":
+                res(False, "TRUNCATED needs every commit of the window judged (exhaustive)")
+            if entry.non_monotonic is not False:
+                res(
+                    False,
+                    "TRUNCATED means violated throughout: non_monotonic must be False, "
+                    f"got {entry.non_monotonic!r}",
+                )
+            if entry.commits_judged != w:
+                res(False, f"commits_judged {entry.commits_judged} != window {w}")
+        else:  # FOUND
+            _found_structure(root, entry, res, window, pos, shallow, tb, chain)
+            if not failed():
+                parents_c = git.parents(root, c)
+                logs = git.log(root, max_count=1, rev=c)
+                if not logs or logs[0].sha != c:
+                    res(False, f"(d) no git log entry for {c[:12]}")
+                else:
+                    want_s = sanitise_subject(logs[0].subject)
+                    probs = []
+                    if entry.subject != want_s:
+                        probs.append(f"subject {entry.subject!r} != git log {want_s!r}")
+                    if entry.author_date != logs[0].date:
+                        probs.append(
+                            f"author_date {entry.author_date!r} != git log {logs[0].date!r}"
+                        )
+                    res(
+                        not probs,
+                        f"(d) {c[:12]}: " + ("; ".join(probs) or "subject and date match"),
+                    )
+
+    # ---- notes (fixed part; NOT_VIOLATED needs the head verdict, checked below) ---
+    gap: list[str] = []
+    if status != "NOT_VIOLATED_AT_HEAD" and not failed():
+        fixed = tl.entry_notes(
+            status=status, head=head, window=w, adr_path=claim.source.path, adr_check=adr_check,
+            search=entry.search, truncated_by=tb, oldest=oldest,
+            root_boundary=status == "FOUND" and entry.parent is None,
+            non_monotonic=entry.non_monotonic, earlier=list(entry.earlier_transitions),
+            merge_parents=parents_c, commit=c,
+        )  # fmt: skip
+        gap = _check_fixed_notes(entry.notes, fixed, res)
+    if failed():
+        return out
+
+    # ---- judgements (fresh cache: nothing from the search is reused) --------------
+    cache = tl.SnapshotCache(root, config)
+    memo: dict[str, object] = {}
+
+    def jud(sha: str):
+        if sha not in memo:
+            memo[sha] = tl.judge_at(root, claim, sha, cache, adr_check=adr_check)
+        return memo[sha]
+
+    def evidence_at(sha: str, verdict) -> None:
+        got = [e.model_dump() for e in entry.evidence]
+        want = [e.model_dump() for e in verdict.evidence] if verdict is not None else []
+        if not got:
+            res(False, f"(b) entry cites no evidence at {sha[:12]}")
+        elif got != want:
+            ids = [e.id for e in entry.evidence]
+            cited = [e.id for e in verdict.evidence] if verdict is not None else []
+            res(
+                False,
+                f"(b) evidence {ids} is not exactly (same items, same order) the "
+                f"{len(want)} item(s) the verdict at {sha[:12]} cites {cited}",
+            )
+        for ev in entry.evidence:
+            probs = [
+                f"{r.check_id}: {r.reason}"
+                for r in verify_evidence(root, ev, commit=sha, subject=subj)
+                if r.status != "VERIFIED"
+            ]
+            res(
+                not probs,
+                f"(b) evidence {ev.id}: " + ("; ".join(probs) or "G2/G3 verified"),
+                ev.ref,
+            )
+
+    if status == "NOT_VIOLATED_AT_HEAD":
+        j = jud(head)
+        what = j.verdict.status if j.verdict else "not judged"
+        res(
+            not j.violated,
+            f"head {head[:12]}: claim is {what}"
+            + (", not VERIFIED VIOLATED" if not j.violated else ", but entry says not violated"),
+        )
+        fixed = tl.entry_notes(
+            status=status,
+            head=head,
+            window=w,
+            adr_path=claim.source.path,
+            adr_check=adr_check,
+            head_status=what,
+        )
+        gap = _check_fixed_notes(entry.notes, fixed, res)
+        if failed():
+            return out
+        _check_gap_notes(gap, [head], jud, res)
+        return out
+
+    def scan() -> list:
+        """Every commit of the window judged afresh, oldest first."""
+        return [jud(sha) for sha in window]
+
+    def derived_gap(js: list) -> None:
+        want = tl.gap_notes(list(enumerate(js)))
+        res(
+            gap == want,
+            f"notes: {len(want)} gap note(s) re-derived from the full window"
+            if gap == want
+            else f"notes: gap notes {gap[:3]!r} differ from the full window's {want[:3]!r}",
+        )
+
+    if status == "TRUNCATED":
+        j = jud(oldest)
+        ok = res(
+            j.violated,
+            f"{oldest[:12]}: claim is " + ("" if j.violated else "not ") + "VERIFIED VIOLATED",
+        )
+        if ok:
+            evidence_at(oldest, j.verdict)
+        if failed():
+            return out
+        js = scan()
+        held = [window[i] for i, x in enumerate(js) if not x.violated]
+        res(
+            not held,
+            f"window: claim VERIFIED VIOLATED at all {w} commit(s)"
+            if not held
+            else f"window: claim is not violated at {len(held)} of {w} commit(s) (newest "
+            f"{held[-1][:12]}): not violated throughout, so not TRUNCATED",
+        )
+        derived_gap(js)
+        return out
+
+    # FOUND
+    jc = jud(c)
+    ok = res(
+        jc.violated,
+        f"(b) at {c[:12]} the claim is " + ("" if jc.violated else "not ") + "VERIFIED VIOLATED",
+    )
+    if ok:
+        evidence_at(c, jc.verdict)
+    if entry.parent is not None:
+        jp = jud(entry.parent)
+        res(
+            not jp.violated,
+            f"(c) at parent {entry.parent[:12]} the claim is "
+            + ("not violated" if not jp.violated else "already violated, so not the boundary"),
+        )
+    for t in entry.earlier_transitions:
+        i = pos[t]
+        real = jud(t).violated and (i == 0 or not jud(window[i - 1]).violated)
+        res(
+            real,
+            f"earlier transition {t[:12]}: "
+            + ("held -> violated" if real else "not a held -> violated commit"),
+        )
+    if entry.non_monotonic and not entry.earlier_transitions:
+        v0 = jud(oldest).violated
+        res(
+            v0,
+            "non_monotonic without earlier transitions needs a violated window start; "
+            f"{oldest[:12]} is " + ("violated" if v0 else "not violated"),
+        )
+    # The violation is current: violated at the pinned head, which is above C.
+    vh = jud(head).violated
+    res(
+        vh and pos[c] <= pos[head],
+        f"head {head[:12]}: claim is "
+        + ("VERIFIED VIOLATED" if vh else "not VERIFIED VIOLATED (the violation is not current)")
+        + f"; {c[:12]} is {pos[head] - pos[c]} first-parent commit(s) below it",
+    )
+    if failed():
+        return out
+    if entry.search != "exhaustive":
+        _check_gap_notes(gap, window, jud, res)  # sampled: only what was judged
+        return out
+    # Exhaustive: re-establish the whole window, so "most recent transition", the earlier
+    # transitions, non_monotonic and the gap notes come from fresh judgements, not the entry.
+    js = scan()
+    v = [x.violated for x in js]
+    trans = [i for i in range(1, w) if v[i] and not v[i - 1]]
+    if v[0] and tb is None:
+        trans.insert(0, 0)
+    latest = window[trans[-1]] if trans else None
+    res(
+        latest == c,
+        f"window: {c[:12]} is the most recent held -> violated transition"
+        if latest == c
+        else f"window: the most recent held -> violated transition is "
+        f"{latest[:12] if latest else 'none (violated throughout)'}, not {c[:12]}",
+    )
+    if latest == c:
+        b = pos[c]
+        want_e = [window[i] for i in trans[:-1]]
+        want_nm = any(v[:b])
+        res(
+            list(entry.earlier_transitions) == want_e,
+            f"window: earlier transitions {[x[:12] for x in want_e]}"
+            + ("" if list(entry.earlier_transitions) == want_e else ", entry lists others"),
+        )
+        res(
+            entry.non_monotonic is want_nm,
+            f"window: non_monotonic is {want_nm}"
+            + ("" if entry.non_monotonic is want_nm else f", entry says {entry.non_monotonic}"),
+        )
+    derived_gap(js)
+    return out
+
+
+def _found_structure(root, entry, res, window, pos, shallow, tb, chain) -> None:
+    """Cheap (no judgement) checks of a FOUND entry: commit, parent, search fields,
+    earlier transitions."""
+    from driftwarden.timeline.bisect import sample_indices
+
+    w = len(window)
+    c = entry.first_violating_commit
+    bad = commit_problem(root, c) if c is not None else "no first_violating_commit"
+    if bad is not None:
+        res(False, f"(a) commit: {bad}")
+        return
+    if c not in pos:
+        where = "first-parent history" if c not in chain else "searched window"
+        res(False, f"(a) {c[:12]} is not on the {where} of {window[-1][:12]}")
+        return
+    parents = git.parents(root, c)
+    if entry.parent is None:
+        if parents:
+            res(False, f"(a) parent is None but {c[:12]} has first parent {parents[0][:12]}")
+        elif c in shallow:
+            res(False, f"(a) {c[:12]} is a shallow-clone boundary, not a root commit")
+        else:
+            res(True, f"(a) {c[:12]} is the root commit")
+    else:
+        bad = commit_problem(root, entry.parent)
+        if bad is not None:
+            res(False, f"(a) parent: {bad}")
+        elif not parents or parents[0] != entry.parent:
+            first = parents[0][:12] if parents else "none"
+            res(False, f"(a) {entry.parent[:12]} is not the first parent of {c[:12]} ({first})")
+        elif entry.parent not in pos:
+            res(False, f"(a) parent {entry.parent[:12]} is outside the searched window")
+        else:
+            res(True, f"(a) {entry.parent[:12]} is the first parent of {c[:12]}")
+
+    search, nm, earlier = entry.search, entry.non_monotonic, list(entry.earlier_transitions)
+    if search == "exhaustive":
+        if entry.commits_judged != w:
+            res(False, f"commits_judged {entry.commits_judged} != window {w} (exhaustive)")
+        if nm is None:
+            res(False, "an exhaustive search checks monotonicity: non_monotonic cannot be None")
+    elif search == "sampled":
+        lo = len(sample_indices(w))
+        if not lo <= entry.commits_judged <= w:
+            res(False, f"commits_judged {entry.commits_judged} not in {lo}..{w} (sampled)")
+        if nm is not None or earlier:
+            res(
+                False,
+                "a sampled search does not check monotonicity: non_monotonic must be None "
+                "and earlier_transitions empty",
+            )
+    else:
+        res(False, f"unknown search {search!r}")
+    if nm is False and earlier:
+        res(False, "non_monotonic is False but earlier transitions are listed")
+    if earlier and nm is not True:
+        res(False, f"earlier transitions are listed but non_monotonic is {nm!r}")
+    if nm is True and not earlier and tb is None:
+        res(False, "non_monotonic is True but no earlier transition is listed")
+    seen: set[str] = set()
+    last = -1
+    for t in earlier:
+        if not isinstance(t, str) or t not in pos:
+            res(False, f"earlier transition {str(t)[:40]!r} is not a commit of the window")
+            return
+        if t in seen:
+            res(False, f"earlier transition {t[:12]} listed twice")
+            return
+        seen.add(t)
+        if pos[t] <= last:
+            res(False, f"earlier transition {t[:12]} out of history order")
+        if pos[t] >= pos[c]:
+            res(False, f"earlier transition {t[:12]} is not older than {c[:12]}")
+        if pos[t] == 0 and tb is not None:
+            res(False, f"earlier transition {t[:12]} is the start of a truncated window")
+        last = pos[t]
+
+
+def _check_fixed_notes(notes: list[str], fixed: list[str], res) -> list[str]:
+    """Compare the fixed notes; return the remaining (gap) notes."""
+    got = list(notes[: len(fixed)])
+    if got != fixed:
+        pairs = enumerate(zip(got, fixed, strict=False))
+        diff = next((i for i, (a, b) in pairs if a != b), len(got))
+        shown = got[diff] if diff < len(got) else "(missing)"
+        res(False, f"notes: note {diff + 1} is {shown[:80]!r}, expected {fixed[diff][:80]!r}")
+        return []
+    res(True, f"notes: {len(fixed)} fixed note(s) re-derived")
+    return list(notes[len(fixed) :])
+
+
+def _check_gap_notes(gap: list[str], commits: list[str], jud, res) -> None:
+    """Each gap note names a commit of ``commits`` (oldest first), in order, and is exactly
+    the note a fresh judgement of that commit gives."""
+    from driftwarden.timeline.bisect import GAP_NOTE, MAX_NOTES, MORE_NOTE
+
+    body = gap
+    if gap and MORE_NOTE.match(gap[-1]):
+        body = gap[:-1]
+        if len(body) != MAX_NOTES:
+            res(False, f"notes: a '+N more' note needs exactly {MAX_NOTES} gap notes before it")
+            return
+    if len(body) > MAX_NOTES:
+        res(False, f"notes: {len(body)} gap notes, at most {MAX_NOTES}")
+        return
+    order = {sha: i for i, sha in enumerate(commits)}
+    last = -1
+    for note in body:
+        m = GAP_NOTE.match(note)
+        hits = [s for s in commits if m and s.startswith(m["sha"])]
+        if len(hits) != 1:
+            res(False, f"notes: {note[:80]!r} names no single commit of the window")
+            return
+        sha = hits[0]
+        if order[sha] <= last:
+            res(False, f"notes: gap note for {sha[:12]} out of history order or repeated")
+            return
+        last = order[sha]
+        derived = jud(sha).note
+        res(
+            derived == note,
+            f"notes: gap note for {sha[:12]} "
+            + (
+                "re-derived" if derived == note else f"differs from a fresh judgement ({derived!r})"
+            ),
+        )

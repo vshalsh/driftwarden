@@ -1,0 +1,690 @@
+{
+  "adr_styles": [
+    "freeform",
+    "madr",
+    "madr-fm"
+  ],
+  "commits": 25,
+  "counts": {
+    "claim": 16,
+    "evidence_decoy": 6,
+    "evidence_proof": 5,
+    "evidence_violation": 7,
+    "undocumented": 6
+  },
+  "ecosystem": "javascript/typescript",
+  "head": "fd4b6e63069daf75551a473a12902dba3c1c46c9",
+  "layout": "single",
+  "records": [
+    {
+      "adr_path": "docs/decisions/0001-express-as-web-framework.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0001",
+      "expected_offline": "HOLDING",
+      "id": "nodeapi:ADR-0001",
+      "kind": "require",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "terms": [],
+      "title": "Express as web framework",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0001",
+      "id": "nodeapi:ADR-0001:p:src/server.ts:1",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "kind": "import",
+      "line": 1,
+      "needle": "import express",
+      "path": "src/server.ts",
+      "repo": "nodeapi",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/decisions/0002-single-datastore-postgresql.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0002",
+      "expected_offline": "VIOLATED",
+      "id": "nodeapi:ADR-0002",
+      "kind": "only",
+      "note": "",
+      "phrasing": "front-matter-hint",
+      "repo": "nodeapi",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated",
+        "hint"
+      ],
+      "terms": [
+        "mongoose"
+      ],
+      "title": "Single datastore: PostgreSQL",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "id": "nodeapi:ADR-0002:v:src/legacy/importer.ts:1",
+      "introduced_commit": "e41416cee0cf0c6fe0c58fe86ecaf2a2006da7ee",
+      "kind": "import",
+      "line": 1,
+      "path": "src/legacy/importer.ts",
+      "repo": "nodeapi",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0002",
+      "id": "nodeapi:ADR-0002:v:package.json:13",
+      "introduced_commit": "31b066fd3f1c6b763ece0d77d673070bb16510f1",
+      "kind": "dependency",
+      "line": 13,
+      "path": "package.json",
+      "repo": "nodeapi",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/decisions/0003-no-node-fetch.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0003",
+      "expected_offline": "HOLDING",
+      "id": "nodeapi:ADR-0003",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding",
+        "adversarial"
+      ],
+      "terms": [
+        "node-fetch"
+      ],
+      "title": "No node-fetch",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0003",
+      "decoy_kind": "comment",
+      "id": "nodeapi:ADR-0003:d:src/http/legacy.ts:1",
+      "introduced_commit": "6ec6d8715ddb152356f186cf2449763a7f7c508d",
+      "line": 1,
+      "path": "src/http/legacy.ts",
+      "repo": "nodeapi",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/decisions/0004-axios-as-http-client.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0004",
+      "expected_offline": "HOLDING",
+      "id": "nodeapi:ADR-0004",
+      "kind": "require",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "terms": [],
+      "title": "Axios as HTTP client",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0004",
+      "id": "nodeapi:ADR-0004:p:src/http/client.ts:1",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "kind": "import",
+      "line": 1,
+      "needle": "import axios",
+      "path": "src/http/client.ts",
+      "repo": "nodeapi",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/decisions/0005-cloud-sdks-only-in-adapters.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0005",
+      "expected_offline": "VIOLATED",
+      "id": "nodeapi:ADR-0005",
+      "kind": "boundary",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated",
+        "adversarial"
+      ],
+      "terms": [
+        "@aws-sdk/"
+      ],
+      "title": "Cloud SDKs only in adapters",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "id": "nodeapi:ADR-0005:v:src/routes/upload.ts:1",
+      "introduced_commit": "0e82cd953535a868734a4b8e0863edee138a61c0",
+      "kind": "import",
+      "line": 1,
+      "path": "src/routes/upload.ts",
+      "repo": "nodeapi",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "decoy_kind": "allowed-location",
+      "id": "nodeapi:ADR-0005:d:src/adapters/s3.ts:1",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "line": 1,
+      "path": "src/adapters/s3.ts",
+      "repo": "nodeapi",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0005",
+      "decoy_kind": "vendored",
+      "id": "nodeapi:ADR-0005:d:vendor/aws-sdk-shim/index.js:1",
+      "introduced_commit": "6ec6d8715ddb152356f186cf2449763a7f7c508d",
+      "line": 1,
+      "path": "vendor/aws-sdk-shim/index.js",
+      "repo": "nodeapi",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/decisions/0006-redis-as-the-only-cache.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0006",
+      "expected_offline": "HOLDING",
+      "id": "nodeapi:ADR-0006",
+      "kind": "only",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding"
+      ],
+      "terms": [
+        "memcache"
+      ],
+      "title": "Redis as the only cache",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0006",
+      "id": "nodeapi:ADR-0006:p:src/cache.ts:1",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "kind": "import",
+      "line": 1,
+      "needle": "import Redis",
+      "path": "src/cache.ts",
+      "repo": "nodeapi",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/decisions/0007-kafka-for-events.md",
+      "adr_status": "Proposed",
+      "adr_style": "madr",
+      "decision_id": "ADR-0007",
+      "expected_offline": "SKIPPED",
+      "id": "nodeapi:ADR-0007",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "proposed"
+      ],
+      "terms": [],
+      "title": "Kafka for events",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/decisions/0008-cursor-pagination.md",
+      "adr_status": "Accepted",
+      "adr_style": "freeform",
+      "decision_id": "ADR-0008",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "nodeapi:ADR-0008",
+      "kind": null,
+      "note": "",
+      "phrasing": "free-form",
+      "repo": "nodeapi",
+      "status": "HOLDING",
+      "tags": [
+        "unsupported-phrasing",
+        "holding"
+      ],
+      "terms": [],
+      "title": "Cursor pagination",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0008",
+      "id": "nodeapi:ADR-0008:p:src/server.ts:10",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "kind": "cursor-pagination",
+      "line": 10,
+      "needle": "const nextCursor",
+      "path": "src/server.ts",
+      "repo": "nodeapi",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0008",
+      "id": "nodeapi:ADR-0008:p:src/server.ts:8",
+      "introduced_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "kind": "cursor-pagination",
+      "line": 8,
+      "needle": "req.query.cursor",
+      "path": "src/server.ts",
+      "repo": "nodeapi",
+      "role": "proof",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/decisions/0009-no-sequelize.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0009",
+      "expected_offline": "UNKNOWN_OR_SKIPPED",
+      "id": "nodeapi:ADR-0009",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "decided-not-to",
+      "repo": "nodeapi",
+      "status": "VIOLATED",
+      "tags": [
+        "unsupported-phrasing",
+        "violated"
+      ],
+      "terms": [
+        "sequelize"
+      ],
+      "title": "No Sequelize",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0009",
+      "id": "nodeapi:ADR-0009:v:src/db/orm.ts:1",
+      "introduced_commit": "102d59dfa739df0c6cd3063763f8d33064843f7d",
+      "kind": "import",
+      "line": 1,
+      "path": "src/db/orm.ts",
+      "repo": "nodeapi",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0009",
+      "id": "nodeapi:ADR-0009:v:package.json:14",
+      "introduced_commit": "b853375fa44b9bcf1f4d0b3cf383bc8f8c68e756",
+      "kind": "dependency",
+      "line": 14,
+      "path": "package.json",
+      "repo": "nodeapi",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/decisions/0010-no-winston.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0010",
+      "expected_offline": "VIOLATED",
+      "id": "nodeapi:ADR-0010",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "VIOLATED",
+      "tags": [
+        "supported",
+        "violated",
+        "prompt-injection"
+      ],
+      "terms": [
+        "winston"
+      ],
+      "title": "No Winston",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0010",
+      "id": "nodeapi:ADR-0010:v:src/log.ts:1",
+      "introduced_commit": "5a07ef0823e81b0190c75302f0007eff4896994d",
+      "kind": "import",
+      "line": 1,
+      "path": "src/log.ts",
+      "repo": "nodeapi",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0010",
+      "id": "nodeapi:ADR-0010:v:package.json:15",
+      "introduced_commit": "8dfdc41c52c1083d4af4a8719099419e445b9617",
+      "kind": "dependency",
+      "line": 15,
+      "path": "package.json",
+      "repo": "nodeapi",
+      "role": "violation",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/decisions/0011-request-library.md",
+      "adr_status": "Deprecated",
+      "adr_style": "madr",
+      "decision_id": "ADR-0011",
+      "expected_offline": "SKIPPED",
+      "id": "nodeapi:ADR-0011",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "deprecated"
+      ],
+      "terms": [],
+      "title": "Request library",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/decisions/0012-no-lodash-in-services.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0012",
+      "expected_offline": "DRIFTING",
+      "id": "nodeapi:ADR-0012",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "DRIFTING",
+      "tags": [
+        "supported",
+        "adversarial",
+        "dev-only"
+      ],
+      "terms": [
+        "lodash"
+      ],
+      "title": "No lodash in services",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0012",
+      "decoy_kind": "test-file",
+      "id": "nodeapi:ADR-0012:d:test/util.test.ts:1",
+      "introduced_commit": "4fea2821ac9b060d02b75a4358fb2e8e94288827",
+      "line": 1,
+      "path": "test/util.test.ts",
+      "repo": "nodeapi",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "decision_id": "ADR-0012",
+      "decoy_kind": "dev-dependency",
+      "id": "nodeapi:ADR-0012:d:package.json:23",
+      "introduced_commit": "4fea2821ac9b060d02b75a4358fb2e8e94288827",
+      "line": 23,
+      "path": "package.json",
+      "repo": "nodeapi",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "adr_path": "docs/decisions/0013-no-heavyweight-date-libraries.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr-fm",
+      "decision_id": "ADR-0013",
+      "expected_offline": "HOLDING",
+      "id": "nodeapi:ADR-0013",
+      "kind": "forbid",
+      "note": "",
+      "phrasing": "front-matter-hint",
+      "repo": "nodeapi",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding",
+        "hint"
+      ],
+      "terms": [
+        "moment"
+      ],
+      "title": "No heavyweight date libraries",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/decisions/0014-graphql-scope.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0014",
+      "expected_offline": "UNKNOWN",
+      "id": "nodeapi:ADR-0014",
+      "kind": "only",
+      "note": "",
+      "phrasing": "qualifier",
+      "repo": "nodeapi",
+      "status": "UNKNOWN",
+      "tags": [
+        "qualifier",
+        "unknown"
+      ],
+      "terms": [],
+      "title": "GraphQL scope",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/decisions/0015-express-4.md",
+      "adr_status": "Superseded by ADR-0001",
+      "adr_style": "madr",
+      "decision_id": "ADR-0015",
+      "expected_offline": "SKIPPED",
+      "id": "nodeapi:ADR-0015",
+      "kind": null,
+      "note": "",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "SKIPPED",
+      "tags": [
+        "skipped",
+        "superseded"
+      ],
+      "terms": [],
+      "title": "Express 4",
+      "type": "claim"
+    },
+    {
+      "adr_path": "docs/decisions/0016-no-twilio.md",
+      "adr_status": "Accepted",
+      "adr_style": "madr",
+      "decision_id": "ADR-0016",
+      "expected_offline": "HOLDING",
+      "id": "nodeapi:ADR-0016",
+      "kind": "forbid",
+      "note": "the only occurrence is vendored third-party code",
+      "phrasing": "supported",
+      "repo": "nodeapi",
+      "status": "HOLDING",
+      "tags": [
+        "supported",
+        "holding",
+        "adversarial"
+      ],
+      "terms": [
+        "twilio"
+      ],
+      "title": "No Twilio",
+      "type": "claim"
+    },
+    {
+      "decision_id": "ADR-0016",
+      "decoy_kind": "vendored",
+      "id": "nodeapi:ADR-0016:d:vendor/sms-shim/index.js:1",
+      "introduced_commit": "a86dd3964015504d4d6898cc469d4115890a7b9a",
+      "line": 1,
+      "path": "vendor/sms-shim/index.js",
+      "repo": "nodeapi",
+      "role": "decoy",
+      "type": "evidence"
+    },
+    {
+      "category": "datastore",
+      "evidence": [
+        {
+          "commit": "e41416cee0cf0c6fe0c58fe86ecaf2a2006da7ee",
+          "line": 1,
+          "path": "src/legacy/importer.ts"
+        }
+      ],
+      "first_commit": "e41416cee0cf0c6fe0c58fe86ecaf2a2006da7ee",
+      "id": "nodeapi:ud:mongodb:positive",
+      "introducing_commits": [
+        "e41416cee0cf0c6fe0c58fe86ecaf2a2006da7ee"
+      ],
+      "reason": "",
+      "repo": "nodeapi",
+      "role": "positive",
+      "technology": "mongodb",
+      "type": "undocumented"
+    },
+    {
+      "category": "cloud-sdk",
+      "evidence": [
+        {
+          "commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+          "line": 1,
+          "path": "src/adapters/s3.ts"
+        }
+      ],
+      "first_commit": "497406aed97a2b0615a02fca58b108f2efb2652f",
+      "id": "nodeapi:ud:aws-sdk:positive",
+      "introducing_commits": [
+        "497406aed97a2b0615a02fca58b108f2efb2652f"
+      ],
+      "reason": "",
+      "repo": "nodeapi",
+      "role": "positive",
+      "technology": "aws-sdk",
+      "type": "undocumented"
+    },
+    {
+      "category": "vendor-sdk",
+      "evidence": [
+        {
+          "commit": "0e82cd953535a868734a4b8e0863edee138a61c0",
+          "line": 1,
+          "path": "src/billing.ts"
+        }
+      ],
+      "first_commit": "0e82cd953535a868734a4b8e0863edee138a61c0",
+      "id": "nodeapi:ud:stripe:positive",
+      "introducing_commits": [
+        "0e82cd953535a868734a4b8e0863edee138a61c0"
+      ],
+      "reason": "",
+      "repo": "nodeapi",
+      "role": "positive",
+      "technology": "stripe",
+      "type": "undocumented"
+    },
+    {
+      "category": "vendor-sdk",
+      "evidence": [
+        {
+          "commit": "0e82cd953535a868734a4b8e0863edee138a61c0",
+          "line": 1,
+          "path": "src/mail.ts"
+        }
+      ],
+      "first_commit": "0e82cd953535a868734a4b8e0863edee138a61c0",
+      "id": "nodeapi:ud:sendgrid:positive",
+      "introducing_commits": [
+        "0e82cd953535a868734a4b8e0863edee138a61c0"
+      ],
+      "reason": "",
+      "repo": "nodeapi",
+      "role": "positive",
+      "technology": "sendgrid",
+      "type": "undocumented"
+    },
+    {
+      "category": "search",
+      "evidence": [
+        {
+          "commit": "4fea2821ac9b060d02b75a4358fb2e8e94288827",
+          "line": 1,
+          "path": "test/search.test.ts"
+        }
+      ],
+      "first_commit": "4fea2821ac9b060d02b75a4358fb2e8e94288827",
+      "id": "nodeapi:ud:elasticsearch:negative",
+      "introducing_commits": [
+        "4fea2821ac9b060d02b75a4358fb2e8e94288827"
+      ],
+      "reason": "nonproduction",
+      "repo": "nodeapi",
+      "role": "negative",
+      "technology": "elasticsearch",
+      "type": "undocumented"
+    },
+    {
+      "category": "cloud-sdk",
+      "evidence": [
+        {
+          "commit": "6ec6d8715ddb152356f186cf2449763a7f7c508d",
+          "line": 1,
+          "path": "vendor/aws-sdk-shim/index.js"
+        }
+      ],
+      "first_commit": "6ec6d8715ddb152356f186cf2449763a7f7c508d",
+      "id": "nodeapi:ud:aws-sdk-shim:negative",
+      "introducing_commits": [
+        "6ec6d8715ddb152356f186cf2449763a7f7c508d"
+      ],
+      "reason": "vendored",
+      "repo": "nodeapi",
+      "role": "negative",
+      "technology": "aws-sdk-shim",
+      "type": "undocumented"
+    }
+  ],
+  "repo": "nodeapi",
+  "schema": 1
+}

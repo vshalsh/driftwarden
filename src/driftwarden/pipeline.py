@@ -16,7 +16,9 @@
    in llm mode through ``judge.consistency.ConsistencyRunner``, 3 runs + vote,
    G6). Offline mode judges once: the rules are deterministic.
 5. Detect undocumented decisions (``undocumented.detect.detect_undocumented``,
-   same Snapshot). Needs a commit: a repository with no commits skips it (noted).
+   same Snapshot), against the ADRs as they are at that same commit
+   (``scan_adrs_at``), never the working-tree list of step 1. Needs a commit: a
+   repository with no commits skips it (noted).
 6. Optionally draft ADRs for the verified records (``undocumented.draft.draft_adr``
    with ``write=False``: drafts are returned, never written into the repository;
    always the deterministic template, the LLM polish is not used here).
@@ -26,15 +28,33 @@ The repository is indexed once: the same Snapshot serves the judge and the
 detector. Every verifier result of every stage goes to ``ledger``, and the
 Report's ``grounding_summary`` is computed from the rows this call appended.
 
-**PR mode (``changed_paths``).** Claims are still structured for every judged
-decision, but only these claims are judged (the rest are listed with
-``judged=False``): a claim whose ADR file is in ``changed_paths``; a claim with
-a candidate evidence item (``Evidence.ref.path`` or its manifest path) in
-``changed_paths``; a claim whose rule names a path (``target``, ``allowed_in``,
-``via``, ``scope``, ``actor`` values) that a changed path is, or lies under.
-Paths are compared as canonical repo-relative POSIX strings (``./`` and
-trailing ``/`` removed), case-sensitively. Undocumented-decision detection and
-drafting are not filtered.
+**PR mode (``changed_paths``).** Every accepted claim is judged exactly as in a
+full scan: ``changed_paths`` never decides *what* is judged, so PR mode can never
+hide a violation, and the exit code counts every verified violation. It only
+tags each judged claim with ``ClaimResult.in_change`` (``None`` outside PR mode)
+so reporters can lead with the findings the change touches. ``in_change`` is
+true when (see :func:`claim_touches`):
+
+* the claim's ADR file is in ``changed_paths``; or
+* a changed path is, or lies under, a path or term the rule names (any string
+  value of the rule: ``target``, ``allowed_in``, ``via``, ``scope``, ``actor``,
+  the forbid / require / only terms ...); or
+* a changed path is the file or manifest of any of the claim's evidence items,
+  collected **without** the per-group cap the judge uses (a 51st file importing
+  a forbidden package still counts) and **with** every keyword (``code``)
+  candidate (a free-form claim has no other evidence), or of anything the verdict
+  or one of its consistency runs cited; or
+* conservatively, for ``require`` and ``only`` claims (whose verdict can change
+  when something disappears): a changed path is not in the scanned tree (it was
+  deleted, or is the old name of a rename), or is a dependency manifest.
+
+Paths are compared as canonical repo-relative POSIX strings (``./`` and trailing
+``/`` removed), case-sensitively. Undocumented-decision detection and drafting
+are not filtered.
+
+**Draft numbering.** Drafts of one scan reserve their suggested paths in turn
+(passed to ``draft_adr`` as ``existing_adrs``), so three drafts get three
+consecutive ADR numbers, never the same one.
 """
 
 from __future__ import annotations
@@ -46,14 +66,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from driftwarden import __version__, git
 from driftwarden.claims.structure import resolve_mode, structure_scan
 from driftwarden.config import Config
 from driftwarden.discover.adr import AdrScan, scan_adrs, scan_adrs_at
 from driftwarden.grounding.ledger import Ledger
 from driftwarden.grounding.verify import verify_source_quote
+from driftwarden.index.manifests import detect as detect_manifest
 from driftwarden.judge.consistency import DEFAULT_RUNS, ConsistencyRunner
-from driftwarden.judge.evidence import EvidenceSet, load_snapshot
+from driftwarden.judge.evidence import EvidenceSet, collect_evidence, load_snapshot
 from driftwarden.judge.judge import Judge
 from driftwarden.llm.base import Provider
 from driftwarden.models import (
@@ -79,8 +102,11 @@ from driftwarden.report.model import (
 )
 from driftwarden.undocumented.detect import detect_undocumented
 from driftwarden.undocumented.draft import DraftADR, draft_adr
+from driftwarden.undocumented.draft import _existing_adrs as existing_adr_paths
 
 RULE_PATH_KEYS = ("target", "allowed_in", "via", "scope", "actor")
+UNCAPPED = 10**9
+"""``max_per_relation`` for PR-mode relevance: every evidence item, no cap."""
 
 _KIND_ORDER = {
     k: i
@@ -105,25 +131,40 @@ def _under(path: str, base: str) -> bool:
     return bool(base) and (path == base or path.startswith(base + "/"))
 
 
-def claim_touches(claim: Claim, es: EvidenceSet | None, changed: set[str]) -> bool:
-    """The PR-mode rule (module docstring): does ``claim`` touch any of ``changed``?"""
+def _rule_strings(rule: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for value in rule.values():
+        for v in value if isinstance(value, list) else [value]:
+            if isinstance(v, str):
+                out.append(v)
+    return out
+
+
+def claim_touches(
+    claim: Claim,
+    es: EvidenceSet | None,
+    changed: set[str],
+    *,
+    absent: set[str] | None = None,
+    manifests: set[str] | None = None,
+) -> bool:
+    """The PR-mode ``in_change`` rule (module docstring). ``es`` should be the claim's
+    UNCAPPED evidence; ``absent`` are the changed paths missing from the scanned tree
+    (deleted or renamed away); ``manifests`` the changed paths that are manifests."""
     if _canon(claim.source.path) in changed:
         return True
+    for v in _rule_strings(claim.rule):
+        base = _canon(v)
+        if base and any(_under(p, base) for p in changed):
+            return True
     if es is not None:
         for ev in es.candidates:
             if _canon(ev.ref.path) in changed:
                 return True
             if ev.dependency is not None and _canon(ev.dependency.manifest_path) in changed:
                 return True
-    for key in RULE_PATH_KEYS:
-        value = claim.rule.get(key)
-        values = value if isinstance(value, list) else [value]
-        for v in values:
-            if not isinstance(v, str):
-                continue
-            base = _canon(v)
-            if base and any(_under(p, base) for p in changed):
-                return True
+    if claim.kind in ("require", "only") and (absent or manifests):
+        return True
     return False
 
 
@@ -138,21 +179,52 @@ def _not_judged_reason(dec: Decision, g1: GroundingResult) -> str | None:
     return None
 
 
-def _ledger_rows(ledger: Ledger, start: int) -> list[dict[str, Any]]:
-    """Rows this run appended to ``ledger`` (those after line ``start``)."""
+def _ledger_lines(ledger: Ledger) -> list[str]:
+    """The ledger's JSONL records. Split on "\\n" ONLY (D2): the ledger is written with
+    ``ensure_ascii=False``, so NEL, U+2028 and U+2029 can sit unescaped inside a record,
+    and ``str.splitlines()`` would cut the record there. The empty string after the
+    trailing newline is dropped."""
     try:
-        lines = ledger.path.read_text(encoding="utf-8").splitlines()
+        text = ledger.path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
-    rows = [json.loads(line) for line in lines[start:] if line.strip()]
-    return [r for r in rows if r.get("run_id") == ledger.run_id]
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+_ROW_KEYS = {"run_id": str, "check_id": str, "status": str, "reason": str}
+
+
+def _ledger_rows(ledger: Ledger, start: int) -> tuple[list[dict[str, Any]], list[str]]:
+    """Rows this run appended to ``ledger`` (after record ``start``), and a reason for
+    every record that is not a valid row. Bad records are reported, never a crash."""
+    rows: list[dict[str, Any]] = []
+    bad: list[str] = []
+    for n, line in enumerate(_ledger_lines(ledger)[start:], start + 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError as exc:
+            bad.append(f"{ledger.path.name} record {n} is not valid JSON ({exc})")
+            continue
+        if not isinstance(row, dict) or any(
+            not isinstance(row.get(k), t) for k, t in _ROW_KEYS.items()
+        ):
+            bad.append(f"{ledger.path.name} record {n} is not a grounding result row")
+            continue
+        if row["status"] not in ("VERIFIED", "MISMATCH"):
+            bad.append(f"{ledger.path.name} record {n} has unknown status {row['status']!r}")
+            continue
+        if row["run_id"] == ledger.run_id:
+            rows.append(row)
+    return rows, bad
 
 
 def _line_count(ledger: Ledger) -> int:
-    try:
-        return len(ledger.path.read_text(encoding="utf-8").splitlines())
-    except FileNotFoundError:
-        return 0
+    return len(_ledger_lines(ledger))
 
 
 def grounding_summary(rows: list[dict[str, Any]]) -> GroundingSummary:
@@ -175,16 +247,6 @@ def grounding_summary(rows: list[dict[str, Any]]) -> GroundingSummary:
         pass_rate=(ok / total) if total else None,
         by_check=by_check,
     )
-
-
-def _subject_root(subject: str) -> str:
-    s = subject[len("draft:") :] if subject.startswith("draft:") else subject
-    cut = len(s)
-    for sep in ("/", "@", " ("):
-        i = s.find(sep)
-        if i != -1:
-            cut = min(cut, i)
-    return s[:cut]
 
 
 def _unverified_claim_item(uc: UnverifiedClaim) -> UnverifiedItem:
@@ -326,33 +388,48 @@ def run_scan(
     changed = (
         {p for p in (_canon(x) for x in changed_paths) if p} if changed_paths is not None else None
     )
+    absent: set[str] = set()
+    manifests: set[str] = set()
+    if changed is not None:
+        present = {f.path for f in snap.files}
+        absent = {p for p in changed if p not in present}
+        manifests = {p for p in changed if detect_manifest(p) is not None}
     results: list[ClaimResult] = []
     for claim in claims:
         es = judge.evidence(claim)
-        if changed is not None and not claim_touches(claim, es, changed):
-            results.append(
-                ClaimResult(
-                    claim=claim,
-                    judged=False,
-                    not_judged_reason="not touched by the changed paths (PR mode)",
-                )
-            )
-            continue
         verdict = runner.run(claim, es) if runner is not None else judge.judge(claim, es)
-        results.append(ClaimResult(claim=claim, judged=True, verdict=verdict))
+        in_change = None
+        if changed is not None:
+            # Relevance uses the UNCAPPED evidence, keyword (code) candidates included: the
+            # judge's caps must never hide the changed file, and a free-form claim has only
+            # keyword evidence. Plus everything the verdict (or any consistency run) cited.
+            # It only tags; everything is judged regardless.
+            full = collect_evidence(claim, snap, max_per_relation=UNCAPPED, max_keywords=UNCAPPED)
+            cited = [*verdict.evidence]
+            if verdict.consistency is not None:
+                cited += [e for vote in verdict.consistency.votes for e in vote.evidence]
+            full = full.model_copy(update={"candidates": [*full.candidates, *cited]})
+            in_change = claim_touches(claim, full, changed, absent=absent, manifests=manifests)
+        results.append(ClaimResult(claim=claim, judged=True, verdict=verdict, in_change=in_change))
+        # A model failure behind a verdict is a report note too, so the CLI shows it.
+        notes.extend(f"{claim.id}: {n}" for n in verdict.notes if n.startswith("LLM judge failed"))
 
     # 5. Undocumented decisions (needs a commit).
     at_commit_claims = [c for c in claims if c.source.commit == snap.commit]
-    at_commit = all(d.source.commit == snap.commit for d in decisions)
     found = []
     undoc_cnv = []
+    committed: list[Decision] = []
     if snap.commit == WORKTREE:
         notes.append("undocumented-decision detection skipped: it needs a commit")
     else:
+        # The ADRs of the COMMITTED tree the code is judged at (Codex 4405326906): the
+        # working-tree list misses a committed ADR deleted (or emptied) only in the working
+        # tree, and an incomplete list would report a documented technology as undocumented.
+        committed = scan_adrs_at(root, snap.commit, config).decisions
         und = detect_undocumented(
             root,
             snap.commit,
-            decisions=decisions if at_commit else None,
+            decisions=committed,
             claims=at_commit_claims,
             config=config,
             snapshot=snap,
@@ -366,17 +443,23 @@ def run_scan(
     drafts: list[DraftADR] = []
     failed_drafts: list[DraftADR] = []
     if draft_adrs:
+        # One shared list of taken ADR paths: each verified draft reserves its suggested
+        # path before the next is numbered, so drafts of one scan never share a number.
+        reserved = existing_adr_paths(root, snap.commit, config)
         for rec in found:
             d = draft_adr(
                 root,
                 rec,
-                decisions=decisions if at_commit else None,
+                existing_adrs=list(reserved),
+                decisions=committed,
                 claims=at_commit_claims,
                 config=config,
                 write=False,
                 ledger=ledger,
             )
             (failed_drafts if d.could_not_verify else drafts).append(d)
+            if not d.could_not_verify and d.path:
+                reserved.append(d.path)
 
     # 7. Assemble.
     items: list[UnverifiedItem] = []
@@ -402,41 +485,46 @@ def run_scan(
     for d in failed_drafts:
         items.append(UnverifiedItem(kind="draft", id=d.record_id, reasons=list(d.reasons)))
 
-    rows = _ledger_rows(ledger, start)
-    covered = {i.id for i in items} | {_subject_root(i.id) for i in items}
-    seen: set[tuple] = set()
+    # Catch-all (D1): a failed ledger row is "already reported" only when that exact row,
+    # (check_id, subject, reason), is one of the verifier results behind an item above.
+    # Never by subject prefix: a different failure about the same claim is its own item.
+    reported: list[GroundingResult] = [g1s[d.id] for d in decisions]
+    reported += [u.grounding for u in unverified if u.grounding is not None]
+    reported += [c for cr in results if cr.verdict is not None and cr.verdict.could_not_verify
+                 for c in cr.verdict.checks]  # fmt: skip
+    reported += [c for rec in undoc_cnv for c in rec.checks]
+    reported += [c for d in failed_drafts for c in d.checks]
+    seen: set[tuple] = {
+        (g.check_id, g.subject or "", g.reason) for g in reported if g.status != "VERIFIED"
+    }
+    rows, bad_rows = _ledger_rows(ledger, start)
     for r in rows:
         if r["status"] == "VERIFIED":
             continue
-        subject = r.get("subject") or ""
-        if subject in covered or _subject_root(subject) in covered:
-            continue
+        subject = r.get("subject") if isinstance(r.get("subject"), str) else ""
         key = (r["check_id"], subject, r["reason"])
         if key in seen:
             continue
         seen.add(key)
-        items.append(
-            UnverifiedItem(
-                kind="check",
-                id=subject or r["check_id"],
-                check_id=r["check_id"],
-                reasons=[r["reason"]],
-                provenance=r.get("provenance"),
-            )
-        )
+        item = dict(kind="check", id=subject or r["check_id"], check_id=r["check_id"],
+                    reasons=[r["reason"]])  # fmt: skip
+        try:
+            items.append(UnverifiedItem(**item, provenance=r.get("provenance")))
+        except ValidationError:  # an unreadable provenance must not hide the failure
+            items.append(UnverifiedItem(**item))
+    for n, why in enumerate(bad_rows, 1):
+        # A ledger record that cannot be read is itself a grounding gap: report it.
+        items.append(UnverifiedItem(kind="check", id=f"ledger-record-{n}", reasons=[why]))
     items = _sort_items(items)
 
     claim_ids: dict[str, list[str]] = {}
     for c in claims:
         claim_ids.setdefault(c.decision_id, []).append(c.id)
-    judged_by_decision: Counter[str] = Counter(cr.claim.decision_id for cr in results if cr.judged)
     decision_results: list[DecisionResult] = []
     for dec in decisions:
         why = reasons[dec.id]
         if why is None and not claim_ids.get(dec.id):
             why = "no testable claim was extracted from the decision text"
-        elif why is None and not judged_by_decision[dec.id]:
-            why = "no claim touched by the changed paths (PR mode)"
         decision_results.append(
             DecisionResult(
                 id=dec.id,
