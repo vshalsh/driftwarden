@@ -165,7 +165,9 @@ def test_scan_cli_all_verified(fixture_repo, tmp_path):
     assert "12/12 VERIFIED" in res.output and "100.0%" in res.output
     ledgers = list((out / "logs" / "grounding").glob("*.jsonl"))
     assert len(ledgers) == 1
-    assert len(ledgers[0].read_text(encoding="utf-8").splitlines()) == 12
+    rows = [json.loads(x) for x in ledgers[0].read_text(encoding="utf-8").splitlines()]
+    # L-028: claim-level rows follow; the 12 decision-level G1 rows are still there.
+    assert sum(r["check_id"] == "G1" and "." not in r["subject"] for r in rows) == 12
 
 
 def test_scan_cli_exit_3_on_mismatch(fixture_repo, tmp_path, monkeypatch):

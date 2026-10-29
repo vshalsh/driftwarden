@@ -39,8 +39,19 @@ def _repo(tmp_path: Path, files: dict[str, bytes]) -> Path:
 
 
 def _summary(out: Path) -> dict:
+    # L-028: the ledger now also holds claim/evidence rows from the full pipeline; these
+    # tests are about the decision-level G1 rows (subject = decision id, no ".cN").
     (summ,) = (out / "logs" / "grounding").glob("*.summary.json")
-    return json.loads(summ.read_text(encoding="utf-8"))
+    rows = [
+        json.loads(line)
+        for p in (out / "logs" / "grounding").glob("*.jsonl")
+        for line in p.read_text(encoding="utf-8").splitlines()
+    ]
+    rows = [r for r in rows if r["check_id"] == "G1" and "." not in (r["subject"] or "")]
+    ok = sum(r["status"] == "VERIFIED" for r in rows)
+    data = json.loads(summ.read_text(encoding="utf-8"))
+    data.update(total=len(rows), verified=ok, mismatch=len(rows) - ok)
+    return data
 
 
 @pytest.mark.parametrize("content", [b"", b"\n", b"  \n\t\n"])

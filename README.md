@@ -12,36 +12,160 @@ Every finding comes with `file:line@commit` evidence that a deterministic verifi
 
 > 🚧 **Under active development.** v0.1.0 is targeted for 2026-11-02. Progress is tracked in [DELIVERY_LOG.md](DELIVERY_LOG.md).
 
-## Quick start (target for v0.1.0)
+## Quick start
 
 ```bash
-pip install driftwarden
+pip install -e ".[dev]"                     # from a checkout; not on PyPI before v0.1.0
 cd your-repo
-driftwarden scan .                          # uses ANTHROPIC_API_KEY if set, else offline mode
+driftwarden scan .                          # auto: llm if ANTHROPIC_API_KEY is set, else offline
 driftwarden scan . --mode offline           # no network, no key
-driftwarden scan . --format html,sarif,md --out reports/
+driftwarden scan . --json-out report.json   # the full Report as JSON
+driftwarden scan . --draft-adrs             # also draft ADRs for undocumented decisions (shown, never written)
+driftwarden scan . --format json,md,sarif   # report files in .driftwarden/ (or --out DIR)
+driftwarden report .driftwarden/driftwarden.json --format md,sarif --out out/   # re-render, no rescan
 ```
 
-GitHub Action:
+`scan` runs the whole pipeline: ADR discovery, claim structuring, evidence and judgement at
+HEAD, undocumented-decision detection and (with `--draft-adrs`) ADR drafting. It prints the
+decisions table, the verdicts grouped by status, everything it *could not verify* with the
+reason, the undocumented decisions, each verified ADR draft in full (numbered consecutively,
+never written into the repository) and a grounding summary; every verifier result goes to the
+grounding ledger (`<repo>/.driftwarden/logs/grounding/`, or `--out DIR`). In auto mode, a
+provider that fails to start falls back to offline mode with a warning; `--mode llm` exits 2
+instead. The drift timeline (L-011) is not built yet.
+
+### Report files
+
+`--format` takes a comma list of `json`, `md`, `sarif` and `html`, and writes
+`OUT/driftwarden.<ext>` for each one. `OUT` is `--out DIR`, or `<repo>/.driftwarden` by
+default (that directory ignores itself, so a scan never dirties the repository). The
+written paths are printed.
+
+| Format | File | What it is |
+|---|---|---|
+| `json` | `driftwarden.json` | The canonical Report: pretty-printed, keys sorted, one trailing newline. Byte-identical to `--json-out` |
+| `md` | `driftwarden.md` | A Markdown report for GitHub: header, summary, Violated, Drifting, Could not verify (always present), Undocumented decisions (drafts collapsed), Holding (collapsed), Unknown, grounding summary, drift timeline (when present) |
+| `sarif` | `driftwarden.sarif` | SARIF 2.1.0 for GitHub code scanning (below) |
+| `html` | `driftwarden.html` | The self-contained HTML report (L-013). In a build without it, `--format html` exits 2 with "html report not available in this build" before scanning |
+
+`driftwarden report REPORT.json --format md,sarif,html --out DIR` renders the same files
+from a saved Report JSON without rescanning (default format `md`, default `--out` the
+directory of `REPORT.json`; exit 0, or 2 for an unreadable or invalid file; with
+`--exit-code` it exits with the re-checked report's 0, 1 or 3, as `scan` does). The GitHub
+Action uses it. Before rendering, `report` re-gates the loaded file once: a finding whose
+evidence has no matching VERIFIED verifier record inside the file becomes `UNKNOWN`
+(grounding `MISMATCH`, proposed status kept), is listed under *Could not verify* with
+"re-render: no matching VERIFIED ledger record", and the summary, drift score and exit
+code are recomputed, so every format, JSON included, agrees.
+
+ADR links in `driftwarden.md` are relative to the file itself (for example
+`../docs/adr/0001-x.md#L13` from `.driftwarden/`). `report` needs the repository root
+for that: `--repo PATH`, or by default the current directory when it is the git root
+holding the report's ADR files; otherwise the locations are plain text. The PR comment
+(`render_pr_comment`) links only to `https://<server>/<owner>/<repo>/blob/<sha>/...`
+(`github_blob_base`, from `GITHUB_SERVER_URL` and `GITHUB_REPOSITORY`), because relative
+links do not resolve in a comment; without those it shows plain text.
+
+**Known limit:** `report` can only check a saved file against itself. A JSON whose verifier
+records were forged along with its findings cannot be detected without re-scanning:
+`report` re-renders, `scan` verifies.
+
+All user-controlled text (ADR text, commit subjects, paths) is escaped in Markdown,
+`@mentions` cannot ping anyone, and draft ADRs are shown as inert source. Every reporter
+also re-checks, without git, that each evidence item matches its own VERIFIED verifier
+record inside the report; a finding that fails (for example, a saved JSON edited by hand)
+is shown under *Could not verify* and never becomes a violation or a SARIF location.
+
+### GitHub code scanning (SARIF)
+
+One rule per claim kind (`forbid`, `require`, `only`, `boundary`, `free`) plus
+`undocumented-decision` and `could-not-verify`. VIOLATED is an `error`, DRIFTING a
+`warning`, undocumented decisions and *Could not verify* items are `note`s; HOLDING and
+UNKNOWN produce no alert. A finding is located at its first verified evidence line, with
+the ADR lines and the other evidence as related locations; a *Could not verify* item is
+located at the ADR line, never at the unverified code line. `partialFingerprints` leave
+out commits and line numbers, so an alert keeps its identity across runs. Output stays
+within GitHub's limits (25,000 results per run, 10 MB); anything cut is recorded in
+`runs[0].properties.driftwarden.truncated`.
+
+```yaml
+# .github/workflows/driftwarden.yml
+on: [push, pull_request]
+permissions:
+  contents: read
+  security-events: write      # needed to upload SARIF
+jobs:
+  driftwarden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # full history for undocumented-decision detection
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "driftwarden @ git+https://github.com/vshalsh/driftwarden"
+      - run: driftwarden scan . --mode offline --format sarif,md --out dw-out || true
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: dw-out/driftwarden.sarif
+          category: driftwarden
+```
+
+`|| true` keeps the job going when the scan exits 1 (violations) or 3 (G1 mismatch) so
+the SARIF is still uploaded; drop it to fail the job as well.
+
+PR mode (`run_scan(..., changed_paths=[...])`, used by the Action in L-014) judges every
+accepted claim exactly as a full scan does, so a change can never hide a violation and the
+exit code counts every verified violation. The changed paths only tag each verdict
+`in_change: true/false` (the claim's ADR file changed, a changed path is one of its evidence
+files or a path its rule names, or, for require/only claims, a file was deleted or renamed or
+a manifest changed), so reports can lead with what the change touches.
+
+GitHub Action (arrives in L-014, not available yet):
 
 ```yaml
 - uses: vshalsh/driftwarden@v0
   with:
-    mode: pr            # only claims touched by this PR's diff
+    mode: pr            # judges every claim; leads with the ones this PR's diff touches
     sarif: true         # findings appear in the Security → Code scanning tab
     comment: true
 ```
 
 ## What a finding looks like
 
+Real output of `driftwarden scan . --mode offline` on the `pyshop` test fixture
+(`tests/fixtures/judge_repos/pyshop`), excerpt:
+
 ```
-VIOLATED  ADR-0007 "PostgreSQL is the only datastore"
-  claim     only(datastore) = [postgresql]           docs/adr/0007-datastore.md:12-14 @ 9f2c1e0
-  evidence  pymongo==4.6 added                        services/catalog/requirements.txt:18 @ a41d7b3
-            from pymongo import MongoClient            services/catalog/repo.py:3 @ a41d7b3
-  since     a41d7b3  "catalog: cache product docs"   (2026-07-14)
-  grounding VERIFIED (G1, G2, G3, G4)
+Verdicts (7 judged of 7 claim(s)): 3 VIOLATED, 1 DRIFTING, 2 HOLDING, 1 UNKNOWN
+VIOLATED (3), grounding VERIFIED
+  ADR-0001.c1  only(datastore) = [PostgreSQL]  docs/adr/0001-postgresql-only.md:13@f9f785c
+    other datastore mongodb used (e1, e2)
+    evidence  requirements.txt:2@f9f785c  declares pymongo ==4.6.1
+    evidence  src/shop/legacy/catalog.py:3@f9f785c  imports pymongo
+...
+Undocumented UD-queue-kafka: Use Kafka as queue / message broker (introduced f9f785c)
+    evidence  requirements.txt:6@f9f785c  declares kafka-python ==2.0.2
+    evidence  src/shop/events.py:1@f9f785c  imports kafka
+Grounding (all checks): 54/54 VERIFIED, pass rate 100.0% [G1 14/14, G2 23/23, G3 7/7, G4 n/a, G5 10/10, G6 n/a]
+Summary: drift score 66.7% (decided claims not HOLDING), 1 UNKNOWN, 0 unverified item(s), 3 undocumented decision(s), 0 draft(s); exit code 1
 ```
+
+Each verdict line is `claim id  rule  ADR file:line@commit`; each evidence line is
+`file:line@commit` plus what is there. Only VERIFIED verdicts are listed under a status.
+Anything that failed a verifier is printed as `Could not verify <kind> <id> [<check>]:
+<reason>` instead. The drift score is the share of decided claims (HOLDING, DRIFTING,
+VIOLATED) that are not HOLDING; UNKNOWN is counted separately.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | No VIOLATED claim and no G1 grounding mismatch |
+| 1 | At least one VERIFIED claim is VIOLATED |
+| 2 | Usage or config error (including `--mode llm` with no usable provider) |
+| 3 | G1 grounding mismatch: an ADR decision or claim quote is not at its cited lines. Wins over 1 |
 
 ## Architecture
 
@@ -61,7 +185,7 @@ DriftWarden is itself an AI system, so it is held to the standard it enforces. E
 | G6 | Verdict stability | 3 independent judgements | `judge/consistency.py` | Every LLM verdict | same | Disagreement → `UNKNOWN` |
 | G7 | Whole-system accuracy | — | `bench/run.py` on seeded fixtures | ≥ 6 repos, ≥ 200 records; precision ≥ 0.90, recall ≥ 0.85; raw citation accuracy ≥ 90 % | `bench/results/` | Release blocked (Gate 3) |
 
-**How do we know a "VIOLATED" is real?** The claim's quote was found verbatim at the cited lines of the ADR at that commit (G1). Each piece of evidence was found verbatim at its cited lines (G2). Any dependency was re-parsed from the manifest by a non-LLM parser (G3). A finding that fails any of these checks is never displayed as a violation.
+**How do we know a "VIOLATED" is real?** The claim's quote was found verbatim at the cited lines of the ADR at that commit (G1). Each piece of evidence was found verbatim at its cited lines (G2). Any dependency was re-parsed from the manifest by a non-LLM parser (G3). A finding that fails any of these checks is never displayed as a violation. Every report format renders through one cross-record check, `report/view.py::build_view`: an evidence item is shown, or becomes a SARIF location, only when the report itself holds a VERIFIED G2 (and, for dependencies, G3) record for exactly that item; otherwise the finding moves to *Could not verify*.
 
 ## Development
 
