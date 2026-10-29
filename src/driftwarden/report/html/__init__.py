@@ -47,6 +47,7 @@ from driftwarden.report.view import (
     canonical_path,
     full_sha,
     short_sha,
+    view_stats,
 )
 
 PROJECT_URL = "https://github.com/vshalsh/driftwarden"
@@ -321,8 +322,12 @@ class _View:
             for d in r.decisions
             if not d.judged
         ]
-        decided = len(violated) + len(drifting) + len(holding)
-        not_holding = len(violated) + len(drifting)
+        # THE counts, drift score and exit code: view_stats (L-012b), shared by every
+        # reporter, so HTML, Markdown and SARIF state one number for the same report.
+        stats = view_stats(view)
+        bs = stats.by_status
+        decided = bs["HOLDING"] + bs["DRIFTING"] + bs["VIOLATED"]
+        not_holding = bs["DRIFTING"] + bs["VIOLATED"]
         gs = r.grounding_summary
         checks = []
         for cid in sorted(set(CHECK_IDS) | set(gs.by_check), key=lambda x: (x not in CHECK_IDS, x)):
@@ -349,10 +354,7 @@ class _View:
             }
             for t in r.timeline
         ]
-        # The score is computed from the facts on this page (the verified view), so it
-        # always agrees with the counts beside it; on a fresh scan it equals
-        # summary.drift_score.
-        score = not_holding / decided if decided else None
+        score = stats.drift_score
         return {
             "meta": {
                 "repo": m.repo,
@@ -366,10 +368,11 @@ class _View:
                 "tool": m.tool,
                 "tool_version": m.tool_version,
                 "changed_paths": len(m.changed_paths) if m.changed_paths is not None else None,
-                "exit_code": r.summary.exit_code,
+                "exit_code": stats.exit_code,
             },
             "pr_mode": view.pr_mode,
             "in_change_count": sum(1 for f in violated + drifting if f["in_change"]),
+            "counts": dict(bs),
             "score": None if score is None else f"{score * 100:.0f}%",
             "score_definition": DRIFT_SCORE_DEFINITION,
             "decided": decided,

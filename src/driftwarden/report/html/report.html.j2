@@ -115,11 +115,11 @@
 <p class="dw-score"><abbr title="{{ v.score_definition }}">Drift score</abbr> <strong class="dw-score__value">{{ v.score if v.score is not none else "n/a" }}</strong>
 <span class="dw-score__def">{% if v.score is not none %}{{ v.not_holding }} of {{ v.decided }} decided claims drift or violate their ADR.{% else %}No claim was decided, so there is no score.{% endif %} <span class="dw-visually-hidden">Definition: {{ v.score_definition }}</span></span></p>
 <ul class="dw-chips">
-<li><a href="#violated">{{ badge("VIOLATED", v.violated|length) }}</a></li>
-<li><a href="#drifting">{{ badge("DRIFTING", v.drifting|length) }}</a></li>
+<li><a href="#violated">{{ badge("VIOLATED", v.counts["VIOLATED"]) }}</a></li>
+<li><a href="#drifting">{{ badge("DRIFTING", v.counts["DRIFTING"]) }}</a></li>
 <li><a href="#could-not-verify">{{ badge("UNVERIFIED", v.cnv|length) }}</a></li>
 <li><a href="#undocumented">{{ badge("UNDOCUMENTED", v.undocumented|length) }}</a></li>
-<li><a href="#holding">{{ badge("HOLDING", v.holding|length) }}</a></li>
+<li><a href="#holding">{{ badge("HOLDING", v.counts["HOLDING"]) }}</a></li>
 <li><a href="#unknown">{{ badge("UNKNOWN", v.unknown|length) }}</a></li>
 </ul>
 <p class="dw-scope">{{ v.summary.decisions_judged }} of {{ v.summary.decisions }} decisions judged · {{ v.summary.claims_judged }} of {{ v.summary.claims }} claims judged · {{ v.gs.verified }} of {{ v.gs.total }} verifier checks passed{% if v.demoted %} · {{ v.demoted }} item{{ "" if v.demoted == 1 else "s" }} moved to Could not verify by the report-time evidence re-check{% endif %}</p>
