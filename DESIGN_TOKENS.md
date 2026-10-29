@@ -209,6 +209,19 @@ Ratios were computed with the WCAG relative-luminance formula (sRGB linearisatio
 | unverified text on unverified tint | `#B79CF5` | `#271A42` | 6.92:1 | pass |
 | code text on code block | `#E8EDF2` | `#161C23` | 14.56:1 | pass |
 
+**Added during L-013 (HTML report), computed the same way:**
+
+| Pair | Light | Dark | AA |
+|---|---|---|---|
+| muted text on inset surface | 5.03:1 | 7.64:1 | pass |
+| status fg on muted surface (lowest of the five) | 4.98:1 | 6.16:1 | pass |
+| link text on code block (`--dw-link` on `--dw-code-bg`) | 5.61:1 | 7.68:1 | pass |
+| in-change badge (`--dw-accent` on `--dw-bg`) | 6.05:1 | 7.26:1 | pass |
+| "before this change" chip text (`--dw-fg-muted` on `--dw-bg`) | 5.86:1 | 7.33:1 | pass |
+| control borders, non-text 3:1 (`--dw-neutral-500` on canvas / muted) | 4.84 / 4.47:1 | 3.88 / 3.54:1 | pass (≥ 3:1) |
+
+Decorative dividers keep `--dw-border` (1.41:1 light, 1.76:1 dark), which is allowed because they are not UI components (WCAG 1.4.11).
+
 Rule for future tokens: any new text/background pair must be run through the same script before merge. Status *backgrounds* used only as tints behind their own fg are covered above; status colours used as solid fills (e.g. timeline bars) must carry a label in `--dw-fg` or `--dw-bg`, not the status fg, unless re-checked.
 
 ---
